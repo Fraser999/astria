@@ -1,4 +1,7 @@
-use std::process::ExitCode;
+use std::{
+    error::Error,
+    process::ExitCode,
+};
 
 use astria_composer::{
     Composer,
@@ -15,16 +18,14 @@ use tracing::{
 async fn main() -> ExitCode {
     astria_eyre::install().expect("astria eyre hook must be the first hook installed");
 
-    eprintln!(
-        "{}",
-        serde_json::to_string(&BUILD_INFO)
-            .expect("build info is serializable because it contains only unicode fields")
-    );
+    eprintln!("{BUILD_INFO}");
+
     let cfg: Config = match config::get() {
         Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("failed to read configuration: {e}");
-            return ExitCode::FAILURE;
+        Err(error) => {
+            let source = error.source().map(ToString::to_string).unwrap_or_default();
+            eprintln!("failed to start composer: {error}: {source}");
+            return error.exit_code();
         }
     };
 

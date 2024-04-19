@@ -1,4 +1,7 @@
-use std::process::ExitCode;
+use std::{
+    error::Error,
+    process::ExitCode,
+};
 
 use anyhow::Context as _;
 use astria_sequencer::{
@@ -8,25 +11,19 @@ use astria_sequencer::{
 };
 use tracing::info;
 
-// Following the BSD convention for failing to read config
-// See here: https://freedesktop.org/software/systemd/man/systemd.exec.html#Process%20Exit%20Codes
-const EX_CONFIG: u8 = 78;
-
 #[tokio::main]
 async fn main() -> ExitCode {
-    eprintln!(
-        "{}",
-        serde_json::to_string(&BUILD_INFO)
-            .expect("build info is serializable because it contains only unicode fields")
-    );
+    eprintln!("{BUILD_INFO}");
 
     let cfg: Config = match config::get() {
         Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("failed to read configuration:\n{e:?}");
-            return ExitCode::from(EX_CONFIG);
+        Err(error) => {
+            let source = error.source().map(ToString::to_string).unwrap_or_default();
+            eprintln!("failed to start sequencer: {error}: {source}");
+            return error.exit_code();
         }
     };
+
     let mut telemetry_conf = telemetry::configure()
         .set_no_otel(cfg.no_otel)
         .set_force_stdout(cfg.force_stdout)

@@ -7,6 +7,7 @@ pub use runtime::BuildInfo;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
 mod runtime {
+    use std::fmt::Formatter;
     /// Constructs a [`BuildInfo`] at compile time.
     #[macro_export]
     macro_rules! get {
@@ -49,6 +50,16 @@ mod runtime {
         pub rustc_channel: &'static str,
         pub rustc_commit_hash: &'static str,
         pub rustc_host_triple: &'static str,
+    }
+
+    impl std::fmt::Display for BuildInfo {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(
+                serde_json::to_string(&self)
+                    .expect("should encode to json")
+                    .as_str(),
+            )
+        }
     }
 }
 

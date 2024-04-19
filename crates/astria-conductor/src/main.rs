@@ -1,4 +1,7 @@
-use std::process::ExitCode;
+use std::{
+    error::Error,
+    process::ExitCode,
+};
 
 use astria_conductor::{
     Conductor,
@@ -11,29 +14,21 @@ use tracing::{
     info,
 };
 
-// Following the BSD convention for failing to read config
-// See here: https://freedesktop.org/software/systemd/man/systemd.exec.html#Process%20Exit%20Codes
-const EX_CONFIG: u8 = 78;
-
 #[tokio::main]
 async fn main() -> ExitCode {
     astria_eyre::install().expect("astria eyre hook must be the first hook installed");
 
-    eprintln!(
-        "{}",
-        serde_json::to_string(&BUILD_INFO)
-            .expect("build info is serializable because it contains only unicode fields")
-    );
-
-    let cfg: Config = match config::get().wrap_err("failed reading config") {
-        Err(e) => {
-            eprintln!("failed to start conductor:\n{e}");
+    let cfg: Config = match config::get() {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            eprintln!("{BUILD_INFO}");
+            let source = error.source().map(ToString::to_string).unwrap_or_default();
+            eprintln!("failed to start conductor: {error}: {source}");
             // FIXME (https://github.com/astriaorg/astria/issues/368):
             //       might have to bubble up exit codes, since we might need
             //       to exit with other exit codes if something else fails
-            return ExitCode::from(EX_CONFIG);
+            return error.exit_code();
         }
-        Ok(cfg) => cfg,
     };
 
     let mut telemetry_conf = telemetry::configure()
@@ -48,10 +43,11 @@ async fn main() -> ExitCode {
             .service_name(env!("CARGO_PKG_NAME"));
     }
 
-    if let Err(e) = telemetry_conf
+    if let Err(error) = telemetry_conf
         .try_init()
         .wrap_err("failed to setup telemetry")
     {
+        eprintln!("{BUILD_INFO}");
         eprintln!("initializing conductor failed:\n{e:?}");
         return ExitCode::FAILURE;
     }

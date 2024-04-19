@@ -483,6 +483,7 @@ name = "astria-build-info"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "vergen",
 ]
 

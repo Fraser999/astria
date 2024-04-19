@@ -1,4 +1,7 @@
-use std::process::ExitCode;
+use std::{
+    error::Error,
+    process::ExitCode,
+};
 
 use astria_eyre::eyre::WrapErr as _;
 use astria_sequencer_relayer::{
@@ -21,10 +24,15 @@ use tracing::{
 async fn main() -> ExitCode {
     astria_eyre::install().expect("astria eyre hook must be the first hook installed");
 
-    eprintln!("{}", telemetry::display::json(&BUILD_INFO),);
-
-    let cfg: Config = config::get().expect("failed to read configuration");
-    eprintln!("{}", telemetry::display::json(&cfg),);
+    let cfg: Config = match config::get() {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            eprintln!("{BUILD_INFO}");
+            let source = error.source().map(ToString::to_string).unwrap_or_default();
+            eprintln!("failed to start sequencer-relayer: {error}: {source}");
+            return error.exit_code();
+        }
+    };
 
     let mut telemetry_conf = telemetry::configure()
         .set_no_otel(cfg.no_otel)
@@ -39,11 +47,14 @@ async fn main() -> ExitCode {
     }
     metrics_init::register();
 
-    if let Err(e) = telemetry_conf
+    let _ = telemetry::configure().try_init();
+    if let Err(error) = telemetry_conf
         .try_init()
         .wrap_err("failed to setup telemetry")
     {
-        eprintln!("initializing sequencer-relayer failed:\n{e:?}");
+        eprintln!("{BUILD_INFO}");
+        eprintln!("{}", telemetry::display::json(&cfg));
+        eprintln!("failed to start sequencer-relayer: {error}");
         return ExitCode::FAILURE;
     }
 

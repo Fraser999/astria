@@ -40,9 +40,14 @@
 //!
 //! ## Crate feature flags
 //!
-//! + `tests`: gives access to test functions that to ensure that a crate's config is up-to-date and
-//!   in sync with its example. See [`tests`] for how to use them.
-use std::fmt::Display;
+//! + `tests`: provides functions that ensure a crate's config is up-to-date and in sync with its
+//!   example. See
+//!   [tests.rs](https://github.com/astriaorg/astria/blob/main/crates/astria-config/src/tests.rs)
+//!   for how to use them.
+use std::{
+    fmt::Display,
+    process::ExitCode,
+};
 
 use serde::de::DeserializeOwned;
 
@@ -72,6 +77,16 @@ impl From<figment::Error> for Error {
         Self {
             inner,
         }
+    }
+}
+
+impl Error {
+    /// Returns exit code 78 as per [the BSD convention for a configuration error][bsd].
+    ///
+    /// [bsd]: <https://freedesktop.org/software/systemd/man/systemd.exec.html#Process%20Exit%20Codes/>
+    #[must_use]
+    pub fn exit_code(&self) -> ExitCode {
+        ExitCode::from(78)
     }
 }
 

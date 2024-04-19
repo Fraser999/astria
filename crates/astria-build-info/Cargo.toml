@@ -3,11 +3,13 @@ name = "astria-build-info"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies.serde]
 workspace = true
 features = ["derive"]
+optional = true
+
+[dependencies.serde_json]
+workspace = true
 optional = true
 
 [dependencies.vergen]
@@ -17,4 +19,4 @@ optional = true
 
 [features]
 build = ["dep:vergen"]
-runtime = ["dep:serde"]
+runtime = ["dep:serde", "dep:serde_json"]
