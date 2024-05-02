@@ -99,6 +99,12 @@ pub mod cosmos {
             }
         }
 
+        pub mod query {
+            pub mod v1beta1 {
+                include!("cosmos.base.query.v1beta1.rs");
+            }
+        }
+
         pub mod tendermint {
             pub mod v1beta1 {
                 include!("cosmos.base.tendermint.v1beta1.rs");

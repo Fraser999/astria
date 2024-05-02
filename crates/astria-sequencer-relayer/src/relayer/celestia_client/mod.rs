@@ -3,6 +3,8 @@ mod celestia_cost_params;
 pub(crate) mod celestia_keys;
 mod error;
 #[cfg(test)]
+mod grpc_api_tests;
+#[cfg(test)]
 mod tests;
 
 use std::{
