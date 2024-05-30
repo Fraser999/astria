@@ -67,10 +67,6 @@ impl Error {
         Self(ErrorKind::MetricsAddr(source))
     }
 
-    fn bucket_error(source: BuildError) -> Self {
-        Self(ErrorKind::BucketError(source))
-    }
-
     fn exporter_install(source: BuildError) -> Self {
         Self(ErrorKind::ExporterInstall(source))
     }
@@ -90,8 +86,6 @@ enum ErrorKind {
     InitSubscriber(#[source] TryInitError),
     #[error("failed to parse metrics address")]
     MetricsAddr(#[source] AddrParseError),
-    #[error("failed to configure prometheus buckets")]
-    BucketError(#[source] BuildError),
     #[error("failed installing prometheus metrics exporter")]
     ExporterInstall(#[source] BuildError),
     #[error(
@@ -136,6 +130,12 @@ impl MakeWriter for BoxedMakeWriter {
     }
 }
 
+pub trait RegisterMetrics {
+    type Metrics;
+
+    fn register(&self) -> Self::Metrics;
+}
+
 pub struct Config {
     filter_directives: String,
     force_stdout: bool,
@@ -144,7 +144,6 @@ pub struct Config {
     stdout_writer: BoxedMakeWriter,
     metrics_addr: Option<String>,
     service_name: String,
-    metric_buckets: Option<Vec<f64>>,
     register_metrics: Option<Box<dyn Fn()>>,
 }
 
@@ -159,7 +158,6 @@ impl Config {
             stdout_writer: BoxedMakeWriter::new(std::io::stdout),
             metrics_addr: None,
             service_name: String::new(),
-            metric_buckets: None,
             register_metrics: None,
         }
     }
@@ -241,14 +239,6 @@ impl Config {
     }
 
     #[must_use = "telemetry must be initialized to be useful"]
-    pub fn metric_buckets(self, metric_buckets: Vec<f64>) -> Self {
-        Self {
-            metric_buckets: Some(metric_buckets),
-            ..self
-        }
-    }
-
-    #[must_use = "telemetry must be initialized to be useful"]
     pub fn register_metrics<F: Fn() + 'static>(self, f: F) -> Self {
         Self {
             register_metrics: Some(Box::new(f)),
@@ -270,7 +260,6 @@ impl Config {
             stdout_writer,
             metrics_addr,
             service_name,
-            metric_buckets,
             register_metrics,
         } = self;
 
@@ -336,20 +325,103 @@ impl Config {
                 metrics_builder = metrics_builder.add_global_label("service", service_name);
             }
 
-            if let Some(buckets) = metric_buckets {
-                metrics_builder = metrics_builder
-                    .set_buckets(&buckets)
-                    .map_err(Error::bucket_error)?;
-            }
-
+            // We need to call `install` on the metrics builder first for registering to have any
+            // effect.
+            metrics_builder.install().map_err(Error::exporter_install)?;
             let Some(register_metrics) = register_metrics else {
                 return Err(Error::no_metric_register_func());
             };
             register_metrics();
+        }
+
+        Ok(())
+    }
+
+    /// Initialize telemetry, consuming the config.
+    ///
+    /// # Errors
+    /// Fails if the filter directives could not be parsed, if communication with the OTLP
+    /// endpoint failed, or if the global tracing subscriber could not be installed.
+    pub fn try_init2<R: RegisterMetrics>(
+        self,
+        metrics_registration: &R,
+    ) -> Result<&'static R::Metrics, Error> {
+        let Self {
+            filter_directives,
+            force_stdout,
+            no_otel,
+            pretty_print,
+            stdout_writer,
+            metrics_addr,
+            service_name,
+            register_metrics: _,
+        } = self;
+
+        let env_filter = {
+            let builder = EnvFilter::builder().with_default_directive(LevelFilter::INFO.into());
+            builder
+                .parse(filter_directives)
+                .map_err(Error::filter_directives)?
+        };
+
+        let mut tracer_provider = TracerProvider::builder();
+        if !no_otel {
+            // XXX: the endpoint is set by a hardcoded environment variable. This is a
+            //      full list of variables that opentelemetry_otlp currently reads:
+            //      OTEL_EXPORTER_OTLP_ENDPOINT
+            //      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+            //      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT
+            //      OTEL_EXPORTER_OTLP_TRACES_COMPRESSION
+            //      OTEL_EXPORTER_OTLP_HEADERS
+            //      OTEL_EXPORTER_OTLP_TRACE_HEADERS
+            let otel_exporter = opentelemetry_otlp::new_exporter()
+                .tonic()
+                .build_span_exporter()
+                .map_err(Error::otlp)?;
+            tracer_provider = tracer_provider.with_batch_exporter(otel_exporter, Tokio);
+        }
+
+        let mut pretty_printer = None;
+        if force_stdout || std::io::stdout().is_terminal() {
+            if pretty_print {
+                pretty_printer = Some(tracing_subscriber::fmt::layer().compact());
+            } else {
+                tracer_provider = tracer_provider.with_simple_exporter(
+                    SpanExporter::builder()
+                        .with_writer(stdout_writer.make_writer())
+                        .build(),
+                );
+            }
+        }
+        let tracer_provider = tracer_provider.build();
+
+        let tracer = tracer_provider.versioned_tracer(
+            "astria-telemetry",
+            Some(env!("CARGO_PKG_VERSION")),
+            Some(opentelemetry_semantic_conventions::SCHEMA_URL),
+            None,
+        );
+        let _ = global::set_tracer_provider(tracer_provider);
+
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+        tracing_subscriber::registry()
+            .with(otel_layer)
+            .with(pretty_printer)
+            .with(env_filter)
+            .try_init()
+            .map_err(Error::init_subscriber)?;
+
+        if let Some(metrics_addr) = metrics_addr {
+            let addr: SocketAddr = metrics_addr.parse().map_err(Error::metrics_addr)?;
+            let mut metrics_builder = PrometheusBuilder::new().with_http_listener(addr);
+
+            if !service_name.is_empty() {
+                metrics_builder = metrics_builder.add_global_label("service", service_name);
+            }
 
             metrics_builder.install().map_err(Error::exporter_install)?;
         }
 
-        Ok(())
+        Ok(Box::leak(Box::new(metrics_registration.register())))
     }
 }

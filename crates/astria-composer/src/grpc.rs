@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     collectors,
     executor,
+    metrics::Metrics,
 };
 
 /// Listens for incoming gRPC requests and sends the Rollup transactions to the
@@ -38,6 +39,7 @@ pub(crate) struct Builder {
     pub(crate) grpc_addr: SocketAddr,
     pub(crate) executor: executor::Handle,
     pub(crate) shutdown_token: CancellationToken,
+    pub(crate) metrics: &'static Metrics,
 }
 
 impl Builder {
@@ -46,12 +48,19 @@ impl Builder {
             grpc_addr,
             executor,
             shutdown_token,
+            metrics,
         } = self;
 
         let listener = TcpListener::bind(grpc_addr)
             .await
             .wrap_err("failed to bind socket address")?;
-        let grpc_collector = collectors::Grpc::new(executor.clone());
+        let txs_received_counters = metrics.grpc_txs_received_counters();
+        let txs_dropped_counters = metrics.grpc_txs_dropped_counters();
+        let grpc_collector = collectors::Grpc::new(
+            executor.clone(),
+            txs_received_counters,
+            txs_dropped_counters,
+        );
 
         Ok(GrpcServer {
             listener,

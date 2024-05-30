@@ -12,6 +12,7 @@ use std::{
 
 use astria_core::{
     crypto::SigningKey,
+    primitive::v1::RollupId,
     protocol::{
         abci::AbciErrorCode,
         transaction::v1alpha1::{
@@ -71,9 +72,12 @@ use tracing::{
 };
 
 use self::bundle_factory::SizedBundle;
-use crate::executor::bundle_factory::{
-    BundleFactory,
-    SizedBundleReport,
+use crate::{
+    executor::bundle_factory::{
+        BundleFactory,
+        SizedBundleReport,
+    },
+    metrics::ExecutorMetrics,
 };
 
 mod bundle_factory;
@@ -83,8 +87,6 @@ pub(crate) mod builder;
 mod tests;
 
 pub(crate) use builder::Builder;
-
-use crate::metrics_init::ROLLUP_ID_LABEL;
 
 // Duration to wait for the executor to drain all the remaining bundles before shutting down.
 // This is 16s because the timeout for the higher level executor task is 17s to shut down.
@@ -99,7 +101,6 @@ type StdError = dyn std::error::Error;
 /// The `Executor` receives `Vec<Action>` from the bundling logic, packages them with a nonce into
 /// an `Unsigned`, then signs them with the sequencer key and submits to the sequencer.
 /// Its `status` field indicates that connection to the sequencer node has been established.
-#[derive(Debug)]
 pub(super) struct Executor {
     // The status of this executor
     status: watch::Sender<Status>,
@@ -122,6 +123,7 @@ pub(super) struct Executor {
     bundle_queue_capacity: usize,
     // Token to signal the executor to stop upon shutdown.
     shutdown_token: CancellationToken,
+    metrics: &'static ExecutorMetrics,
 }
 
 #[derive(Clone)]
@@ -172,7 +174,12 @@ impl Executor {
 
     /// Create a future to submit a bundle to the sequencer.
     #[instrument(skip_all, fields(nonce.initial = %nonce))]
-    fn submit_bundle(&self, nonce: u32, bundle: SizedBundle) -> Fuse<Instrumented<SubmitFut>> {
+    fn submit_bundle(
+        &self,
+        nonce: u32,
+        bundle: SizedBundle,
+        metrics: &'static ExecutorMetrics,
+    ) -> Fuse<Instrumented<SubmitFut>> {
         SubmitFut {
             client: self.sequencer_client.clone(),
             address: self.address,
@@ -181,9 +188,18 @@ impl Executor {
             signing_key: self.sequencer_key.clone(),
             state: SubmitState::NotStarted,
             bundle,
+            metrics,
         }
         .in_current_span()
         .fuse()
+    }
+
+    fn increment_txs_dropped_too_large_counter(&self, id: &RollupId) {
+        let Some(counter) = self.metrics.txs_dropped_too_large().get(id) else {
+            error!(rollup_id = %id, "failed to get grpc txs_dropped_too_large counter");
+            return;
+        };
+        counter.increment(1);
     }
 
     /// Run the Executor loop, calling `process_bundle` on each bundle received from the channel.
@@ -193,11 +209,11 @@ impl Executor {
     #[instrument(skip_all, fields(address = %self.address))]
     pub(super) async fn run_until_stopped(mut self) -> eyre::Result<()> {
         let mut submission_fut: Fuse<Instrumented<SubmitFut>> = Fuse::terminated();
-        let mut nonce = get_latest_nonce(self.sequencer_client.clone(), self.address)
+        let mut nonce = get_latest_nonce(self.sequencer_client.clone(), self.address, self.metrics)
             .await
             .wrap_err("failed getting initial nonce from sequencer")?;
 
-        metrics::gauge!(crate::metrics_init::CURRENT_NONCE).set(nonce);
+        self.metrics.current_nonce().set(nonce);
 
         self.status.send_modify(|status| status.is_connected = true);
 
@@ -230,7 +246,7 @@ impl Executor {
                 Some(next_bundle) = future::ready(bundle_factory.next_finished()), if submission_fut.is_terminated() => {
                     let bundle = next_bundle.pop();
                     if !bundle.is_empty() {
-                        submission_fut = self.submit_bundle(nonce, bundle);
+                        submission_fut = self.submit_bundle(nonce, bundle, self.metrics);
                     }
                 }
 
@@ -239,16 +255,12 @@ impl Executor {
                     let rollup_id = seq_action.rollup_id;
 
                     if let Err(e) = bundle_factory.try_push(seq_action) {
-                            metrics::gauge!(
-                                crate::metrics_init::TRANSACTIONS_DROPPED_TOO_LARGE,
-                                ROLLUP_ID_LABEL => rollup_id.to_string()
-                            )
-                            .increment(1);
-                            warn!(
-                                rollup_id = %rollup_id,
-                                error = &e as &StdError,
-                                "failed to bundle transaction, dropping it."
-                            );
+                        self.increment_txs_dropped_too_large_counter(&rollup_id);
+                        warn!(
+                            rollup_id = %rollup_id,
+                            error = &e as &StdError,
+                            "failed to bundle transaction, dropping it."
+                        );
                     }
                 }
 
@@ -262,7 +274,7 @@ impl Executor {
                         debug!(
                             "forcing bundle submission to sequencer due to block timer"
                         );
-                        submission_fut = self.submit_bundle(nonce, bundle);
+                        submission_fut = self.submit_bundle(nonce, bundle, self.metrics);
                     }
                 }
             }
@@ -297,11 +309,7 @@ impl Executor {
             let rollup_id = seq_action.rollup_id;
 
             if let Err(e) = bundle_factory.try_push(seq_action) {
-                metrics::gauge!(
-                    crate::metrics_init::TRANSACTIONS_DROPPED_TOO_LARGE,
-                    ROLLUP_ID_LABEL => rollup_id.to_string()
-                )
-                .increment(1);
+                self.increment_txs_dropped_too_large_counter(&rollup_id);
                 warn!(
                     rollup_id = %rollup_id,
                     error = &e as &StdError,
@@ -351,7 +359,10 @@ impl Executor {
             }
 
             while let Some(bundle) = bundles_to_drain.pop_front() {
-                match self.submit_bundle(nonce, bundle.clone()).await {
+                match self
+                    .submit_bundle(nonce, bundle.clone(), self.metrics)
+                    .await
+                {
                     Ok(new_nonce) => {
                         debug!(
                             bundle = %telemetry::display::json(&SizedBundleReport(&bundle)),
@@ -413,9 +424,9 @@ impl Executor {
 async fn get_latest_nonce(
     client: sequencer_client::HttpClient,
     address: Address,
+    metrics: &ExecutorMetrics,
 ) -> eyre::Result<u32> {
     debug!("fetching latest nonce from sequencer");
-    metrics::counter!(crate::metrics_init::NONCE_FETCH_COUNT).increment(1);
     let span = Span::current();
     let start = Instant::now();
     let retry_config = tryhard::RetryFutureConfig::new(1024)
@@ -425,7 +436,7 @@ async fn get_latest_nonce(
             |attempt,
              next_delay: Option<Duration>,
              err: &sequencer_client::extension_trait::Error| {
-                metrics::counter!(crate::metrics_init::NONCE_FETCH_FAILURE_COUNT).increment(1);
+                metrics.nonce_fetch_failure_count().increment(1);
 
                 let wait_duration = next_delay
                     .map(humantime::format_duration)
@@ -443,13 +454,14 @@ async fn get_latest_nonce(
     let res = tryhard::retry_fn(|| {
         let client = client.clone();
         let span = info_span!(parent: span.clone(), "attempt get nonce");
+        metrics.nonce_fetch_count().increment(1);
         async move { client.get_latest_nonce(address).await.map(|rsp| rsp.nonce) }.instrument(span)
     })
     .with_config(retry_config)
     .await
     .wrap_err("failed getting latest nonce from sequencer after 1024 attempts");
 
-    metrics::histogram!(crate::metrics_init::NONCE_FETCH_LATENCY).record(start.elapsed());
+    metrics.nonce_fetch_latency().record(start.elapsed());
 
     res
 }
@@ -465,9 +477,10 @@ async fn get_latest_nonce(
 async fn submit_tx(
     client: sequencer_client::HttpClient,
     tx: SignedTransaction,
+    metrics: &ExecutorMetrics,
 ) -> eyre::Result<tx_sync::Response> {
     let nonce = tx.unsigned_transaction().params.nonce;
-    metrics::gauge!(crate::metrics_init::CURRENT_NONCE).set(nonce);
+    metrics.current_nonce().set(nonce);
 
     // TODO: change to info and log tx hash (to match info log in `SubmitFut`'s response handling
     // logic)
@@ -481,8 +494,7 @@ async fn submit_tx(
             |attempt,
              next_delay: Option<Duration>,
              err: &sequencer_client::extension_trait::Error| {
-                metrics::counter!(crate::metrics_init::SEQUENCER_SUBMISSION_FAILURE_COUNT)
-                    .increment(1);
+                metrics.sequencer_submission_failure_count().increment(1);
 
                 let wait_duration = next_delay
                     .map(humantime::format_duration)
@@ -507,7 +519,9 @@ async fn submit_tx(
     .await
     .wrap_err("failed sending transaction after 1024 attempts");
 
-    metrics::histogram!(crate::metrics_init::SEQUENCER_SUBMISSION_LATENCY).record(start.elapsed());
+    metrics
+        .sequencer_submission_latency()
+        .record(start.elapsed());
 
     res
 }
@@ -531,6 +545,7 @@ pin_project! {
         #[pin]
         state: SubmitState,
         bundle: SizedBundle,
+        metrics: &'static ExecutorMetrics,
     }
 }
 
@@ -575,7 +590,7 @@ impl Future for SubmitFut {
                         "submitting transaction to sequencer",
                     );
                     SubmitState::WaitingForSend {
-                        fut: submit_tx(this.client.clone(), tx).boxed(),
+                        fut: submit_tx(this.client.clone(), tx, self.metrics).boxed(),
                     }
                 }
 
@@ -589,13 +604,15 @@ impl Future for SubmitFut {
                             // allow: precision loss is unlikely (values too small) but also
                             // unimportant in histograms
                             #[allow(clippy::cast_precision_loss)]
-                            metrics::histogram!(crate::metrics_init::BYTES_PER_SUBMISSION)
+                            this.metrics
+                                .bytes_per_submission()
                                 .record(this.bundle.get_size() as f64);
 
                             // allow: precision loss is unlikely (values too small) but also
                             // unimportant in histograms
                             #[allow(clippy::cast_precision_loss)]
-                            metrics::histogram!(crate::metrics_init::TRANSACTIONS_PER_SUBMISSION)
+                            this.metrics
+                                .txs_per_submission()
                                 .record(this.bundle.actions_count() as f64);
 
                             return Poll::Ready(Ok(*this.nonce + 1));
@@ -607,8 +624,12 @@ impl Future for SubmitFut {
                                      fetching new nonce"
                                 );
                                 SubmitState::WaitingForNonce {
-                                    fut: get_latest_nonce(this.client.clone(), *this.address)
-                                        .boxed(),
+                                    fut: get_latest_nonce(
+                                        this.client.clone(),
+                                        *this.address,
+                                        self.metrics,
+                                    )
+                                    .boxed(),
                                 }
                             }
                             _other => {
@@ -618,10 +639,9 @@ impl Future for SubmitFut {
                                     "sequencer rejected the transaction; the bundle is likely lost",
                                 );
 
-                                metrics::counter!(
-                                    crate::metrics_init::SEQUENCER_SUBMISSION_FAILURE_COUNT
-                                )
-                                .increment(1);
+                                this.metrics
+                                    .sequencer_submission_failure_count()
+                                    .increment(1);
 
                                 return Poll::Ready(Ok(*this.nonce));
                             }
@@ -657,7 +677,7 @@ impl Future for SubmitFut {
                             "resubmitting transaction to sequencer with new nonce",
                         );
                         SubmitState::WaitingForSend {
-                            fut: submit_tx(this.client.clone(), tx).boxed(),
+                            fut: submit_tx(this.client.clone(), tx, self.metrics).boxed(),
                         }
                     }
                     Err(error) => {

@@ -7,6 +7,7 @@ use std::{
 
 use astria_composer::{
     config::Config,
+    metrics::Metrics,
     Composer,
 };
 use astria_core::{
@@ -105,8 +106,9 @@ pub async fn spawn_composer(rollup_ids: &[&str]) -> TestComposer {
         pretty_print: true,
         grpc_addr: "127.0.0.1:0".parse().unwrap(),
     };
+    let metrics = Box::leak(Box::new(Metrics::new(&config)));
     let (composer_addr, grpc_collector_addr, composer_handle) = {
-        let composer = Composer::from_config(&config).await.unwrap();
+        let composer = Composer::from_config(&config, metrics).await.unwrap();
         let composer_addr = composer.local_addr();
         let grpc_collector_addr = composer.grpc_local_addr().unwrap();
         let task = tokio::spawn(composer.run_until_stopped());
