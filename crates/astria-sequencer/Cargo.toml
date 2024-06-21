@@ -30,7 +30,9 @@ priority-queue = "2.0.2"
 tower = "0.4"
 tower-abci = "0.12.0"
 tower-actor = "0.1.0"
-cnidarium = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.77.2" }
+cnidarium = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.77.2", features = [
+  "metrics",
+] }
 cnidarium-component = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.77.2" }
 
 async-trait = { workspace = true }
