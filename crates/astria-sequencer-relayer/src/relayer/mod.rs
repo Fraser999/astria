@@ -1,8 +1,5 @@
 use std::{
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
@@ -62,6 +59,7 @@ mod write;
 
 pub(crate) use builder::Builder;
 use celestia_client::{
+    BlobTxHash,
     BuilderError,
     CelestiaClientBuilder,
     CelestiaKeys,
@@ -106,8 +104,7 @@ pub(crate) struct Relayer {
     /// A watch channel to track the state of the relayer. Used by the API service.
     state: Arc<State>,
 
-    pre_submit_path: PathBuf,
-    post_submit_path: PathBuf,
+    submission_state_path: PathBuf,
     metrics: &'static Metrics,
 }
 
@@ -124,9 +121,7 @@ impl Relayer {
     /// failed catastrophically (after `u32::MAX` retries).
     #[instrument(skip_all)]
     pub(crate) async fn run(self) -> eyre::Result<()> {
-        let submission_state = read_submission_state(&self.pre_submit_path, &self.post_submit_path)
-            .await
-            .wrap_err("failed reading submission state from files")?;
+        let submission_state = SubmissionState::new_from_path(&self.submission_state_path).await?;
 
         select!(
             () = self.relayer_shutdown_token.cancelled() => return Ok(()),
@@ -136,7 +131,9 @@ impl Relayer {
             ) => init_result,
         )?;
 
-        let last_submitted_sequencer_height = submission_state.last_submitted_height();
+        let last_submitted_sequencer_height = submission_state
+            .last_completed_submission()
+            .map(|completed_submission| completed_submission.sequencer_height());
 
         let mut latest_height_stream = {
             use sequencer_client::StreamLatestHeight as _;
@@ -346,25 +343,6 @@ async fn fetch_sequencer_chain_id(
         trace!(?response);
     }
     response.map(|status_response| status_response.node_info.network.to_string())
-}
-
-async fn read_submission_state<P1: AsRef<Path>, P2: AsRef<Path>>(
-    pre: P1,
-    post: P2,
-) -> eyre::Result<SubmissionState> {
-    const LENIENT_CONSISTENCY_CHECK: bool = true;
-    let pre = pre.as_ref().to_path_buf();
-    let post = post.as_ref().to_path_buf();
-    crate::utils::flatten(
-        tokio::task::spawn_blocking(move || {
-            SubmissionState::from_paths::<LENIENT_CONSISTENCY_CHECK, _, _>(pre, post)
-        })
-        .await,
-    )
-    .wrap_err(
-        "failed reading submission state from the configured pre- and post-submit files. Refer to \
-         the values documented in `local.env.example` of the astria-sequencer-relayer service",
-    )
 }
 
 fn spawn_submitter(
