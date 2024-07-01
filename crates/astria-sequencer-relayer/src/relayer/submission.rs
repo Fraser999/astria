@@ -1,8 +1,16 @@
 //! Tracks the current submission state of sequencer-relayer and syncs it to disk.
 
-use std::path::{
-    Path,
-    PathBuf,
+use std::{
+    fmt::{
+        self,
+        Display,
+        Formatter,
+    },
+    path::{
+        Path,
+        PathBuf,
+    },
+    time::SystemTime,
 };
 
 use astria_eyre::eyre::{
@@ -11,356 +19,349 @@ use astria_eyre::eyre::{
     ensure,
     WrapErr as _,
 };
-use sequencer_client::tendermint::block::Height as SequencerHeight;
 use serde::{
     Deserialize,
     Serialize,
 };
-use tracing::{
-    debug,
-    warn,
-};
+use tendermint::block::Height as SequencerHeight;
+use tracing::debug;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "state")]
-enum PostSubmission {
+use super::BlobTxHash;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub(super) struct CompletedSubmission {
+    celestia_height: u64,
+    #[serde(with = "as_number")]
+    sequencer_height: SequencerHeight,
+}
+
+impl CompletedSubmission {
+    pub(super) fn celestia_height(&self) -> u64 {
+        self.celestia_height
+    }
+
+    pub(super) fn sequencer_height(&self) -> SequencerHeight {
+        self.sequencer_height
+    }
+
+    fn new(celestia_height: u64, sequencer_height: SequencerHeight) -> Self {
+        Self {
+            celestia_height,
+            sequencer_height,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "state")]
+enum State {
     Fresh,
-    Submitted {
-        celestia_height: u64,
-        #[serde(with = "as_number")]
-        sequencer_height: SequencerHeight,
-    },
-}
-
-impl PostSubmission {
-    fn is_fresh(&self) -> bool {
-        matches!(self, PostSubmission::Fresh)
-    }
-
-    fn is_submitted(&self) -> bool {
-        matches!(self, PostSubmission::Submitted { .. })
-    }
-
-    fn from_path<P: AsRef<Path>>(path: P) -> eyre::Result<Self> {
-        let file = std::fs::File::open(&path)
-            .wrap_err("failed opening provided file path for reading post-submission state")?;
-        let state = serde_json::from_reader(file)
-            .wrap_err("failed reading contents of post-submission file")?;
-        Ok(state)
-    }
-
-    fn write_to_path<P: AsRef<Path>>(&self, path: P) -> eyre::Result<()> {
-        let f = std::fs::File::options()
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .wrap_err("failed opening file for writing state")?;
-        serde_json::to_writer(&f, self).wrap_err("failed writing json-serialized state to file")?;
-        f.sync_all()
-            .wrap_err("failed fully syncing state write to disk")?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "state")]
-enum PreSubmission {
-    Ignore,
     Started {
+        last_submission: CompletedSubmission,
+    },
+    Prepared {
         #[serde(with = "as_number")]
         sequencer_height: SequencerHeight,
-        last_submission: PostSubmission,
+        last_submission: CompletedSubmission,
+        blob_tx_hash: BlobTxHash,
+        #[serde(with = "humantime_serde")]
+        at: SystemTime,
     },
+    Finished(CompletedSubmission),
 }
-impl PreSubmission {
-    fn from_path<P: AsRef<Path>>(path: P) -> eyre::Result<Self> {
-        let file = std::fs::File::open(&path)
-            .wrap_err("failed opening provided file path for reading pre-submission state")?;
-        let state = serde_json::from_reader(file)
-            .wrap_err("failed reading contents of pre-submission file")?;
+
+impl State {
+    fn new_started(last_submission: CompletedSubmission) -> Self {
+        Self::Started {
+            last_submission,
+        }
+    }
+
+    fn new_prepared(
+        sequencer_height: SequencerHeight,
+        last_submission: CompletedSubmission,
+        blob_tx_hash: BlobTxHash,
+    ) -> Self {
+        Self::Prepared {
+            sequencer_height,
+            last_submission,
+            blob_tx_hash,
+            at: SystemTime::now(),
+        }
+    }
+
+    async fn read(source: &Path) -> eyre::Result<Self> {
+        let contents = tokio::fs::read_to_string(source).await.wrap_err_with(|| {
+            format!(
+                "failed reading submission state file at `{}`",
+                source.display()
+            )
+        })?;
+        let state: State = serde_json::from_str(&contents)
+            .wrap_err_with(|| format!("failed parsing the contents of `{}`", source.display()))?;
+
+        // Ensure the parsed values are sane.
+        match &state {
+            State::Fresh
+            | State::Started {
+                ..
+            }
+            | State::Finished(_) => {}
+            State::Prepared {
+                sequencer_height,
+                last_submission,
+                ..
+            } => ensure!(
+                *sequencer_height > last_submission.sequencer_height,
+                "submission state file `{}` invalid: current sequencer height \
+                 ({sequencer_height}) should be greater than last successful submission sequencer \
+                 height ({})",
+                source.display(),
+                last_submission.sequencer_height
+            ),
+        }
+
         Ok(state)
     }
 
-    fn write_to_path<P: AsRef<Path>>(&self, path: P) -> eyre::Result<()> {
-        let f = std::fs::File::options()
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .wrap_err("failed opening file for writing state")?;
-        serde_json::to_writer(&f, self).wrap_err("failed writing json-serialized state to file")?;
-        f.sync_all()
-            .wrap_err("failed fully syncing state write to disk")?;
-        Ok(())
+    /// Writes JSON-encoded `self` to `temp_file`, then renames `temp_file` to `destination`.
+    async fn write(&self, destination: &Path, temp_file: &Path) -> eyre::Result<()> {
+        let contents =
+            serde_json::to_string_pretty(self).wrap_err("failed json-encoding submission state")?;
+        tokio::fs::write(temp_file, &contents)
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed writing submission state to `{}`",
+                    temp_file.display()
+                )
+            })?;
+        tokio::fs::rename(temp_file, destination)
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed renaming `{}` to `{}`",
+                    temp_file.display(),
+                    destination.display()
+                )
+            })
+    }
+}
+
+impl Display for State {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        if formatter.alternate() {
+            write!(formatter, "{}", serde_json::to_string_pretty(self).unwrap())
+        } else {
+            write!(formatter, "{}", serde_json::to_string(self).unwrap())
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct SubmissionState {
-    pre: PreSubmission,
-    post: PostSubmission,
-    pre_path: PathBuf,
-    post_path: PathBuf,
-}
-
-#[derive(Debug)]
-pub(super) struct Started(SubmissionState);
-
-impl Started {
-    pub(super) fn finalize(self, celestia_height: u64) -> eyre::Result<SubmissionState> {
-        let Self(SubmissionState {
-            pre,
-            pre_path,
-            post_path,
-            ..
-        }) = self;
-
-        let PreSubmission::Started {
-            sequencer_height, ..
-        } = pre
-        else {
-            panic!(
-                "once initialized, a submission's `pre` field must always be `Started`. Here it \
-                 is not. This is a bug"
-            );
-        };
-
-        let new = SubmissionState {
-            pre,
-            post: PostSubmission::Submitted {
-                celestia_height,
-                sequencer_height,
-            },
-            pre_path,
-            post_path,
-        };
-
-        debug!(
-            state = serde_json::to_string(&new.post).expect("type contains no non-ascii keys"),
-            "finalizing submission by writing post-submit state to file",
-        );
-        new.post
-            .write_to_path(&new.post_path)
-            .wrap_err("failed committing post-submission state to disk")?;
-        Ok(new)
-    }
+    state: State,
+    file_path: PathBuf,
+    temp_file_path: PathBuf,
 }
 
 impl SubmissionState {
-    pub(super) fn last_submitted_height(&self) -> Option<SequencerHeight> {
-        match self.post {
-            PostSubmission::Fresh => None,
-            PostSubmission::Submitted {
-                sequencer_height, ..
-            } => Some(sequencer_height),
-        }
-    }
-
-    pub(super) fn initialize(self, sequencer_height: SequencerHeight) -> eyre::Result<Started> {
-        if let PostSubmission::Submitted {
-            sequencer_height: latest_submitted,
-            ..
-        } = self.post
-        {
-            ensure!(
-                sequencer_height > latest_submitted,
-                "refusing to submit a sequencer block at heights below or at what was already \
-                 submitted"
-            );
-        }
-        let new = Self {
-            pre: PreSubmission::Started {
-                sequencer_height,
-                last_submission: self.post,
-            },
-            ..self
-        };
-        debug!(
-            state = serde_json::to_string(&new.pre).expect("type contains no non-ascii keys"),
-            "initializing submission by writing pre-submit state to file",
-        );
-        new.pre
-            .write_to_path(&new.pre_path)
-            .wrap_err("failed commiting pre-submission state to disk")?;
-        Ok(Started(new))
-    }
-
-    pub(super) fn from_paths<const LENIENT: bool, P1: AsRef<Path>, P2: AsRef<Path>>(
-        pre_path: P1,
-        post_path: P2,
-    ) -> eyre::Result<Self> {
-        let pre_path = pre_path.as_ref().to_path_buf();
-        let post_path = post_path.as_ref().to_path_buf();
-
-        let mut pre = PreSubmission::from_path(&pre_path).wrap_err(
-            "failed constructing post submit state from provided path; if the post-submit state is
-                otherwise present and correctly formatted - and contains the correct information \
-             about the
-                last submitted sequencer height and its inclusion height on Celestia - then \
-             override the
-                contents of the pre-submission file with `{{\"state\": \"ignore\"}}`",
-        )?;
-        let post = PostSubmission::from_path(&post_path).wrap_err(
-            "failed constructing post submit state from provided path; if the pre-submit state is \
-             otherwise present and correctly formatted then this indicates a file corruption. \
-             Because the post-submit state is critical for determining the starting height for \
-             relaying sequencer blocks, make sure it's set correctly.",
-        )?;
-
-        let state = match (pre, post) {
-            (PreSubmission::Ignore, post) => Self {
-                pre,
-                post,
-                pre_path,
-                post_path,
-            },
-
-            (
-                PreSubmission::Started {
-                    sequencer_height,
-                    last_submission,
-                },
-                post,
-            ) => {
-                if let Err(error) = ensure_consistent(sequencer_height, last_submission, post) {
-                    if LENIENT {
-                        warn!(%error, "pre- and post-submission states were inconsistent. Setting pre-state to `ignore` and continuing from last post-state. This could to double submission!!");
-                        pre = PreSubmission::Ignore;
-                    } else {
-                        return Err(error).wrap_err("on-disk states are inconsistent");
-                    }
-                }
-                Self {
-                    pre,
-                    post,
-                    pre_path,
-                    post_path,
-                }
-            }
+    /// Constructs a new `SubmissionState` by reading from the given `source`.
+    ///
+    /// `source` should be a JSON-encoded `State`, and should be writable.
+    pub(super) async fn new_from_path<P: AsRef<Path>>(source: P) -> eyre::Result<Self> {
+        let state = State::read(source.as_ref()).await?;
+        let file_path = source.as_ref().to_path_buf();
+        let temp_file_path = match file_path.extension().and_then(|extn| extn.to_str()) {
+            Some(extn) => file_path.with_extension(format!("{extn}.tmp")),
+            None => file_path.with_extension("tmp"),
         };
 
-        // testing if the states can be written to the provided paths
-        state.pre.write_to_path(&state.pre_path).wrap_err_with(|| {
-            format!(
-                "failed writing just-read pre-submission state to disk; is the file writable? \
-                 Write destination: {}",
-                state.pre_path.display(),
-            )
-        })?;
+        // Ensure the state can be written.
         state
-            .post
-            .write_to_path(&state.post_path)
+            .write(&file_path, &temp_file_path)
+            .await
             .wrap_err_with(|| {
                 format!(
-                    "failed writing just-read post-submission state to disk; is the file \
-                     writable? Write destination: {}",
-                    state.post_path.display(),
+                    "failed writing just-read submission state to disk at `{}`; is the file \
+                     writable?",
+                    file_path.display()
                 )
             })?;
 
-        Ok(state)
+        Ok(Self {
+            state,
+            file_path,
+            temp_file_path,
+        })
+    }
+
+    /// Resets state to whatever is written to disk.
+    pub(super) async fn read_from_disk(mut self) -> eyre::Result<Self> {
+        let state = State::read(&self.file_path).await?;
+        self.state = state;
+        Ok(self)
+    }
+
+    /// Returns the sequencer height of the last completed submission, or `None` if the state is
+    /// `Fresh`.
+    pub(super) fn last_completed_submission(&self) -> Option<CompletedSubmission> {
+        match &self.state {
+            State::Fresh => None,
+            State::Started {
+                last_submission, ..
+            }
+            | State::Prepared {
+                last_submission, ..
+            }
+            | State::Finished(last_submission) => Some(*last_submission),
+        }
+    }
+
+    /// Returns the transaction hash of the last submitted `BlobTx`, and the time at which it was
+    /// submitted.
+    ///
+    /// This will be `Some` if the state is `Prepared` (meaning that transaction may or may not be
+    /// stored on Celestia and needs to be confirmed), or `None` for all other states.
+    pub(super) fn tx_to_confirm(&self) -> Option<(BlobTxHash, SystemTime)> {
+        if let State::Prepared {
+            blob_tx_hash,
+            at,
+            ..
+        } = &self.state
+        {
+            Some((*blob_tx_hash, *at))
+        } else {
+            None
+        }
+    }
+
+    /// Sets state to `Started` regardless of the current state and writes the state to disk.
+    ///
+    /// Returns an error if writing fails.
+    pub(super) async fn start(mut self) -> eyre::Result<Self> {
+        let last_submission = match self.state {
+            State::Fresh => CompletedSubmission::new(0, SequencerHeight::from(0_u8)),
+            State::Started {
+                last_submission, ..
+            }
+            | State::Prepared {
+                last_submission, ..
+            }
+            | State::Finished(last_submission) => last_submission,
+        };
+        self.state = State::new_started(last_submission);
+
+        debug!(state = %self.state, "writing submission started state to file");
+        self.state
+            .write(&self.file_path, &self.temp_file_path)
+            .await
+            .wrap_err("failed commiting submission started state to disk")?;
+        Ok(self)
+    }
+
+    /// If state is `Started`, transitions to `Prepared` and writes the state to disk.
+    ///
+    /// Returns an error if state is anything but `Started`, if `new_sequencer_height` is not
+    /// greater than the last confirmed submitted sequencer height, or if writing fails.
+    pub(super) async fn prepare(
+        mut self,
+        new_sequencer_height: SequencerHeight,
+        blob_tx_hash: BlobTxHash,
+    ) -> eyre::Result<Self> {
+        match self.state {
+            State::Started {
+                last_submission,
+            } => {
+                ensure!(
+                    new_sequencer_height > last_submission.sequencer_height,
+                    "cannot submit a sequencer block at height below or equal to what was already \
+                     successfully submitted"
+                );
+                self.state =
+                    State::new_prepared(new_sequencer_height, last_submission, blob_tx_hash);
+            }
+            State::Fresh
+            | State::Prepared {
+                ..
+            }
+            | State::Finished(_) => bail!("must be in started state before preparing to submit"),
+        }
+
+        debug!(state = %self.state, "writing submission prepared state to file");
+        self.state
+            .write(&self.file_path, &self.temp_file_path)
+            .await
+            .wrap_err("failed commiting submission prepared state to disk")?;
+        Ok(self)
+    }
+
+    /// If state is `Prepared`, transitions to `Finished` using the current sequencer height and the
+    /// provided Celestia height.
+    ///
+    /// Does not write the state to disk, as almost immediately the state will transition to
+    /// `Started`.  Even if the process exits before that happens, the only negative effect will be
+    /// that on restart, we reconfirm this submission.
+    ///
+    /// Returns an error if state is anything other than `Prepared`.
+    pub(super) fn finish(mut self, celestia_height: u64) -> eyre::Result<Self> {
+        let completed_submission = match self.state {
+            State::Prepared {
+                sequencer_height, ..
+            } => CompletedSubmission::new(celestia_height, sequencer_height),
+            State::Fresh
+            | State::Started {
+                ..
+            }
+            | State::Finished(_) => bail!("must be in prepared state before finishing submission"),
+        };
+        self.state = State::Finished(completed_submission);
+        // No need to write state to disk as we're very soon going to be transitioning to `Started`.
+        Ok(self)
+    }
+
+    /// If state is `Prepared`, reverts to `Finished` with the last known confirmed submission.
+    ///
+    /// Does not write the state to disk, as almost immediately the state will transition to
+    /// `Started`.  Even if the process exits before that happens, the only negative effect will be
+    /// that on restart, we reconfirm this submission.
+    ///
+    /// Returns an error if state is anything other than `Prepared`.
+    pub(super) fn revert_from_prepared_to_finished(mut self) -> eyre::Result<Self> {
+        match self.state {
+            State::Prepared {
+                last_submission, ..
+            } => {
+                self.state = State::Finished(last_submission);
+            }
+            State::Fresh
+            | State::Started {
+                ..
+            }
+            | State::Finished(_) => bail!("must be in prepared state to revert from it"),
+        };
+        // No need to write state to disk as we're very soon going to be transitioning to `Started`.
+        Ok(self)
     }
 }
 
-fn ensure_consistent(
-    sequencer_height_started: SequencerHeight,
-    last_submission: PostSubmission,
-    current_submission: PostSubmission,
-) -> eyre::Result<()> {
-    ensure_height_pre_submission_is_height_post_submission(
-        sequencer_height_started,
-        current_submission,
-    )?;
-    ensure_last_and_current_are_different(last_submission, current_submission)?;
-    ensure_last_is_not_submitted_while_current_is_fresh(last_submission, current_submission)?;
-    ensure_height_in_last_is_less_than_height_in_current(last_submission, current_submission)?;
-    Ok(())
-}
-
-fn ensure_height_pre_submission_is_height_post_submission(
-    sequencer_height_started: SequencerHeight,
-    current_submission: PostSubmission,
-) -> eyre::Result<()> {
-    let PostSubmission::Submitted {
-        sequencer_height, ..
-    } = current_submission
-    else {
-        bail!(
-            "the pre-submit file indicated that a new submission was started, but the post-submit \
-             file still contained a \"fresh\" state. This indicates that the submission was not \
-             finalized."
-        );
-    };
-    ensure!(
-        sequencer_height_started == sequencer_height,
-        "the initialized `sequencer_height` in the pre-submit file does not match the sequencer \
-         height in the post-submit file. This indicates that a new submission to Celestia was \
-         started but not finalized. This is because a successful submission records the very same \
-         `sequencer_height` in the post-submit file."
-    );
-    Ok(())
-}
-
-fn ensure_last_and_current_are_different(
-    last_submission: PostSubmission,
-    current_submission: PostSubmission,
-) -> eyre::Result<()> {
-    ensure!(
-        last_submission != current_submission,
-        "the `last_submission` field of the pre-submit file matches the object found in the \
-         post-submit file. This indicates that a new submission to Celestia was started but not \
-         finalized. This is because when starting a new submission the object in the post-submit \
-         file is written to `last_submission`."
-    );
-    Ok(())
-}
-
-fn ensure_last_is_not_submitted_while_current_is_fresh(
-    last_submission: PostSubmission,
-    current_submission: PostSubmission,
-) -> eyre::Result<()> {
-    ensure!(
-        !(last_submission.is_submitted() && current_submission.is_fresh()),
-        "the submission recorded in the post-submit file cannot be `fresh` while \
-         `last_submission` in the pre-submit file is `submitted`",
-    );
-    Ok(())
-}
-
-fn ensure_height_in_last_is_less_than_height_in_current(
-    last_submission: PostSubmission,
-    current_submission: PostSubmission,
-) -> eyre::Result<()> {
-    let PostSubmission::Submitted {
-        sequencer_height: height_in_last,
-        ..
-    } = last_submission
-    else {
-        return Ok(());
-    };
-    let PostSubmission::Submitted {
-        sequencer_height: height_in_current,
-        ..
-    } = current_submission
-    else {
-        return Ok(());
-    };
-    ensure!(
-        height_in_last < height_in_current,
-        "the `sequencer_height` in the post-submit file is not greater than the \
-         `sequencer_height` stored in the `last_submission` field of the pre-submit file.
-        This indicates that a new submission was started not but finalized."
-    );
-    Ok(())
+impl Display for SubmissionState {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}, file_path: {}",
+            self.state,
+            self.file_path.display()
+        )
+    }
 }
 
 mod as_number {
     //! Logic to serialize sequencer heights as number, deserialize numbers as sequencer heights.
     //!
     //! This is unfortunately necessary because the [`serde::Serialize`], [`serde::Deserialize`]
-    //! implementations for [`sequencer_client::tendermint::block::Height`] write the integer as
-    //! string, probably due to tendermint's/cometbft's go-legacy.
+    //! implementations for [`tendermint::block::Height`] write the integer as a string, probably
+    //! due to tendermint's/cometbft's go-legacy.
     use serde::{
         Deserialize as _,
         Deserializer,
@@ -368,6 +369,7 @@ mod as_number {
     };
 
     use super::SequencerHeight;
+
     // Allow: the function signature is dictated by the serde(with) attribute.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     pub(super) fn serialize<S>(height: &SequencerHeight, serializer: S) -> Result<S::Ok, S::Error>
@@ -381,239 +383,81 @@ mod as_number {
     where
         D: Deserializer<'de>,
     {
-        use serde::de::Error;
         let height = u64::deserialize(deserializer)?;
-        SequencerHeight::try_from(height).map_err(Error::custom)
+        SequencerHeight::try_from(height).map_err(serde::de::Error::custom)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serde_json::json;
     use tempfile::NamedTempFile;
 
-    use super::SubmissionState;
-    use crate::relayer::submission::PostSubmission;
+    use super::*;
 
-    const STRICT_CONSISTENCY_CHECK: bool = false;
+    const CELESTIA_HEIGHT: u64 = 1234;
+    const SEQUENCER_HEIGHT_LOW: u32 = 111;
+    const SEQUENCER_HEIGHT_HIGH: u32 = 222;
 
     #[track_caller]
-    fn create_files() -> (NamedTempFile, NamedTempFile) {
-        let pre = NamedTempFile::new()
-            .expect("must be able to create an empty pre submit state file to run tests");
-        let post = NamedTempFile::new()
-            .expect("must be able to create an empty post submit state file to run tests");
-        (pre, post)
+    fn write(val: &serde_json::Value) -> NamedTempFile {
+        let file = NamedTempFile::new().unwrap();
+        serde_json::to_writer(&file, val).unwrap();
+        file
     }
 
-    fn write(f: &NamedTempFile, val: &serde_json::Value) {
-        serde_json::to_writer(f, val).expect("must be able to write state to run tests");
+    #[tokio::test]
+    async fn should_parse_fresh() {
+        let file = write(&json!({ "state": "fresh" }));
+        let parsed = SubmissionState::new_from_path(file.path()).await.unwrap();
+        assert_eq!(parsed.state, State::Fresh);
     }
 
-    #[test]
-    fn fresh_with_ignored_is_ok() {
-        let (pre, post) = create_files();
-        write(&pre, &json!({ "state": "ignore" }));
-        write(&post, &json!({ "state": "fresh" }));
-        SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-            .expect("states `ignore` and `fresh` give a working submission state");
+    #[tokio::test]
+    async fn should_parse_started() {
+        let file = write(&json!({
+            "state": "started",
+            "last_submission": {
+                "celestia_height": CELESTIA_HEIGHT,
+                "sequencer_height": SEQUENCER_HEIGHT_LOW
+            }
+        }));
+        let parsed = SubmissionState::new_from_path(file.path()).await.unwrap();
+        let expected = State::new_started(CompletedSubmission::new(
+            CELESTIA_HEIGHT,
+            SequencerHeight::from(SEQUENCER_HEIGHT_LOW),
+        ));
+        assert_eq!(parsed.state, expected);
     }
 
-    #[test]
-    fn submitted_with_ignored_is_ok() {
-        let (pre, post) = create_files();
-        write(&pre, &json!({ "state": "ignore" }));
-        write(
-            &post,
-            &json!({ "state": "submitted", "celestia_height": 5, "sequencer_height": 2 }),
-        );
-        SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-            .expect("states `ignore` and `submitted` give a working submission state");
-    }
+    #[tokio::test]
+    async fn should_parse_prepared() {
+        const AT: &str = "2024-06-24T22:22:22.222222222Z";
 
-    #[test]
-    fn started_with_same_fresh_in_last_and_current_is_err() {
-        let (pre, post) = create_files();
-        write(
-            &pre,
-            &json!({ "state": "started", "sequencer_height": 5, "last_submission": { "state": "fresh"} }),
-        );
-        write(&post, &json!({ "state": "fresh" }));
-        let _ =
-            SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-                .expect_err("started state with `fresh` in last and current gives error");
-    }
-
-    #[test]
-    fn started_with_height_before_current_is_err() {
-        let (pre, post) = create_files();
-        write(
-            &pre,
-            &json!({ "state": "started", "sequencer_height": 5, "last_submission": { "state": "fresh"} }),
-        );
-        write(
-            &post,
-            &json!({ "state": "submitted", "sequencer_height": 6, "celestia_height": 2 }),
-        );
-        let _ =
-            SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-                .expect_err(
-                    "started state with sequencer height less then sequencer height recorded \
-                     submitted gives error",
-                );
-    }
-
-    #[test]
-    fn started_with_same_submitted_in_last_and_current_is_err() {
-        let (pre, post) = create_files();
-        write(
-            &pre,
-            &json!({ "state": "started", "sequencer_height": 2, "last_submission": { "state": "submitted", "celestia_height": 5, "sequencer_height": 2} }),
-        );
-        write(
-            &post,
-            &json!({ "state": "submitted", "celestia_height": 5, "sequencer_height": 2 }),
-        );
-        let _ =
-            SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-                .expect_err(
-                    "started state with the same `submitted` in last and current give an error",
-                );
-    }
-
-    #[test]
-    fn started_with_different_last_fresh_and_current_submitted_is_ok() {
-        let (pre, post) = create_files();
-        write(
-            &pre,
-            &json!({ "state": "started", "sequencer_height": 2, "last_submission": { "state": "fresh" }}),
-        );
-        write(
-            &post,
-            &json!({ "state": "submitted", "celestia_height": 5, "sequencer_height": 2 }),
-        );
-        let _ =
-            SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-                .expect(
-                    "started state with the `fresh` in last and `submitted` in current gives \
-                     working submission state",
-                );
-    }
-
-    #[test]
-    fn submit_initialize_finalize_flow_works() {
-        let (pre, post) = create_files();
-        write(
-            &pre,
-            &json!({ "state": "started", "sequencer_height": 2, "last_submission": { "state": "fresh" }}),
-        );
-        write(
-            &post,
-            &json!({ "state": "submitted", "celestia_height": 5, "sequencer_height": 2 }),
-        );
-        let state =
-            SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-                .expect(
-                    "started state with the `fresh` in last and `submitted` in current gives \
-                     working submission state",
-                );
-        let started = state.initialize(3u32.into()).unwrap();
-        let finalized = started.finalize(6).unwrap();
-        let PostSubmission::Submitted {
-            celestia_height,
-            sequencer_height,
-        } = finalized.post
-        else {
-            panic!("the post submission state should be `submitted`");
+        let file = write(&json!({
+            "state": "prepared",
+            "sequencer_height": SEQUENCER_HEIGHT_HIGH,
+            "last_submission": {
+                "celestia_height": CELESTIA_HEIGHT,
+                "sequencer_height": SEQUENCER_HEIGHT_LOW
+            },
+            "blob_tx_hash": "0909090909090909090909090909090909090909090909090909090909090909",
+            "at": AT
+        }));
+        let parsed = SubmissionState::new_from_path(file.path()).await.unwrap();
+        let expected = State::Prepared {
+            sequencer_height: SequencerHeight::from(SEQUENCER_HEIGHT_HIGH),
+            last_submission: CompletedSubmission::new(
+                CELESTIA_HEIGHT,
+                SequencerHeight::from(SEQUENCER_HEIGHT_LOW),
+            ),
+            blob_tx_hash: BlobTxHash::from_raw([9; 32]),
+            at: SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_nanos(1_719_267_742_222_222_222))
+                .unwrap(),
         };
-        assert_eq!(celestia_height, 6);
-        assert_eq!(sequencer_height.value(), 3);
-    }
-
-    #[test]
-    fn submit_old_blocks_gives_error() {
-        let (pre, post) = create_files();
-        write(
-            &pre,
-            &json!({ "state": "started", "sequencer_height": 2, "last_submission": { "state": "fresh" }}),
-        );
-        write(
-            &post,
-            &json!({ "state": "submitted", "celestia_height": 5, "sequencer_height": 2 }),
-        );
-        let state =
-            SubmissionState::from_paths::<STRICT_CONSISTENCY_CHECK, _, _>(pre.path(), post.path())
-                .expect(
-                    "started state with `fresh` in last and `submitted` in current gives working \
-                     submission state",
-                );
-        let _ = state
-            .initialize(2u32.into())
-            .expect_err("trying to submit the same sequencer height is an error");
-    }
-
-    mod lenient {
-        //! These test the same scenarios as the tests of the same name in the super module, but
-        //! whereas those are strict and should fail, the tests in this module should pass
-
-        use super::{
-            create_files,
-            json,
-            write,
-            SubmissionState,
-        };
-
-        const LENIENT_CONSISTENCY_CHECK: bool = true;
-
-        #[test]
-        fn started_with_same_fresh_in_last_and_current_is_err() {
-            let (pre, post) = create_files();
-            write(
-                &pre,
-                &json!({ "state": "started", "sequencer_height": 5, "last_submission": { "state": "fresh"} }),
-            );
-            write(&post, &json!({ "state": "fresh" }));
-            let _ = SubmissionState::from_paths::<LENIENT_CONSISTENCY_CHECK, _, _>(
-                pre.path(),
-                post.path(),
-            )
-            .expect("this test should not fail when doing a leaning consistency check");
-        }
-
-        #[test]
-        fn started_with_height_before_current_is_err() {
-            let (pre, post) = create_files();
-            write(
-                &pre,
-                &json!({ "state": "started", "sequencer_height": 5, "last_submission": { "state": "fresh"} }),
-            );
-            write(
-                &post,
-                &json!({ "state": "submitted", "sequencer_height": 6, "celestia_height": 2 }),
-            );
-            let _ = SubmissionState::from_paths::<LENIENT_CONSISTENCY_CHECK, _, _>(
-                pre.path(),
-                post.path(),
-            )
-            .expect("this test should not fail when doing a leaning consistency check");
-        }
-
-        #[test]
-        fn started_with_same_submitted_in_last_and_current_is_err() {
-            let (pre, post) = create_files();
-            write(
-                &pre,
-                &json!({ "state": "started", "sequencer_height": 2, "last_submission": { "state": "submitted", "celestia_height": 5, "sequencer_height": 2} }),
-            );
-            write(
-                &post,
-                &json!({ "state": "submitted", "celestia_height": 5, "sequencer_height": 2 }),
-            );
-            let _ = SubmissionState::from_paths::<LENIENT_CONSISTENCY_CHECK, _, _>(
-                pre.path(),
-                post.path(),
-            )
-            .expect("this test should not fail when doing a leaning consistency check");
-        }
+        assert_eq!(parsed.state, expected);
     }
 }
