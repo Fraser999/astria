@@ -36,9 +36,9 @@ pub(crate) async fn balance_request(
         Ok(balance) => balance,
         Err(err) => {
             return response::Query {
-                code: AbciErrorCode::INTERNAL_ERROR.into(),
-                info: AbciErrorCode::INTERNAL_ERROR.to_string(),
-                log: format!("failed getting balance for provided address: {err:?}"),
+                code: AbciErrorCode::InternalError.into_tendermint_code(),
+                info: AbciErrorCode::InternalError.to_string(),
+                log: format!("failed getting balance for provided address: {err:#}"),
                 height,
                 ..response::Query::default()
             };
@@ -134,8 +134,8 @@ async fn preprocess_request(
         .find_map(|(k, v)| (k == "account").then_some(v))
     else {
         return Err(response::Query {
-            code: AbciErrorCode::INVALID_PARAMETER.into(),
-            info: AbciErrorCode::INVALID_PARAMETER.to_string(),
+            code: AbciErrorCode::InvalidParameter.into_tendermint_code(),
+            info: AbciErrorCode::InvalidParameter.to_string(),
             log: "path did not contain path parameter".into(),
             ..response::Query::default()
         });
@@ -144,18 +144,18 @@ async fn preprocess_request(
         .parse()
         .context("failed to parse argument as address")
         .map_err(|err| response::Query {
-            code: AbciErrorCode::INVALID_PARAMETER.into(),
-            info: AbciErrorCode::INVALID_PARAMETER.to_string(),
-            log: format!("address could not be constructed from provided parameter: {err:?}"),
+            code: AbciErrorCode::InvalidParameter.into_tendermint_code(),
+            info: AbciErrorCode::InvalidParameter.to_string(),
+            log: format!("address could not be constructed from provided parameter: {err:#}"),
             ..response::Query::default()
         })?;
     let (snapshot, height) = match get_snapshot_and_height(storage, request.height).await {
         Ok(tup) => tup,
         Err(err) => {
             return Err(response::Query {
-                code: AbciErrorCode::INTERNAL_ERROR.into(),
-                info: AbciErrorCode::INTERNAL_ERROR.to_string(),
-                log: format!("failed to query internal storage for snapshot and height: {err:?}"),
+                code: AbciErrorCode::InternalError.into_tendermint_code(),
+                info: AbciErrorCode::InternalError.to_string(),
+                log: format!("failed to query internal storage for snapshot and height: {err:#}"),
                 ..response::Query::default()
             });
         }

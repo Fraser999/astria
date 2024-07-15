@@ -29,7 +29,7 @@ fn error_query_response(
         None => msg.into(),
     };
     response::Query {
-        code: code.into(),
+        code: code.into_tendermint_code(),
         info: code.to_string(),
         log,
         ..response::Query::default()
@@ -48,7 +48,7 @@ async fn get_bridge_account_info(
         Err(err) => {
             return Err(error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to get rollup id",
             ));
         }
@@ -59,7 +59,7 @@ async fn get_bridge_account_info(
         Err(err) => {
             return Err(error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to get bridge asset",
             ));
         }
@@ -70,14 +70,14 @@ async fn get_bridge_account_info(
         Ok(None) => {
             return Err(error_query_response(
                 None,
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to map ibc asset to trace asset; asset does not exist in state",
             ));
         }
         Err(err) => {
             return Err(error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to map ibc asset to trace asset",
             ));
         }
@@ -88,14 +88,14 @@ async fn get_bridge_account_info(
         Ok(None) => {
             return Err(error_query_response(
                 None,
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "sudo address not set",
             ));
         }
         Err(err) => {
             return Err(error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to get sudo address",
             ));
         }
@@ -109,14 +109,14 @@ async fn get_bridge_account_info(
         Ok(None) => {
             return Err(error_query_response(
                 None,
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "withdrawer address not set",
             ));
         }
         Err(err) => {
             return Err(error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to get withdrawer address",
             ));
         }
@@ -148,7 +148,7 @@ pub(crate) async fn bridge_account_info_request(
         Err(err) => {
             return error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to get block height",
             );
         }
@@ -197,7 +197,7 @@ pub(crate) async fn bridge_account_last_tx_hash_request(
         Err(err) => {
             return error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed to get block height",
             );
         }
@@ -218,7 +218,7 @@ pub(crate) async fn bridge_account_last_tx_hash_request(
         Err(err) => {
             return error_query_response(
                 Some(err),
-                AbciErrorCode::INTERNAL_ERROR,
+                AbciErrorCode::InternalError,
                 "failed getting balance for provided address",
             );
         }
@@ -242,7 +242,7 @@ fn preprocess_request(params: &[(String, String)]) -> anyhow::Result<Address, re
     else {
         return Err(error_query_response(
             None,
-            AbciErrorCode::INVALID_PARAMETER,
+            AbciErrorCode::InvalidParameter,
             "path did not contain address parameter",
         ));
     };
@@ -250,8 +250,8 @@ fn preprocess_request(params: &[(String, String)]) -> anyhow::Result<Address, re
         .parse()
         .context("failed to parse argument as address")
         .map_err(|err| response::Query {
-            code: AbciErrorCode::INVALID_PARAMETER.into(),
-            info: AbciErrorCode::INVALID_PARAMETER.to_string(),
+            code: AbciErrorCode::InvalidParameter.into_tendermint_code(),
+            info: AbciErrorCode::InvalidParameter.to_string(),
             log: format!("address could not be constructed from provided parameter: {err:#}"),
             ..response::Query::default()
         })?;

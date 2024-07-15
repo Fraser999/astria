@@ -834,12 +834,12 @@ impl App {
                             "failed to finalize transaction; ignoring it",
                         );
                         let code = if e.downcast_ref::<InvalidNonce>().is_some() {
-                            AbciErrorCode::INVALID_NONCE
+                            AbciErrorCode::InvalidNonce
                         } else {
-                            AbciErrorCode::INTERNAL_ERROR
+                            AbciErrorCode::InternalError
                         };
                         tx_results.push(ExecTxResult {
-                            code: code.into(),
+                            code: code.into_tendermint_code(),
                             info: code.to_string(),
                             log: format!("{e:?}"),
                             ..Default::default()

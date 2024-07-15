@@ -128,8 +128,8 @@ impl Info {
         let (handler, params) = match self.query_router.at(&request.path) {
             Err(err) => {
                 return response::Query {
-                    code: AbciErrorCode::UNKNOWN_PATH.into(),
-                    info: AbciErrorCode::UNKNOWN_PATH.to_string(),
+                    code: AbciErrorCode::UnknownPath.into_tendermint_code(),
+                    info: AbciErrorCode::UnknownPath.to_string(),
                     log: format!("provided path `{}` is unknown: {err:?}", request.path),
                     ..response::Query::default()
                 };
