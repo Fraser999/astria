@@ -8,15 +8,15 @@ use astria_core::{
     protocol::transaction::v1alpha1::action::IbcRelayerChangeAction,
 };
 use async_trait::async_trait;
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 
 use crate::{
     ibc::state_ext::{
         StateReadExt,
         StateWriteExt,
+    },
+    storage::{
+        StateRead,
+        StateWrite,
     },
     transaction::action_handler::ActionHandler,
 };

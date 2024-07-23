@@ -6,7 +6,6 @@ use astria_core::{
         bridge::v1alpha1::BridgeAccountInfo,
     },
 };
-use cnidarium::Storage;
 use prost::Message as _;
 use tendermint::abci::{
     request,
@@ -17,6 +16,10 @@ use crate::{
     asset::state_ext::StateReadExt as _,
     bridge::state_ext::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::{
+        Snapshot,
+        Storage,
+    },
 };
 
 fn error_query_response(
@@ -37,7 +40,7 @@ fn error_query_response(
 }
 
 async fn get_bridge_account_info(
-    snapshot: cnidarium::Snapshot,
+    snapshot: Snapshot,
     address: Address,
 ) -> anyhow::Result<Option<BridgeAccountInfo>, response::Query> {
     let rollup_id = match snapshot.get_bridge_account_rollup_id(&address).await {

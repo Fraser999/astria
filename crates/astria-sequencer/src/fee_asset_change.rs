@@ -9,16 +9,16 @@ use astria_core::{
     protocol::transaction::v1alpha1::action::FeeAssetChangeAction,
 };
 use async_trait::async_trait;
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 
 use crate::{
     authority::state_ext::StateReadExt as _,
     state_ext::{
         StateReadExt as _,
         StateWriteExt as _,
+    },
+    storage::{
+        StateRead,
+        StateWrite,
     },
     transaction::action_handler::ActionHandler,
 };

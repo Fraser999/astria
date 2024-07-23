@@ -1,25 +1,44 @@
 use anyhow::{
+    anyhow,
     bail,
     Context as _,
     Result,
 };
 use astria_core::primitive::v1::asset;
 use async_trait::async_trait;
-use cnidarium::{
-    StateRead,
-    StateWrite,
+use futures::{
+    StreamExt as _,
+    TryStreamExt as _,
 };
-use futures::StreamExt as _;
 use tendermint::Time;
 use tracing::instrument;
 
-const NATIVE_ASSET_KEY: &[u8] = b"nativeasset";
+use crate::{
+    storage::{
+        display_nonverifiable_key,
+        StateRead,
+        StateWrite,
+    },
+    storage_keys::hunks::Asset,
+};
+
+const CHAIN_ID_KEY: &str = "chain_id";
 const REVISION_NUMBER_KEY: &str = "revision_number";
+const BLOCK_HEIGHT_KEY: &str = "block_height";
+const BLOCK_TIMESTAMP_KEY: &str = "block_timestamp";
+const NATIVE_ASSET_KEY: &str = "native_asset";
 const BLOCK_FEES_PREFIX: &str = "block_fees/";
 const FEE_ASSET_PREFIX: &str = "fee_asset/";
 
-fn storage_version_by_height_key(height: u64) -> Vec<u8> {
-    format!("storage_version/{height}").into()
+type StoredChainId = String;
+type StoredRevisionNumber = u64;
+type StoredBlockHeight = u64;
+type StoredTimestamp = i128;
+type StoredStorageVersion = u64;
+type StoredBlockFees = u128;
+
+fn storage_version_by_height_key(height: u64) -> String {
+    format!("storage_version/{height}")
 }
 
 fn block_fees_key<TAsset: Into<asset::IbcPrefixed>>(asset: TAsset) -> String {
@@ -40,159 +59,86 @@ fn fee_asset_key<TAsset: Into<asset::IbcPrefixed>>(asset: TAsset) -> String {
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_chain_id(&self) -> Result<tendermint::chain::Id> {
-        let Some(bytes) = self
-            .get_raw("chain_id")
-            .await
-            .context("failed to read raw chain_id from state")?
-        else {
+        let Some(chain_id) = self.get::<_, StoredChainId>(CHAIN_ID_KEY).await? else {
             bail!("chain id not found in state");
         };
-
-        Ok(String::from_utf8(bytes)
-            .context("failed to parse chain id from raw bytes")?
+        Ok(chain_id
             .try_into()
             .expect("only valid chain ids should be stored in the state"))
     }
 
     #[instrument(skip_all)]
-    async fn get_revision_number(&self) -> Result<u64> {
-        let Some(bytes) = self
-            .get_raw(REVISION_NUMBER_KEY)
-            .await
-            .context("failed to read raw revision number from state")?
-        else {
-            bail!("revision number not found in state");
-        };
-
-        let bytes = TryInto::<[u8; 8]>::try_into(bytes).map_err(|b| {
-            anyhow::anyhow!(
-                "expected 8 revision number bytes but got {}; this is a bug",
-                b.len()
-            )
-        })?;
-
-        Ok(u64::from_be_bytes(bytes))
+    async fn get_revision_number(&self) -> Result<StoredRevisionNumber> {
+        self.get(REVISION_NUMBER_KEY)
+            .await?
+            .ok_or_else(|| anyhow!("revision number not found in state"))
     }
 
     #[instrument(skip_all)]
-    async fn get_block_height(&self) -> Result<u64> {
-        let Some(bytes) = self
-            .get_raw("block_height")
-            .await
-            .context("failed to read raw block_height from state")?
-        else {
-            bail!("block height not found state");
-        };
-        let Ok(bytes): Result<[u8; 8], _> = bytes.try_into() else {
-            bail!("failed turning raw block height bytes into u64; not 8 bytes?");
-        };
-        Ok(u64::from_be_bytes(bytes))
+    async fn get_block_height(&self) -> Result<StoredBlockHeight> {
+        self.get(BLOCK_HEIGHT_KEY)
+            .await?
+            .ok_or_else(|| anyhow!("block height not found in state"))
     }
 
     #[instrument(skip_all)]
     async fn get_block_timestamp(&self) -> Result<Time> {
-        let Some(bytes) = self
-            .get_raw("block_timestamp")
-            .await
-            .context("failed to read raw block_timestamp from state")?
+        const BILLION: i128 = 1_000_000_000;
+        let Some(stored_timestamp) = self.get::<_, StoredTimestamp>(BLOCK_TIMESTAMP_KEY).await?
         else {
             bail!("block timestamp not found");
         };
-        // no extra allocations in the happy path (meaning the bytes are utf8)
-        Time::parse_from_rfc3339(&String::from_utf8_lossy(&bytes))
-            .context("failed to parse timestamp from raw timestamp bytes")
+        let seconds = i64::try_from(stored_timestamp / BILLION)
+            .unwrap_or_else(|_| panic!("invalid stored block time `{stored_timestamp}`"));
+        let nanoseconds = u32::try_from(stored_timestamp % BILLION)
+            .unwrap_or_else(|_| panic!("invalid stored block time `{stored_timestamp}`"));
+        let timestamp = Time::from_unix_timestamp(seconds, nanoseconds)
+            .unwrap_or_else(|_| panic!("invalid stored block time `{stored_timestamp}`"));
+        Ok(timestamp)
     }
 
     #[instrument(skip_all)]
-    async fn get_storage_version_by_height(&self, height: u64) -> Result<u64> {
-        let key = storage_version_by_height_key(height);
-        let Some(bytes) = self
-            .nonverifiable_get_raw(&key)
-            .await
-            .context("failed to read raw storage_version from state")?
-        else {
-            bail!("storage version not found");
-        };
-        let Ok(bytes): Result<[u8; 8], _> = bytes.try_into() else {
-            bail!("failed turning raw storage version bytes into u64; not 8 bytes?");
-        };
-        Ok(u64::from_be_bytes(bytes))
+    async fn get_storage_version_by_height(&self, height: u64) -> Result<StoredStorageVersion> {
+        self.get(storage_version_by_height_key(height))
+            .await?
+            .ok_or_else(|| anyhow!("storage version not found in state"))
     }
 
     #[instrument(skip_all)]
     async fn get_native_asset_denom(&self) -> Result<String> {
-        let Some(bytes) = self
-            .nonverifiable_get_raw(NATIVE_ASSET_KEY)
-            .await
-            .context("failed to read raw native_asset_denom from state")?
-        else {
-            bail!("native asset denom not found");
-        };
-
-        String::from_utf8(bytes).context("failed to parse native asset denom from raw bytes")
+        self.get(NATIVE_ASSET_KEY)
+            .await?
+            .ok_or_else(|| anyhow!("native asset denom not found in state"))
     }
 
     #[instrument(skip_all)]
-    async fn get_block_fees(&self) -> Result<Vec<(asset::IbcPrefixed, u128)>> {
-        // let mut fees: Vec<(asset::Id, u128)> = Vec::new();
-        let mut fees = Vec::new();
-
-        let mut stream =
-            std::pin::pin!(self.nonverifiable_prefix_raw(BLOCK_FEES_PREFIX.as_bytes()));
-        while let Some(Ok((key, value))) = stream.next().await {
-            // if the key isn't of the form `block_fees/{asset_id}`, then we have a bug
-            // in `put_block_fees`
-            let suffix = key
-                .strip_prefix(BLOCK_FEES_PREFIX.as_bytes())
-                .expect("prefix must always be present");
-            let asset = std::str::from_utf8(suffix)
-                .context("key suffix was not utf8 encoded; this should not happen")?
-                .parse::<crate::storage_keys::hunks::Asset>()
-                .context("failed to parse storage key suffix as address hunk")?
-                .get();
-
-            let Ok(bytes): Result<[u8; 16], _> = value.try_into() else {
-                bail!("failed turning raw block fees bytes into u128; not 16 bytes?");
-            };
-
-            fees.push((asset, u128::from_be_bytes(bytes)));
-        }
-
-        Ok(fees)
+    async fn get_block_fees(&self) -> Result<Vec<(asset::IbcPrefixed, StoredBlockFees)>> {
+        self.nonverifiable_prefix::<_, StoredBlockFees>(BLOCK_FEES_PREFIX)
+            .and_then(|(key, fees)| async move {
+                let asset = asset_from_prefixed_key(BLOCK_FEES_PREFIX, &key)?;
+                Ok((asset, fees))
+            })
+            .try_collect()
+            .await
     }
 
     #[instrument(skip_all)]
     async fn is_allowed_fee_asset<TAsset>(&self, asset: TAsset) -> Result<bool>
     where
-        TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
+        TAsset: Into<asset::IbcPrefixed>,
     {
         Ok(self
-            .nonverifiable_get_raw(fee_asset_key(asset).as_bytes())
-            .await
-            .context("failed to read raw fee asset from state")?
+            .nonverifiable_get::<_, ()>(fee_asset_key(asset))
+            .await?
             .is_some())
     }
 
     #[instrument(skip_all)]
     async fn get_allowed_fee_assets(&self) -> Result<Vec<asset::IbcPrefixed>> {
-        let mut assets = Vec::new();
-
-        let mut stream = std::pin::pin!(self.nonverifiable_prefix_raw(FEE_ASSET_PREFIX.as_bytes()));
-        while let Some(Ok((key, _))) = stream.next().await {
-            // if the key isn't of the form `fee_asset/{asset_id}`, then we have a bug
-            // in `put_allowed_fee_asset`
-            let suffix = key
-                .strip_prefix(FEE_ASSET_PREFIX.as_bytes())
-                .expect("prefix must always be present");
-            let asset = std::str::from_utf8(suffix)
-                .context("key suffix was not utf8 encoded; this should not happen")?
-                .parse::<crate::storage_keys::hunks::Asset>()
-                .context("failed to parse storage key suffix as address hunk")?
-                .get();
-            assets.push(asset);
-        }
-
-        Ok(assets)
+        self.nonverifiable_prefix::<_, ()>(FEE_ASSET_PREFIX)
+            .and_then(|(key, _)| async move { asset_from_prefixed_key(FEE_ASSET_PREFIX, &key) })
+            .try_collect()
+            .await
     }
 }
 
@@ -201,41 +147,36 @@ impl<T: StateRead> StateReadExt for T {}
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
-    fn put_chain_id_and_revision_number(&mut self, chain_id: tendermint::chain::Id) {
-        let revision_number = revision_number_from_chain_id(chain_id.as_str());
-        self.put_raw("chain_id".into(), chain_id.as_bytes().to_vec());
-        self.put_revision_number(revision_number);
+    fn put_chain_id_and_revision_number(&mut self, chain_id: tendermint::chain::Id) -> Result<()> {
+        let stored_revision_number: StoredRevisionNumber =
+            revision_number_from_chain_id(chain_id.as_str());
+        let stored_chain_id: StoredChainId = chain_id.as_str().to_string();
+        self.put(CHAIN_ID_KEY, &stored_chain_id)?;
+        self.put(REVISION_NUMBER_KEY, &stored_revision_number)
     }
 
     #[instrument(skip_all)]
-    fn put_revision_number(&mut self, revision_number: u64) {
-        self.put_raw(
-            REVISION_NUMBER_KEY.into(),
-            revision_number.to_be_bytes().to_vec(),
-        );
+    fn put_block_height(&mut self, height: StoredBlockHeight) -> Result<()> {
+        self.put(BLOCK_HEIGHT_KEY, &height)
     }
 
     #[instrument(skip_all)]
-    fn put_block_height(&mut self, height: u64) {
-        self.put_raw("block_height".into(), height.to_be_bytes().to_vec());
+    fn put_block_timestamp(&mut self, timestamp: Time) -> Result<()> {
+        self.put(BLOCK_TIMESTAMP_KEY, &timestamp.unix_timestamp_nanos())
     }
 
     #[instrument(skip_all)]
-    fn put_block_timestamp(&mut self, timestamp: Time) {
-        self.put_raw("block_timestamp".into(), timestamp.to_rfc3339().into());
+    fn put_storage_version_by_height(
+        &mut self,
+        height: u64,
+        version: StoredStorageVersion,
+    ) -> Result<()> {
+        self.nonverifiable_put(storage_version_by_height_key(height), &version)
     }
 
     #[instrument(skip_all)]
-    fn put_storage_version_by_height(&mut self, height: u64, version: u64) {
-        self.nonverifiable_put_raw(
-            storage_version_by_height_key(height),
-            version.to_be_bytes().to_vec(),
-        );
-    }
-
-    #[instrument(skip_all)]
-    fn put_native_asset_denom(&mut self, denom: &str) {
-        self.nonverifiable_put_raw(NATIVE_ASSET_KEY.to_vec(), denom.as_bytes().to_vec());
+    fn put_native_asset_denom(&mut self, denom: &str) -> Result<()> {
+        self.nonverifiable_put(NATIVE_ASSET_KEY, &denom)
     }
 
     /// Adds `amount` to the block fees for `asset`.
@@ -243,49 +184,38 @@ pub(crate) trait StateWriteExt: StateWrite {
     async fn get_and_increase_block_fees<TAsset>(
         &mut self,
         asset: TAsset,
-        amount: u128,
+        amount: StoredBlockFees,
     ) -> Result<()>
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
         let block_fees_key = block_fees_key(asset);
-        let current_amount = self
-            .nonverifiable_get_raw(block_fees_key.as_bytes())
-            .await
-            .context("failed to read raw block fees from state")?
-            .map(|bytes| {
-                let Ok(bytes): Result<[u8; 16], _> = bytes.try_into() else {
-                    // this shouldn't happen
-                    bail!("failed turning raw block fees bytes into u128; not 16 bytes?");
-                };
-                Ok(u128::from_be_bytes(bytes))
-            })
-            .transpose()?
+        let current_amount: StoredBlockFees = self
+            .nonverifiable_get(&block_fees_key)
+            .await?
             .unwrap_or_default();
 
         let new_amount = current_amount
             .checked_add(amount)
             .context("block fees overflowed u128")?;
 
-        self.nonverifiable_put_raw(block_fees_key.into(), new_amount.to_be_bytes().to_vec());
-        Ok(())
+        self.nonverifiable_put(block_fees_key, &new_amount)
     }
 
     #[instrument(skip_all)]
     async fn clear_block_fees(&mut self) {
-        let mut stream =
-            std::pin::pin!(self.nonverifiable_prefix_raw(BLOCK_FEES_PREFIX.as_bytes()));
+        let mut stream = self.nonverifiable_prefix(BLOCK_FEES_PREFIX);
         while let Some(Ok((key, _))) = stream.next().await {
             self.nonverifiable_delete(key);
         }
     }
 
     #[instrument(skip_all)]
-    fn put_allowed_fee_asset<TAsset>(&mut self, asset: TAsset)
+    fn put_allowed_fee_asset<TAsset>(&mut self, asset: TAsset) -> Result<()>
     where
-        TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
+        TAsset: Into<asset::IbcPrefixed>,
     {
-        self.nonverifiable_put_raw(fee_asset_key(asset).into(), vec![]);
+        self.nonverifiable_put(fee_asset_key(asset), &())
     }
 
     #[instrument(skip_all)]
@@ -293,7 +223,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display,
     {
-        self.nonverifiable_delete(fee_asset_key(asset).into());
+        self.nonverifiable_delete(fee_asset_key(asset));
     }
 }
 
@@ -314,6 +244,33 @@ fn revision_number_from_chain_id(chain_id: &str) -> u64 {
     revision_number[0]
         .parse::<u64>()
         .expect("revision number must be parseable and fit in a u64")
+}
+
+fn asset_from_prefixed_key(prefix: &str, key: &[u8]) -> Result<asset::IbcPrefixed> {
+    let suffix = key.strip_prefix(prefix.as_bytes()).with_context(|| {
+        format!(
+            "expected storage key `{}` to have prefix `{prefix}`",
+            display_nonverifiable_key(key)
+        )
+    })?;
+    let asset = std::str::from_utf8(suffix)
+        .with_context(|| {
+            format!(
+                "expected storage key `{}` with suffix `{}` to be UTF-8 encoded",
+                display_nonverifiable_key(key),
+                display_nonverifiable_key(suffix)
+            )
+        })?
+        .parse::<Asset>()
+        .with_context(|| {
+            format!(
+                "failed to parse storage key `{}` with suffix `{}` as address hunk",
+                display_nonverifiable_key(key),
+                display_nonverifiable_key(suffix)
+            )
+        })?
+        .get();
+    Ok(asset)
 }
 
 #[cfg(test)]

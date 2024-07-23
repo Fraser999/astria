@@ -11,11 +11,12 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
+use tracing::instrument;
+
+use crate::storage::{
     StateRead,
     StateWrite,
 };
-use tracing::instrument;
 
 /// Newtype wrapper to read and write a denomination trace from rocksdb.
 #[derive(BorshSerialize, BorshDeserialize, Debug)]

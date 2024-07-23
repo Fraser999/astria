@@ -14,7 +14,6 @@ use astria_core::{
         transaction::v1alpha1::SignedTransaction,
     },
 };
-use cnidarium::Storage;
 use futures::{
     Future,
     FutureExt,
@@ -40,6 +39,7 @@ use crate::{
         RemovalReason,
     },
     metrics::Metrics,
+    storage::Storage,
     transaction,
 };
 

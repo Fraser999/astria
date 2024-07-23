@@ -4,11 +4,12 @@ use anyhow::{
     Result,
 };
 use async_trait::async_trait;
-use cnidarium::{
+use tracing::instrument;
+
+use crate::storage::{
     StateRead,
     StateWrite,
 };
-use tracing::instrument;
 
 fn base_prefix_key() -> &'static str {
     "prefixes/base"

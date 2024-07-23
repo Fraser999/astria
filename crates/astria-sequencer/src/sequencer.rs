@@ -40,6 +40,7 @@ use crate::{
     metrics::Metrics,
     service,
     state_ext::StateReadExt as _,
+    storage::Storage,
 };
 
 pub struct Sequencer;
@@ -73,7 +74,7 @@ impl Sequencer {
 
         let substore_prefixes = vec![penumbra_ibc::IBC_SUBSTORE_PREFIX];
 
-        let storage = cnidarium::Storage::load(
+        let storage = Storage::load(
             config.db_filepath.clone(),
             substore_prefixes
                 .into_iter()
@@ -104,7 +105,7 @@ impl Sequencer {
         }
 
         let mempool = Mempool::new();
-        let app = App::new(snapshot, mempool.clone(), metrics)
+        let app = App::new(&storage, mempool.clone(), metrics)
             .await
             .context("failed to initialize app")?;
 
@@ -175,7 +176,7 @@ impl Sequencer {
 }
 
 fn start_grpc_server(
-    storage: &cnidarium::Storage,
+    storage: &Storage,
     mempool: Mempool,
     grpc_addr: std::net::SocketAddr,
     shutdown_rx: oneshot::Receiver<()>,

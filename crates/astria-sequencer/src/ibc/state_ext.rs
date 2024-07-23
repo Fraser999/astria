@@ -13,14 +13,15 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 use ibc_types::core::channel::ChannelId;
 use tracing::{
     debug,
     instrument,
+};
+
+use crate::storage::{
+    StateRead,
+    StateWrite,
 };
 
 /// Newtype wrapper to read and write a u128 from rocksdb.

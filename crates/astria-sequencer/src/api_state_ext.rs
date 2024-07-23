@@ -23,12 +23,13 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
+use prost::Message;
+use tracing::instrument;
+
+use crate::storage::{
     StateRead,
     StateWrite,
 };
-use prost::Message;
-use tracing::instrument;
 
 fn block_hash_by_height_key(height: u64) -> String {
     format!("blockhash/{height}")

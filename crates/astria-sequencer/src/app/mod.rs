@@ -33,10 +33,7 @@ use astria_core::{
 };
 use cnidarium::{
     ArcStateDeltaExt,
-    Snapshot,
     StagedWriteBatch,
-    StateDelta,
-    Storage,
 };
 use prost::Message as _;
 use sha2::{
@@ -109,6 +106,12 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    storage::{
+        DeltaDelta,
+        Snapshot,
+        SnapshotDelta,
+        Storage,
+    },
     transaction::{
         self,
         InvalidNonce,
@@ -116,7 +119,7 @@ use crate::{
 };
 
 /// The inter-block state being written to by the application.
-type InterBlockState = Arc<StateDelta<Snapshot>>;
+type InterBlockState = Arc<SnapshotDelta>;
 
 /// The Sequencer application, written as a bundle of [`Component`]s.
 ///
@@ -127,7 +130,7 @@ type InterBlockState = Arc<StateDelta<Snapshot>>;
 ///
 /// [Penumbra reference]: https://github.com/penumbra-zone/penumbra/blob/9cc2c644e05c61d21fdc7b507b96016ba6b9a935/app/src/app/mod.rs#L42
 pub(crate) struct App {
-    state: InterBlockState,
+    inter_block_state: SnapshotDelta,
 
     // The mempool of the application.
     //
@@ -155,7 +158,7 @@ pub(crate) struct App {
 
     // cache of results of executing of transactions in `prepare_proposal` or `process_proposal`.
     // cleared at the end of each block.
-    execution_results: Option<Vec<tendermint::abci::types::ExecTxResult>>,
+    execution_results: Option<Vec<ExecTxResult>>,
 
     // the current `StagedWriteBatch` which contains the rocksdb write batch
     // of the current block being executed, created from the state delta,
@@ -190,12 +193,10 @@ impl App {
             .try_into()
             .expect("root hash conversion must succeed; should be 32 bytes");
 
-        // We perform the `Arc` wrapping of `State` here to ensure
-        // there should be no unexpected copies elsewhere.
-        let state = Arc::new(StateDelta::new(snapshot));
+        let inter_block_state = SnapshotDelta::new(snapshot);
 
         Ok(Self {
-            state,
+            inter_block_state,
             mempool,
             validator_address: None,
             executed_proposal_hash: Hash::default(),
@@ -215,7 +216,7 @@ impl App {
         chain_id: String,
     ) -> anyhow::Result<AppHash> {
         let mut state_tx = self
-            .state
+            .inter_block_state
             .try_begin_transaction()
             .expect("state Arc should not be referenced elsewhere");
 
@@ -264,7 +265,7 @@ impl App {
             .await
             .context("failed to call init_chain on SequenceComponent")?;
 
-        state_tx.apply();
+        let _ = state_tx.apply();
 
         let app_hash = self
             .prepare_commit(storage)
@@ -279,7 +280,7 @@ impl App {
         // but `self.state` was changed due to executing the previous round's data.
         //
         // if the previous round was committed, then the state stays the same.
-        self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        self.inter_block_state = storage.latest_snapshot_delta();
 
         // clear the cache of transaction execution results
         self.execution_results = None;
@@ -330,7 +331,7 @@ impl App {
             .record_proposal_transactions(signed_txs_included.len());
 
         let deposits = self
-            .state
+            .inter_block_state
             .get_block_deposits()
             .await
             .context("failed to get block deposits in prepare_proposal")?;
@@ -439,7 +440,7 @@ impl App {
         self.metrics.record_proposal_transactions(signed_txs.len());
 
         let deposits = self
-            .state
+            .inter_block_state
             .get_block_deposits()
             .await
             .context("failed to get block deposits in process_proposal")?;
@@ -704,7 +705,7 @@ impl App {
     #[instrument(name = "App::pre_execute_transactions", skip_all)]
     async fn pre_execute_transactions(&mut self, block_data: BlockData) -> anyhow::Result<()> {
         let chain_id = self
-            .state
+            .inter_block_state
             .get_chain_id()
             .await
             .context("failed to get chain ID from state")?;
@@ -762,12 +763,12 @@ impl App {
         storage: Storage,
     ) -> anyhow::Result<abci::response::FinalizeBlock> {
         let chain_id = self
-            .state
+            .inter_block_state
             .get_chain_id()
             .await
             .context("failed to get chain ID from state")?;
         let sudo_address = self
-            .state
+            .inter_block_state
             .get_sudo_address()
             .await
             .context("failed to get sudo address from state")?;
@@ -859,9 +860,12 @@ impl App {
         let end_block = self.end_block(height.value(), sudo_address).await?;
 
         // get and clear block deposits from state
-        let mut state_tx = StateDelta::new(self.state.clone());
+
+        // let mut state_tx = StateDelta::new(self.inter_block_state.clone());
+        let mut state_tx = self.inter_block_state.try_begin_transaction().unwrap();
+
         let deposits = self
-            .state
+            .inter_block_state
             .get_block_deposits()
             .await
             .context("failed to get block deposits in end_block")?;
@@ -902,7 +906,7 @@ impl App {
             .context("failed to prepare commit")?;
 
         // update the priority of any txs in the mempool based on the updated app state
-        update_mempool_after_finalization(&mut self.mempool, self.state.clone())
+        update_mempool_after_finalization(&mut self.mempool, &self.inter_block_state)
             .await
             .context("failed to update mempool after finalization")?;
 
@@ -916,10 +920,9 @@ impl App {
     }
 
     async fn prepare_commit(&mut self, storage: Storage) -> anyhow::Result<AppHash> {
-        // extract the state we've built up to so we can prepare it as a `StagedWriteBatch`.
-        let dummy_state = StateDelta::new(storage.latest_snapshot());
-        let mut state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
-            .expect("we have exclusive ownership of the State at commit()");
+        // extract the state we've built up, so we can prepare it as a `StagedWriteBatch`.
+        let dummy_state = storage.latest_snapshot_delta();
+        let mut state = std::mem::replace(&mut self.inter_block_state, dummy_state);
 
         // store the storage version indexed by block height
         let new_version = storage.latest_version().wrapping_add(1);
@@ -949,11 +952,12 @@ impl App {
     }
 
     #[instrument(name = "App::begin_block", skip_all)]
-    pub(crate) async fn begin_block(
+    async fn begin_block(
         &mut self,
         begin_block: &abci::request::BeginBlock,
     ) -> anyhow::Result<Vec<abci::Event>> {
-        let mut state_tx = StateDelta::new(self.state.clone());
+        // let mut state_tx = StateDelta::new(self.inter_block_state.clone());
+        let mut state_tx = self.inter_block_state.try_begin_transaction().unwrap();
 
         // store the block height
         state_tx.put_block_height(begin_block.header.height.into());
@@ -978,7 +982,7 @@ impl App {
             .await
             .context("failed to call begin_block on SequenceComponent")?;
 
-        let state_tx = Arc::try_unwrap(arc_state_tx)
+        let state_tx = Arc::into_inner(arc_state_tx)
             .expect("components should not retain copies of shared state");
 
         Ok(self.apply(state_tx))
@@ -986,7 +990,7 @@ impl App {
 
     /// Executes a signed transaction.
     #[instrument(name = "App::execute_transaction", skip_all)]
-    pub(crate) async fn execute_transaction(
+    async fn execute_transaction(
         &mut self,
         signed_tx: Arc<SignedTransaction>,
     ) -> anyhow::Result<Vec<Event>> {
@@ -995,7 +999,7 @@ impl App {
             async move { transaction::check_stateless(&signed_tx_2).await }.in_current_span(),
         );
         let signed_tx_2 = signed_tx.clone();
-        let state2 = self.state.clone();
+        let state2 = &mut self.inter_block_state;
         let stateful = tokio::spawn(
             async move { transaction::check_stateful(&signed_tx_2, &state2).await }
                 .in_current_span(),
@@ -1012,14 +1016,14 @@ impl App {
         // At this point, the stateful checks should have completed,
         // leaving us with exclusive access to the Arc<State>.
         let mut state_tx = self
-            .state
+            .inter_block_state
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
 
         transaction::execute(&signed_tx, &mut state_tx)
             .await
             .context("failed executing transaction")?;
-        let (_, events) = state_tx.apply();
+        let events = state_tx.apply();
 
         info!(event_count = events.len(), "executed transaction");
         Ok(events)
@@ -1031,7 +1035,8 @@ impl App {
         height: u64,
         fee_recipient: Address,
     ) -> anyhow::Result<abci::response::EndBlock> {
-        let state_tx = StateDelta::new(self.state.clone());
+        // let state_tx = StateDelta::new(self.inter_block_state.clone());
+        let state_tx = self.inter_block_state.try_begin_transaction().unwrap();
         let mut arc_state_tx = Arc::new(state_tx);
 
         let end_block = abci::request::EndBlock {
@@ -1057,12 +1062,12 @@ impl App {
             .await
             .context("failed to call end_block on SequenceComponent")?;
 
-        let mut state_tx = Arc::try_unwrap(arc_state_tx)
+        let mut state_tx = Arc::into_inner(arc_state_tx)
             .expect("components should not retain copies of shared state");
 
         // gather and return validator updates
         let validator_updates = self
-            .state
+            .inter_block_state
             .get_validator_updates()
             .await
             .expect("failed getting validator updates");
@@ -1072,7 +1077,7 @@ impl App {
 
         // gather block fees and transfer them to the block proposer
         let fees = self
-            .state
+            .inter_block_state
             .get_block_fees()
             .await
             .context("failed to get block fees")?;
@@ -1105,7 +1110,7 @@ impl App {
                 "write batch must be set, as `finalize_block` is always called before `commit`",
             ))
             .expect("must be able to successfully commit to storage");
-        tracing::debug!(
+        debug!(
             app_hash = %telemetry::display::hex(&app_hash),
             "finished committing state",
         );
@@ -1116,7 +1121,7 @@ impl App {
             .expect("root hash to app hash conversion must succeed");
 
         // Get the latest version of the state, now that we've committed it.
-        self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        self.inter_block_state = storage.latest_snapshot_delta();
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying
@@ -1127,15 +1132,12 @@ impl App {
     //
     // Invariant: state_tx and self.state are the only two references to the
     // inter-block state.
-    fn apply(&mut self, state_tx: StateDelta<InterBlockState>) -> Vec<Event> {
-        let (state2, mut cache) = state_tx.flatten();
-        std::mem::drop(state2);
+    fn apply(&mut self, state_tx: DeltaDelta) -> Vec<Event> {
+        let mut cache = state_tx.into_cache();
         // Now there is only one reference to the inter-block state: self.state
 
         let events = cache.take_events();
-        cache.apply_to(
-            Arc::get_mut(&mut self.state).expect("no other references to inter-block state"),
-        );
+        cache.apply_to(self.inter_block_state.inner_mut());
 
         events
     }
@@ -1149,7 +1151,7 @@ impl App {
 // the mempool is large.
 async fn update_mempool_after_finalization<S: StateReadExt>(
     mempool: &mut Mempool,
-    state: S,
+    state: &S,
 ) -> anyhow::Result<()> {
     let current_account_nonce_getter = |address: Address| state.get_account_nonce(address);
     mempool.run_maintenance(current_account_nonce_getter).await

@@ -8,11 +8,12 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
+use tracing::instrument;
+
+use crate::storage::{
     StateRead,
     StateWrite,
 };
-use tracing::instrument;
 
 const SEQUENCE_ACTION_BASE_FEE_STORAGE_KEY: &str = "seqbasefee";
 const SEQUENCE_ACTION_BYTE_COST_MULTIPLIER_STORAGE_KEY: &str = "seqmultiplier";

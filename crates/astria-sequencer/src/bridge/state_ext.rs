@@ -22,16 +22,17 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 use futures::StreamExt as _;
 use hex::ToHex as _;
 use prost::Message as _;
 use tracing::{
     debug,
     instrument,
+};
+
+use crate::storage::{
+    StateRead,
+    StateWrite,
 };
 
 /// Newtype wrapper to read and write a u128 from rocksdb.

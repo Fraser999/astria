@@ -78,7 +78,7 @@ fn default_tendermint_header() -> Header {
 #[tokio::test]
 async fn app_genesis_and_init_chain() {
     let app = initialize_app(None, vec![]).await;
-    assert_eq!(app.state.get_block_height().await.unwrap(), 0);
+    assert_eq!(app.inter_block_state.get_block_height().await.unwrap(), 0);
 
     for Account {
         address,
@@ -87,14 +87,20 @@ async fn app_genesis_and_init_chain() {
     {
         assert_eq!(
             balance,
-            app.state
+            app.inter_block_state
                 .get_account_balance(address, get_native_asset())
                 .await
                 .unwrap(),
         );
     }
 
-    assert_eq!(app.state.get_native_asset_denom().await.unwrap(), "nria");
+    assert_eq!(
+        app.inter_block_state
+            .get_native_asset_denom()
+            .await
+            .unwrap(),
+        "nria"
+    );
 }
 
 #[tokio::test]
@@ -112,9 +118,9 @@ async fn app_pre_execute_transactions() {
     app.pre_execute_transactions(block_data.clone())
         .await
         .unwrap();
-    assert_eq!(app.state.get_block_height().await.unwrap(), 1);
+    assert_eq!(app.inter_block_state.get_block_height().await.unwrap(), 1);
     assert_eq!(
-        app.state.get_block_timestamp().await.unwrap(),
+        app.inter_block_state.get_block_timestamp().await.unwrap(),
         block_data.time
     );
 }
@@ -161,7 +167,7 @@ async fn app_begin_block_remove_byzantine_validators() {
     app.begin_block(&begin_block).await.unwrap();
 
     // assert that validator with pubkey_a is removed
-    let validator_set = app.state.get_validator_set().await.unwrap();
+    let validator_set = app.inter_block_state.get_validator_set().await.unwrap();
     assert_eq!(validator_set.len(), 1);
     assert_eq!(validator_set.get(verification_key(2)).unwrap().power, 1,);
 }
@@ -169,7 +175,7 @@ async fn app_begin_block_remove_byzantine_validators() {
 #[tokio::test]
 async fn app_commit() {
     let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-    assert_eq!(app.state.get_block_height().await.unwrap(), 0);
+    assert_eq!(app.inter_block_state.get_block_height().await.unwrap(), 0);
 
     let native_asset = get_native_asset();
     for Account {
@@ -179,7 +185,7 @@ async fn app_commit() {
     {
         assert_eq!(
             balance,
-            app.state
+            app.inter_block_state
                 .get_account_balance(address, native_asset)
                 .await
                 .unwrap()
@@ -259,15 +265,18 @@ async fn app_transfer_block_fees_to_sudo() {
     app.commit(storage).await;
 
     // assert that transaction fees were transferred to the block proposer
-    let transfer_fee = app.state.get_transfer_base_fee().await.unwrap();
+    let transfer_fee = app.inter_block_state.get_transfer_base_fee().await.unwrap();
     assert_eq!(
-        app.state
+        app.inter_block_state
             .get_account_balance(address_from_hex_string(JUDY_ADDRESS), native_asset)
             .await
             .unwrap(),
         transfer_fee,
     );
-    assert_eq!(app.state.get_block_fees().await.unwrap().len(), 0);
+    assert_eq!(
+        app.inter_block_state.get_block_fees().await.unwrap().len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -286,7 +295,7 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
     let asset = get_native_asset().clone();
 
-    let mut state_tx = StateDelta::new(app.state.clone());
+    let mut state_tx = StateDelta::new(app.inter_block_state.clone());
     state_tx.put_bridge_account_rollup_id(&bridge_address, &rollup_id);
     state_tx
         .put_bridge_account_ibc_asset(&bridge_address, &asset)
@@ -347,10 +356,18 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     app.commit(storage).await;
 
     // ensure deposits are cleared at the end of the block
-    let deposit_events = app.state.get_deposit_events(&rollup_id).await.unwrap();
+    let deposit_events = app
+        .inter_block_state
+        .get_deposit_events(&rollup_id)
+        .await
+        .unwrap();
     assert_eq!(deposit_events.len(), 0);
 
-    let block = app.state.get_sequencer_block_by_height(1).await.unwrap();
+    let block = app
+        .inter_block_state
+        .get_sequencer_block_by_height(1)
+        .await
+        .unwrap();
     let mut deposits = vec![];
     for (_, rollup_data) in block.rollup_transactions() {
         for tx in rollup_data.transactions() {
@@ -376,7 +393,7 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
     let asset = get_native_asset().clone();
 
-    let mut state_tx = StateDelta::new(app.state.clone());
+    let mut state_tx = StateDelta::new(app.inter_block_state.clone());
     state_tx.put_bridge_account_rollup_id(&bridge_address, &rollup_id);
     state_tx
         .put_bridge_account_ibc_asset(&bridge_address, &asset)
@@ -691,7 +708,7 @@ async fn app_end_block_validator_updates() {
         },
     ];
 
-    let mut state_tx = StateDelta::new(app.state.clone());
+    let mut state_tx = StateDelta::new(app.inter_block_state.clone());
     state_tx
         .put_validator_updates(ValidatorSet::new_from_updates(validator_updates.clone()))
         .unwrap();
@@ -705,7 +722,7 @@ async fn app_end_block_validator_updates() {
     // validator with pubkey_a should be removed (power set to 0)
     // validator with pubkey_b should be updated
     // validator with pubkey_c should be added
-    let validator_set = app.state.get_validator_set().await.unwrap();
+    let validator_set = app.inter_block_state.get_validator_set().await.unwrap();
     assert_eq!(validator_set.len(), 2);
     let validator_b = validator_set
         .get(verification_key(1).address_bytes())
@@ -717,5 +734,12 @@ async fn app_end_block_validator_updates() {
         .unwrap();
     assert_eq!(validator_c.verification_key, verification_key(2));
     assert_eq!(validator_c.power, 100);
-    assert_eq!(app.state.get_validator_updates().await.unwrap().len(), 0);
+    assert_eq!(
+        app.inter_block_state
+            .get_validator_updates()
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
 }

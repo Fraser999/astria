@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use cnidarium::StateWrite;
 use tendermint::abci;
+
+use crate::storage::StateWrite;
 
 /// A component of the Sequencer application.
 /// Based off Penumbra's [`Component`], but with modifications.

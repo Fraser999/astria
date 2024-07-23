@@ -18,15 +18,16 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 use serde::{
     Deserialize,
     Serialize,
 };
 use tracing::instrument;
+
+use crate::storage::{
+    StateRead,
+    StateWrite,
+};
 
 /// Newtype wrapper to read and write an address from rocksdb.
 #[derive(BorshSerialize, BorshDeserialize, Debug)]

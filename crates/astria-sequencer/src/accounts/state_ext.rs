@@ -14,12 +14,13 @@ use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use cnidarium::{
+use futures::StreamExt;
+use tracing::instrument;
+
+use crate::storage::{
     StateRead,
     StateWrite,
 };
-use futures::StreamExt;
-use tracing::instrument;
 
 /// Newtype wrapper to read and write a u32 from rocksdb.
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
@@ -34,7 +35,7 @@ struct Balance(u128);
 struct Fee(u128);
 
 const ACCOUNTS_PREFIX: &str = "accounts";
-const TRANSFER_BASE_FEE_STORAGE_KEY: &str = "transferfee";
+const TRANSFER_BASE_FEE_STORAGE_KEY: &str = "transfer_fee";
 
 struct StorageKey<'a>(&'a Address);
 impl<'a> std::fmt::Display for StorageKey<'a> {
@@ -257,7 +258,6 @@ mod tests {
         primitive::v1::Address,
         protocol::account::v1alpha1::AssetBalance,
     };
-    use cnidarium::StateDelta;
     use insta::assert_snapshot;
 
     use super::{
@@ -270,6 +270,7 @@ mod tests {
             nonce_storage_key,
         },
         asset,
+        storage::Storage,
     };
 
     fn asset_0() -> astria_core::primitive::v1::asset::Denom {
@@ -285,9 +286,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_nonce_uninitialized_returns_zero() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -306,9 +306,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_nonce_get_nonce_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -344,9 +343,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_nonce_get_nonce_complex() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -392,9 +390,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_uninitialized_returns_zero() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -414,9 +411,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -456,9 +452,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_multiple_accounts() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -509,9 +504,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_multiple_assets() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -548,9 +542,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balances_uninitialized_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -565,9 +558,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balances() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // need to set native asset in order to use `get_account_balances()`
         crate::asset::initialize_native_asset("nria");
@@ -640,9 +632,8 @@ mod tests {
 
     #[tokio::test]
     async fn increase_balance_from_uninitialized() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -681,9 +672,8 @@ mod tests {
 
     #[tokio::test]
     async fn decrease_balance_enough_funds() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
@@ -723,9 +713,8 @@ mod tests {
 
     #[tokio::test]
     async fn decrease_balance_not_enough_funds() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.latest_snapshot_delta();
 
         // create needed variables
         let address = crate::address::base_prefixed([42u8; 20]);
