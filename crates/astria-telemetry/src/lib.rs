@@ -267,7 +267,13 @@ impl Config {
         let mut pretty_printer = None;
         if force_stdout || std::io::stdout().is_terminal() {
             if pretty_print {
-                pretty_printer = Some(tracing_subscriber::fmt::layer().compact());
+                pretty_printer = Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+                        .with_file(true)
+                        .with_line_number(true)
+                        .compact(),
+                );
             } else {
                 tracer_provider = tracer_provider.with_simple_exporter(
                     SpanExporter::builder()

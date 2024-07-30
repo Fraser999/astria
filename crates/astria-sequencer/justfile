@@ -9,7 +9,7 @@ copy-env type=default_env:
   cp {{ type }}.env.example .env
 
 run:
-  cargo run
+  cargo run --release
 
 run-cometbft:
   cometbft init
@@ -21,14 +21,14 @@ run-cometbft:
     --destination-genesis-file=$HOME/.cometbft/config/genesis.json \
     --chain-id=astria
   sed -i'.bak' 's/timeout_commit = "1s"/timeout_commit = "2s"/g' ~/.cometbft/config/config.toml
-  cometbft node
+#  cometbft node
 
 [macos]
 stop-testnet:
   pkill cometbft || true
   pkill astria-sequencer || true
 [macos]
-run-testnet: 
+run-testnet:
   cargo build
   ./scripts/testnet.sh
 
@@ -36,8 +36,8 @@ run-testnet:
 stop-testnet:
   pkill -f [a]stria-sequencer || true
   pkill cometbft || true
-[linux] 
-run-testnet: 
+[linux]
+run-testnet:
   cargo build
   ./scripts/testnet.sh
 
