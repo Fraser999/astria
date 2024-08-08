@@ -154,7 +154,7 @@ impl Sequencer {
 }
 
 fn start_grpc_server(
-    storage: &cnidarium::Storage,
+    storage: &crate::storage::Storage,
     mempool: Mempool,
     grpc_addr: std::net::SocketAddr,
     shutdown_rx: oneshot::Receiver<()>,

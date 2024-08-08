@@ -35,10 +35,7 @@ use astria_core::{
 };
 use cnidarium::{
     ArcStateDeltaExt,
-    Snapshot,
     StagedWriteBatch,
-    StateDelta,
-    Storage,
 };
 use prost::Message as _;
 use sha2::{
@@ -108,11 +105,17 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    storage::{
+        DeltaDelta,
+        Snapshot,
+        SnapshotDelta,
+        Storage,
+    },
     transaction::InvalidNonce,
 };
 
 /// The inter-block state being written to by the application.
-type InterBlockState = Arc<StateDelta<Snapshot>>;
+type InterBlockState = Arc<SnapshotDelta>;
 
 /// The Sequencer application, written as a bundle of [`Component`]s.
 ///
@@ -188,7 +191,7 @@ impl App {
 
         // We perform the `Arc` wrapping of `State` here to ensure
         // there should be no unexpected copies elsewhere.
-        let state = Arc::new(StateDelta::new(snapshot));
+        let state = Arc::new(SnapshotDelta::new(snapshot));
 
         Ok(Self {
             state,
@@ -270,7 +273,7 @@ impl App {
         // but `self.state` was changed due to executing the previous round's data.
         //
         // if the previous round was committed, then the state stays the same.
-        self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        self.state = Arc::new(storage.latest_snapshot_delta());
 
         // clear the cache of transaction execution results
         self.execution_results = None;
@@ -850,7 +853,7 @@ impl App {
         let end_block = self.end_block(height.value(), sudo_address).await?;
 
         // get and clear block deposits from state
-        let mut state_tx = StateDelta::new(self.state.clone());
+        let mut state_tx = DeltaDelta::new(self.state.clone());
         let deposits = self
             .state
             .get_block_deposits()
@@ -908,7 +911,7 @@ impl App {
 
     async fn prepare_commit(&mut self, storage: Storage) -> anyhow::Result<AppHash> {
         // extract the state we've built up to so we can prepare it as a `StagedWriteBatch`.
-        let dummy_state = StateDelta::new(storage.latest_snapshot());
+        let dummy_state = storage.latest_snapshot_delta();
         let mut state = Arc::try_unwrap(std::mem::replace(&mut self.state, Arc::new(dummy_state)))
             .expect("we have exclusive ownership of the State at commit()");
 
@@ -944,7 +947,7 @@ impl App {
         &mut self,
         begin_block: &abci::request::BeginBlock,
     ) -> anyhow::Result<Vec<abci::Event>> {
-        let mut state_tx = StateDelta::new(self.state.clone());
+        let mut state_tx = DeltaDelta::new(self.state.clone());
 
         // store the block height
         state_tx.put_block_height(begin_block.header.height.into());
@@ -1011,7 +1014,7 @@ impl App {
         height: u64,
         fee_recipient: [u8; 20],
     ) -> anyhow::Result<abci::response::EndBlock> {
-        let state_tx = StateDelta::new(self.state.clone());
+        let state_tx = DeltaDelta::new(self.state.clone());
         let mut arc_state_tx = Arc::new(state_tx);
 
         let end_block = abci::request::EndBlock {
@@ -1096,7 +1099,7 @@ impl App {
             .expect("root hash to app hash conversion must succeed");
 
         // Get the latest version of the state, now that we've committed it.
-        self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        self.state = Arc::new(storage.latest_snapshot_delta());
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying
@@ -1107,8 +1110,8 @@ impl App {
     //
     // Invariant: state_tx and self.state are the only two references to the
     // inter-block state.
-    fn apply(&mut self, state_tx: StateDelta<InterBlockState>) -> Vec<Event> {
-        let (state2, mut cache) = state_tx.flatten();
+    fn apply(&mut self, state_tx: DeltaDelta) -> Vec<Event> {
+        let (state2, mut cache) = state_tx.inner().flatten();
         std::mem::drop(state2);
         // Now there is only one reference to the inter-block state: self.state
 

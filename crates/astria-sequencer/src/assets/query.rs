@@ -6,7 +6,6 @@ use astria_core::{
         asset::v1alpha1::AllowedFeeAssetsResponse,
     },
 };
-use cnidarium::Storage;
 use hex::FromHex as _;
 use prost::Message as _;
 use tendermint::abci::{
@@ -17,6 +16,10 @@ use tendermint::abci::{
 use crate::{
     assets::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::{
+        Cached,
+        Storage,
+    },
 };
 
 // Retrieve the full asset denomination given the asset ID.
@@ -37,8 +40,14 @@ pub(crate) async fn denom_request(
         Err(err_rsp) => return err_rsp,
     };
 
-    let height = match snapshot.get_block_height().await {
-        Ok(height) => height,
+    let height = match snapshot.inner().get_block_height().await {
+        Ok(height) => {
+            snapshot
+                .cache()
+                .put(b"block_height".to_vec(), Cached::BlockHeight(height))
+                .await;
+            height
+        }
         Err(err) => {
             return response::Query {
                 code: AbciErrorCode::INTERNAL_ERROR.into(),
@@ -74,9 +83,9 @@ pub(crate) async fn denom_request(
         height,
         denom: denom.into(),
     }
-    .into_raw()
-    .encode_to_vec()
-    .into();
+        .into_raw()
+        .encode_to_vec()
+        .into();
 
     let height = tendermint::block::Height::try_from(height).expect("height must fit into an i64");
     response::Query {
@@ -149,9 +158,9 @@ pub(crate) async fn allowed_fee_assets_request(
         height,
         fee_assets: fee_assets.into_iter().map(Into::into).collect(),
     }
-    .into_raw()
-    .encode_to_vec()
-    .into();
+        .into_raw()
+        .encode_to_vec()
+        .into();
 
     let height = tendermint::block::Height::try_from(height).expect("height must fit into an i64");
     response::Query {

@@ -18,13 +18,13 @@ use astria_core::{
         UncheckedGenesisState,
     },
 };
-use cnidarium::Storage;
 use penumbra_ibc::params::IBCParameters;
 
 use crate::{
     app::App,
     mempool::Mempool,
     metrics::Metrics,
+    storage::Storage,
     test_utils::astria_address_from_hex_string,
 };
 
@@ -110,9 +110,7 @@ pub(crate) async fn initialize_app_with_storage(
     genesis_state: Option<GenesisState>,
     genesis_validators: Vec<ValidatorUpdate>,
 ) -> (App, Storage) {
-    let storage = cnidarium::TempStorage::new()
-        .await
-        .expect("failed to create temp storage backing chain state");
+    let storage = Storage::new_temp().await;
     let snapshot = storage.latest_snapshot();
     let mempool = Mempool::new();
     let metrics = Box::leak(Box::new(Metrics::new()));

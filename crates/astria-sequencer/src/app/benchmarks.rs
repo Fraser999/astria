@@ -6,7 +6,6 @@ use astria_core::sequencer::{
     GenesisState,
     UncheckedGenesisState,
 };
-use cnidarium::Storage;
 use penumbra_ibc::params::IBCParameters;
 
 use crate::{
@@ -20,6 +19,7 @@ use crate::{
         SIGNER_COUNT,
     },
     proposal::block_size_constraints::BlockSizeConstraints,
+    storage::Storage,
     test_utils::{
         astria_address,
         nria,

@@ -5,7 +5,6 @@ use astria_core::{
         transaction::v1alpha1::UnsignedTransaction,
     },
 };
-use cnidarium::Storage;
 use prost::Message as _;
 use tendermint::abci::{
     request,
@@ -15,6 +14,7 @@ use tendermint::abci::{
 use crate::{
     assets::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::Storage,
     transaction::checks::get_fees_for_transaction,
 };
 

@@ -2,7 +2,6 @@ use anyhow::{
     bail,
     Context,
 };
-use cnidarium::Storage;
 use tendermint::v0_38::abci::{
     request,
     response,
@@ -18,7 +17,10 @@ use tracing::{
     Instrument,
 };
 
-use crate::app::App;
+use crate::{
+    app::App,
+    storage::Storage,
+};
 
 pub(crate) struct Consensus {
     queue: mpsc::Receiver<Message<ConsensusRequest, ConsensusResponse, tower::BoxError>>,

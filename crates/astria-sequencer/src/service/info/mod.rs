@@ -8,7 +8,6 @@ use std::{
 
 use anyhow::Context as _;
 use astria_core::protocol::abci::AbciErrorCode;
-use cnidarium::Storage;
 use futures::{
     Future,
     FutureExt,
@@ -29,6 +28,8 @@ use tracing::{
     instrument,
     Instrument as _,
 };
+
+use crate::storage::Storage;
 
 mod abci_query_router;
 

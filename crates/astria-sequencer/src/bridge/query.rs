@@ -6,7 +6,6 @@ use astria_core::{
         bridge::v1alpha1::BridgeAccountInfo,
     },
 };
-use cnidarium::Storage;
 use prost::Message as _;
 use tendermint::abci::{
     request,
@@ -18,6 +17,7 @@ use crate::{
     assets::StateReadExt as _,
     bridge::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::Storage,
 };
 
 fn error_query_response(

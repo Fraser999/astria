@@ -54,6 +54,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e89da841a80418a9b391ebaea17f5c112ffaaa96f621d2c285b5174da76b9011"
 dependencies = [
  "cfg-if",
+ "getrandom 0.2.14",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -804,12 +805,14 @@ dependencies = [
  "penumbra-tower-trace",
  "priority-queue",
  "prost",
+ "quick_cache",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "regex",
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "tempfile",
  "tendermint",
  "tendermint-proto",
  "thiserror",
@@ -5982,7 +5985,7 @@ checksum = "80b776a1b2dc779f5ee0641f8ade0125bc1298dd41a9a0c16d8bd57b42d222b1"
 dependencies = [
  "bytes",
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
@@ -6002,7 +6005,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19de2de2a00075bf566bee3bd4db014b11587e84184d3f7a791bc17f1a8e9e48"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.12.1",
  "proc-macro2 1.0.79",
  "quote",
  "syn 2.0.58",
@@ -6050,6 +6053,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d6da84cc204722a989e01ba2f6e1e276e190f22263d0cb6ce8526fcdb0d2e1f"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "quick_cache"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec932c60e6faf77dc6601ea149a23d821598b019b450bb1d98fe89c0301c0b61"
+dependencies = [
+ "ahash",
+ "equivalent",
+ "hashbrown 0.14.3",
+ "parking_lot",
 ]
 
 [[package]]

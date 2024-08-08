@@ -12,7 +12,6 @@ use astria_core::{
     },
     primitive::v1::RollupId,
 };
-use cnidarium::Storage;
 use tonic::{
     Request,
     Response,
@@ -28,6 +27,7 @@ use crate::{
     api_state_ext::StateReadExt as _,
     mempool::Mempool,
     state_ext::StateReadExt as _,
+    storage::Storage,
 };
 
 pub(crate) struct SequencerServer {
