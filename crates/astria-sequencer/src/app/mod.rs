@@ -9,11 +9,13 @@ mod tests_breaking_changes;
 #[cfg(test)]
 mod tests_execute_transaction;
 
+mod action_handler;
 use std::{
     collections::VecDeque,
     sync::Arc,
 };
 
+pub(crate) use action_handler::ActionHandler;
 use anyhow::{
     anyhow,
     ensure,
@@ -21,7 +23,6 @@ use anyhow::{
 };
 use astria_core::{
     generated::protocol::transaction::v1alpha1 as raw,
-    primitive::v1::Address,
     protocol::{
         abci::AbciErrorCode,
         transaction::v1alpha1::{
@@ -39,7 +40,10 @@ use cnidarium::{
     StateDelta,
     Storage,
 };
-use prost::Message as _;
+use prost::{
+    Message as _,
+    Name as _,
+};
 use sha2::{
     Digest as _,
     Sha256,
@@ -107,14 +111,20 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::{
-        self,
-        InvalidNonce,
-    },
+    transaction::InvalidNonce,
 };
 
 /// The inter-block state being written to by the application.
 type InterBlockState = Arc<StateDelta<Snapshot>>;
+
+/// The maximum permitted size of an encoded [`raw::SignedTransaction`].
+const MAX_TX_SIZE: usize = 256_000; // 256 KB
+
+#[derive(Debug, thiserror::Error)]
+#[error("transaction size too large; allowed {MAX_TX_SIZE} bytes, got {actual}")]
+pub(crate) struct TransactionTooLarge {
+    actual: usize,
+}
 
 /// The Sequencer application, written as a bundle of [`Component`]s.
 ///
@@ -537,7 +547,7 @@ impl App {
             }
 
             // execute tx and store in `execution_results` list on success
-            match self.execute_transaction(tx.clone()).await {
+            match self.deliver_tx(tx.clone()).await {
                 Ok(events) => {
                     execution_results.push(ExecTxResult {
                         events,
@@ -552,16 +562,16 @@ impl App {
                     validated_txs.push(bytes.into());
                     included_signed_txs.push((*tx).clone());
                 }
-                Err(e) => {
+                Err(err) => {
                     self.metrics
                         .increment_prepare_proposal_excluded_transactions_failed_execution();
                     debug!(
                         transaction_hash = %tx_hash_base64,
-                        error = AsRef::<dyn std::error::Error>::as_ref(&e),
+                        error = AsRef::<dyn std::error::Error>::as_ref(&err),
                         "failed to execute transaction, not including in block"
                     );
 
-                    if e.downcast_ref::<InvalidNonce>().is_some() {
+                    if err.downcast_ref::<InvalidNonce>().is_some() {
                         // we re-insert the tx into the mempool if it failed to execute
                         // due to an invalid nonce, as it may be valid in the future.
                         // if it's invalid due to the nonce being too low, it'll be
@@ -574,7 +584,9 @@ impl App {
                         self.mempool
                             .track_removal_comet_bft(
                                 enqueued_tx.tx_hash(),
-                                RemovalReason::FailedPrepareProposal(e.to_string()),
+                                RemovalReason::FailedPrepareProposal {
+                                    source: err,
+                                },
                             )
                             .await;
                     }
@@ -653,7 +665,7 @@ impl App {
             }
 
             // execute tx and store in `execution_results` list on success
-            match self.execute_transaction(Arc::new(tx.clone())).await {
+            match self.deliver_tx(Arc::new(tx.clone())).await {
                 Ok(events) => {
                     execution_results.push(ExecTxResult {
                         events,
@@ -808,16 +820,13 @@ impl App {
                 .context("failed to execute block")?;
 
             // skip the first two transactions, as they are the rollup data commitments
-            for tx in finalize_block.txs.iter().skip(2) {
+            for bytes in finalize_block.txs.iter().skip(2) {
                 // remove any included txs from the mempool
-                let tx_hash = Sha256::digest(tx).into();
+                let tx_hash = Sha256::digest(bytes).into();
                 self.mempool.remove(tx_hash).await;
 
-                let signed_tx = signed_transaction_from_bytes(tx)
-                    .context("protocol error; only valid txs should be finalized")?;
-
-                match self.execute_transaction(Arc::new(signed_tx)).await {
-                    Ok(events) => tx_results.push(ExecTxResult {
+                match self.deliver_tx_bytes(bytes).await {
+                    Ok((_, events)) => tx_results.push(ExecTxResult {
                         events,
                         ..Default::default()
                     }),
@@ -977,31 +986,50 @@ impl App {
         Ok(self.apply(state_tx))
     }
 
+    /// Wrapper around [`Self::execute_transaction`] to deserialize from bytes.
+    #[instrument(name = "App::deliver_tx", skip_all)]
+    pub(crate) async fn deliver_tx_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> anyhow::Result<(Arc<SignedTransaction>, Vec<Event>)> {
+        ensure!(
+            bytes.len() <= MAX_TX_SIZE,
+            TransactionTooLarge {
+                actual: bytes.len(),
+            }
+        );
+
+        let tx = raw::SignedTransaction::decode(bytes)
+            .with_context(|| {
+                format!(
+                    "failed decoding bytes as `{}`",
+                    raw::SignedTransaction::full_name()
+                )
+            })
+            .and_then(|proto| {
+                SignedTransaction::try_from_raw(proto).context("transaction contains invalid data")
+            })?;
+        let tx = Arc::new(tx);
+        // Not providing context because this is inside a wrapper and the errors should be returned
+        // transparently.
+        let events = self.deliver_tx(tx.clone()).await?;
+        Ok((tx, events))
+    }
+
     /// Executes a signed transaction.
-    #[instrument(name = "App::execute_transaction", skip_all)]
-    async fn execute_transaction(
+    async fn deliver_tx(
         &mut self,
         signed_tx: Arc<SignedTransaction>,
     ) -> anyhow::Result<Vec<Event>> {
         let signed_tx_2 = signed_tx.clone();
-        let stateless = tokio::spawn(
-            async move { transaction::check_stateless(&signed_tx_2).await }.in_current_span(),
-        );
-        let signed_tx_2 = signed_tx.clone();
-        let state2 = self.state.clone();
-        let stateful = tokio::spawn(
-            async move { transaction::check_stateful(&signed_tx_2, &state2).await }
-                .in_current_span(),
-        );
+        let stateless =
+            tokio::spawn(async move { signed_tx_2.check_stateless(()).await }.in_current_span());
 
         stateless
             .await
             .context("stateless check task aborted while executing")?
             .context("stateless check failed")?;
-        stateful
-            .await
-            .context("stateful check task aborted while executing")?
-            .context("stateful check failed")?;
+
         // At this point, the stateful checks should have completed,
         // leaving us with exclusive access to the Arc<State>.
         let mut state_tx = self
@@ -1009,20 +1037,19 @@ impl App {
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
 
-        transaction::execute(&signed_tx, &mut state_tx)
+        signed_tx
+            .check_and_execute(&mut state_tx)
             .await
             .context("failed executing transaction")?;
-        let (_, events) = state_tx.apply();
 
-        info!(event_count = events.len(), "executed transaction");
-        Ok(events)
+        Ok(state_tx.apply().1)
     }
 
     #[instrument(name = "App::end_block", skip_all)]
     async fn end_block(
         &mut self,
         height: u64,
-        fee_recipient: Address,
+        fee_recipient: [u8; 20],
     ) -> anyhow::Result<abci::response::EndBlock> {
         let state_tx = StateDelta::new(self.state.clone());
         let mut arc_state_tx = Arc::new(state_tx);

@@ -1,5 +1,5 @@
 #[cfg(feature = "benchmark")]
-mod benchmarks;
+pub(crate) mod benchmarks;
 
 use std::{
     cmp::{
@@ -79,16 +79,13 @@ impl PartialOrd for TransactionPriority {
 pub(crate) struct EnqueuedTransaction {
     tx_hash: [u8; 32],
     signed_tx: Arc<SignedTransaction>,
-    address_bytes: [u8; ADDRESS_LEN],
 }
 
 impl EnqueuedTransaction {
-    fn new(signed_tx: SignedTransaction) -> Self {
-        let address_bytes = signed_tx.verification_key().address_bytes();
+    fn new(signed_tx: Arc<SignedTransaction>) -> Self {
         Self {
             tx_hash: signed_tx.sha256_of_proto_encoding(),
-            signed_tx: Arc::new(signed_tx),
-            address_bytes,
+            signed_tx,
         }
     }
 
@@ -119,7 +116,7 @@ impl EnqueuedTransaction {
     }
 
     pub(crate) fn address_bytes(&self) -> [u8; 20] {
-        self.address_bytes
+        self.signed_tx.address_bytes()
     }
 }
 
@@ -139,10 +136,12 @@ impl std::hash::Hash for EnqueuedTransaction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum RemovalReason {
+    #[error("transaction expired in the app's mempool")]
     Expired,
-    FailedPrepareProposal(String),
+    #[error("transaction failed execution because")]
+    FailedPrepareProposal { source: anyhow::Error },
 }
 
 const TX_TTL: Duration = Duration::from_secs(600); // 10 minutes
@@ -153,7 +152,6 @@ const REMOVAL_CACHE_SIZE: usize = 4096;
 ///
 /// This is useful for when a transaction fails execution or when a transaction
 /// has expired in the app's mempool.
-#[derive(Clone)]
 pub(crate) struct RemovalCache {
     cache: HashMap<[u8; 32], RemovalReason>,
     remove_queue: VecDeque<[u8; 32]>,
@@ -238,7 +236,7 @@ impl Mempool {
     #[instrument(skip_all)]
     pub(crate) async fn insert(
         &self,
-        tx: SignedTransaction,
+        tx: Arc<SignedTransaction>,
         current_account_nonce: u32,
     ) -> anyhow::Result<()> {
         let enqueued_tx = EnqueuedTransaction::new(tx);
@@ -302,11 +300,10 @@ impl Mempool {
     /// removes a transaction from the mempool
     #[instrument(skip_all)]
     pub(crate) async fn remove(&self, tx_hash: [u8; 32]) {
-        let (signed_tx, address_bytes) = dummy_signed_tx();
+        let signed_tx = dummy_signed_tx();
         let enqueued_tx = EnqueuedTransaction {
             tx_hash,
             signed_tx,
-            address_bytes,
         };
         self.queue.write().await.remove(&enqueued_tx);
     }
@@ -412,26 +409,22 @@ impl Mempool {
 /// this `signed_tx` field is ignored in the `PartialEq` and `Hash` impls of `EnqueuedTransaction` -
 /// only the tx hash is considered.  So we create an `EnqueuedTransaction` on the fly with the
 /// correct tx hash and this dummy signed tx when removing from the queue.
-fn dummy_signed_tx() -> (Arc<SignedTransaction>, [u8; ADDRESS_LEN]) {
-    static TX: OnceLock<(Arc<SignedTransaction>, [u8; ADDRESS_LEN])> = OnceLock::new();
-    let (signed_tx, address_bytes) = TX.get_or_init(|| {
+fn dummy_signed_tx() -> Arc<SignedTransaction> {
+    static TX: OnceLock<Arc<SignedTransaction>> = OnceLock::new();
+    let signed_tx = TX.get_or_init(|| {
         let actions = vec![];
         let params = TransactionParams::builder()
             .nonce(0)
             .chain_id("dummy")
             .build();
         let signing_key = SigningKey::from([0; 32]);
-        let address_bytes = signing_key.verification_key().address_bytes();
         let unsigned_tx = UnsignedTransaction {
             actions,
             params,
         };
-        (
-            Arc::new(unsigned_tx.into_signed(&signing_key)),
-            address_bytes,
-        )
+        Arc::new(unsigned_tx.into_signed(&signing_key))
     });
-    (signed_tx.clone(), *address_bytes)
+    signed_tx.clone()
 }
 
 #[cfg(test)]
@@ -449,7 +442,7 @@ mod test {
 
     #[test]
     fn transaction_priority_should_error_if_invalid() {
-        let enqueued_tx = EnqueuedTransaction::new(get_mock_tx(0));
+        let enqueued_tx = EnqueuedTransaction::new(Arc::new(get_mock_tx(0)));
         let priority = enqueued_tx.priority(1, None);
         assert!(
             priority
@@ -515,17 +508,14 @@ mod test {
         let tx0 = EnqueuedTransaction {
             tx_hash: [0; 32],
             signed_tx: Arc::new(get_mock_tx(0)),
-            address_bytes: get_mock_tx(0).address_bytes(),
         };
         let other_tx0 = EnqueuedTransaction {
             tx_hash: [0; 32],
             signed_tx: Arc::new(get_mock_tx(1)),
-            address_bytes: get_mock_tx(1).address_bytes(),
         };
         let tx1 = EnqueuedTransaction {
             tx_hash: [1; 32],
             signed_tx: Arc::new(get_mock_tx(0)),
-            address_bytes: get_mock_tx(0).address_bytes(),
         };
         assert!(tx0 == other_tx0);
         assert!(tx0 != tx1);
@@ -545,11 +535,11 @@ mod test {
         let mempool = Mempool::new();
 
         // Priority 0 (highest priority).
-        let tx0 = get_mock_tx(0);
+        let tx0 = Arc::new(get_mock_tx(0));
         mempool.insert(tx0.clone(), 0).await.unwrap();
 
         // Priority 1.
-        let tx1 = get_mock_tx(1);
+        let tx1 = Arc::new(get_mock_tx(1));
         mempool.insert(tx1.clone(), 0).await.unwrap();
 
         assert_eq!(mempool.len().await, 2);
@@ -582,7 +572,7 @@ mod test {
         let txs: Vec<_> = (0..tx_count)
             .map(|index| {
                 let enqueued_tx =
-                    EnqueuedTransaction::new(get_mock_tx(u32::try_from(index).unwrap()));
+                    EnqueuedTransaction::new(Arc::new(get_mock_tx(u32::try_from(index).unwrap())));
                 let priority = enqueued_tx.priority(current_account_nonce, None).unwrap();
                 (enqueued_tx, priority)
             })
@@ -616,8 +606,8 @@ mod test {
         let mempool = Mempool::new();
 
         // Insert txs signed by alice with nonces 0 and 1.
-        mempool.insert(get_mock_tx(0), 0).await.unwrap();
-        mempool.insert(get_mock_tx(1), 0).await.unwrap();
+        mempool.insert(Arc::new(get_mock_tx(0)), 0).await.unwrap();
+        mempool.insert(Arc::new(get_mock_tx(1)), 0).await.unwrap();
 
         // Insert txs from a different signer with nonces 100 and 102.
         let other = SigningKey::from([1; 32]);
@@ -632,8 +622,14 @@ mod test {
             }
             .into_signed(&other)
         };
-        mempool.insert(other_mock_tx(100), 0).await.unwrap();
-        mempool.insert(other_mock_tx(102), 0).await.unwrap();
+        mempool
+            .insert(Arc::new(other_mock_tx(100)), 0)
+            .await
+            .unwrap();
+        mempool
+            .insert(Arc::new(other_mock_tx(102)), 0)
+            .await
+            .unwrap();
 
         assert_eq!(mempool.len().await, 4);
 
@@ -682,7 +678,7 @@ mod test {
         let mempool = Mempool::new();
 
         let insert_time = Instant::now();
-        let tx = get_mock_tx(0);
+        let tx = Arc::new(get_mock_tx(0));
         mempool.insert(tx.clone(), 0).await.unwrap();
 
         // pass time
@@ -713,7 +709,7 @@ mod test {
         let mempool = Mempool::new();
 
         let insert_time = Instant::now();
-        let tx = get_mock_tx(0);
+        let tx = Arc::new(get_mock_tx(0));
         mempool.insert(tx.clone(), 0).await.unwrap();
 
         // pass time
@@ -749,8 +745,8 @@ mod test {
         let mempool = Mempool::new();
 
         // Insert txs signed by alice with nonces 0 and 1.
-        mempool.insert(get_mock_tx(0), 0).await.unwrap();
-        mempool.insert(get_mock_tx(1), 0).await.unwrap();
+        mempool.insert(Arc::new(get_mock_tx(0)), 0).await.unwrap();
+        mempool.insert(Arc::new(get_mock_tx(1)), 0).await.unwrap();
 
         // Insert txs from a different signer with nonces 100 and 101.
         let other = SigningKey::from([1; 32]);
@@ -765,8 +761,14 @@ mod test {
             }
             .into_signed(&other)
         };
-        mempool.insert(other_mock_tx(100), 0).await.unwrap();
-        mempool.insert(other_mock_tx(101), 0).await.unwrap();
+        mempool
+            .insert(Arc::new(other_mock_tx(100)), 0)
+            .await
+            .unwrap();
+        mempool
+            .insert(Arc::new(other_mock_tx(101)), 0)
+            .await
+            .unwrap();
 
         assert_eq!(mempool.len().await, 4);
 
@@ -829,7 +831,7 @@ mod test {
     #[test]
     fn enqueued_transaction_can_be_instantiated() {
         // This just tests that the constructor does not fail.
-        let signed_tx = crate::app::test_utils::get_mock_tx(0);
+        let signed_tx = Arc::new(crate::app::test_utils::get_mock_tx(0));
         let _ = EnqueuedTransaction::new(signed_tx);
     }
 }

@@ -8,6 +8,7 @@ use astria_core::sequencer::{
 };
 use cnidarium::Storage;
 use penumbra_ibc::params::IBCParameters;
+use prost::Message;
 
 use crate::{
     app::{
@@ -32,6 +33,7 @@ const MAX_TIME: Duration = Duration::from_secs(120);
 
 struct Fixture {
     app: App,
+    // mempool_svc: crate::service::Mempool,
     _storage: Storage,
 }
 
@@ -70,34 +72,77 @@ impl Fixture {
             test_utils::initialize_app_with_storage(Some(genesis_state), vec![]).await;
 
         for tx in benchmark_utils::transactions(TxTypes::AllTransfers) {
-            app.mempool.insert(tx.clone(), 0).await.unwrap();
+            app.mempool
+                .insert(std::sync::Arc::new(tx.clone()), 0)
+                .await
+                .unwrap();
         }
+
+        // let mempool_svc =
+        //     crate::service::Mempool::new(storage.clone(), app.mempool.clone(), app.metrics);
         Fixture {
             app,
+            // mempool_svc,
             _storage: storage,
         }
     }
 }
 
+// #[divan::bench(max_time = MAX_TIME)]
+// fn execute_transactions_prepare_proposal(bencher: divan::Bencher) {
+//     let runtime = tokio::runtime::Builder::new_multi_thread()
+//         .enable_all()
+//         .build()
+//         .unwrap();
+//     let mut fixture = runtime.block_on(async { Fixture::new().await });
+//     bencher
+//         .with_inputs(|| BlockSizeConstraints::new(22_019_254).unwrap())
+//         .bench_local_refs(|constraints| {
+//             let (_tx_bytes, included_txs) = runtime.block_on(async {
+//                 fixture
+//                     .app
+//                     .execute_transactions_prepare_proposal(constraints)
+//                     .await
+//                     .unwrap()
+//             });
+//             // Ensure we actually processed some txs.  This will trip if execution fails for all
+//             // txs, or more likely, if the mempool becomes exhausted of txs.
+//             assert!(!included_txs.is_empty());
+//         });
+// }
+
 #[divan::bench(max_time = MAX_TIME)]
-fn execute_transactions_prepare_proposal(bencher: divan::Bencher) {
+fn check_tx(bencher: divan::Bencher) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
-    let mut fixture = runtime.block_on(async { Fixture::new().await });
+    let fixture = runtime.block_on(async { Fixture::new().await });
     bencher
-        .with_inputs(|| BlockSizeConstraints::new(22_019_254).unwrap())
-        .bench_local_refs(|constraints| {
-            let (_tx_bytes, included_txs) = runtime.block_on(async {
-                fixture
-                    .app
-                    .execute_transactions_prepare_proposal(constraints)
-                    .await
-                    .unwrap()
+        .with_inputs(|| {
+            let tx = benchmark_utils::transactions(TxTypes::AllTransfers)
+                .first()
+                .unwrap()
+                .to_raw()
+                .encode_to_vec()
+                .into();
+            tendermint::v0_38::abci::request::CheckTx {
+                tx,
+                kind: tendermint::v0_38::abci::request::CheckTxKind::New,
+            }
+        })
+        .bench_local_values(|request| {
+            let response = runtime.block_on(async {
+                crate::service::mempool::handle_check_tx(
+                    request,
+                    fixture._storage.clone(),
+                    fixture.app.mempool.clone(),
+                    fixture.app.metrics,
+                )
+                .await
             });
             // Ensure we actually processed some txs.  This will trip if execution fails for all
             // txs, or more likely, if the mempool becomes exhausted of txs.
-            assert!(!included_txs.is_empty());
+            assert!(response.code.is_ok());
         });
 }

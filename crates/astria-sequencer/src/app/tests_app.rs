@@ -292,9 +292,9 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
     let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(&bridge_address, &rollup_id);
+    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
     state_tx
-        .put_bridge_account_ibc_asset(&bridge_address, nria())
+        .put_bridge_account_ibc_asset(bridge_address, nria())
         .unwrap();
     app.apply(state_tx);
     app.prepare_commit(storage.clone()).await.unwrap();
@@ -382,9 +382,9 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
     let asset = nria().clone();
 
     let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(&bridge_address, &rollup_id);
+    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
     state_tx
-        .put_bridge_account_ibc_asset(&bridge_address, &asset)
+        .put_bridge_account_ibc_asset(bridge_address, &asset)
         .unwrap();
     app.apply(state_tx);
     app.prepare_commit(storage.clone()).await.unwrap();
@@ -411,7 +411,7 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
         actions: vec![lock_action.into(), sequence_action.into()],
     };
 
-    let signed_tx = tx.into_signed(&alice);
+    let signed_tx = Arc::new(tx.into_signed(&alice));
 
     let expected_deposit = Deposit::new(
         bridge_address,
@@ -421,7 +421,7 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
         "nootwashere".to_string(),
     );
     let deposits = HashMap::from_iter(vec![(rollup_id, vec![expected_deposit.clone()])]);
-    let commitments = generate_rollup_datas_commitment(&[signed_tx.clone()], deposits.clone());
+    let commitments = generate_rollup_datas_commitment(&[(*signed_tx).clone()], deposits.clone());
 
     let timestamp = Time::now();
     let block_hash = Hash::try_from([99u8; 32].to_vec()).unwrap();
@@ -558,8 +558,8 @@ async fn app_prepare_proposal_cometbft_max_bytes_overflow_ok() {
     }
     .into_signed(&alice);
 
-    app.mempool.insert(tx_pass, 0).await.unwrap();
-    app.mempool.insert(tx_overflow, 0).await.unwrap();
+    app.mempool.insert(Arc::new(tx_pass), 0).await.unwrap();
+    app.mempool.insert(Arc::new(tx_overflow), 0).await.unwrap();
 
     // send to prepare_proposal
     let prepare_args = abci::request::PrepareProposal {
@@ -631,8 +631,8 @@ async fn app_prepare_proposal_sequencer_max_bytes_overflow_ok() {
     }
     .into_signed(&alice);
 
-    app.mempool.insert(tx_pass, 0).await.unwrap();
-    app.mempool.insert(tx_overflow, 0).await.unwrap();
+    app.mempool.insert(Arc::new(tx_pass), 0).await.unwrap();
+    app.mempool.insert(Arc::new(tx_overflow), 0).await.unwrap();
 
     // send to prepare_proposal
     let prepare_args = abci::request::PrepareProposal {
@@ -679,7 +679,7 @@ async fn app_end_block_validator_updates() {
     ];
 
     let mut app = initialize_app(None, initial_validator_set).await;
-    let proposer_address = astria_address(&[0u8; 20]);
+    let proposer_address = [0u8; 20];
 
     let validator_updates = vec![
         ValidatorUpdate {

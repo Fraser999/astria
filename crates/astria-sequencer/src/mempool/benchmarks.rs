@@ -1,6 +1,13 @@
 #![allow(non_camel_case_types)]
 
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        OnceLock,
+    },
+    time::Duration,
+};
 
 use astria_core::protocol::transaction::v1alpha1::SignedTransaction;
 use sha2::{
@@ -81,7 +88,7 @@ fn transactions() -> &'static Vec<SignedTransaction> {
 
 /// Returns a new `Mempool` initialized with the number of transactions specified by `T::size()`
 /// taken from the static `transactions()`, and with a full `comet_bft_removal_cache`.
-fn init_mempool<T: MempoolSize>() -> Mempool {
+pub(crate) fn init_mempool<T: MempoolSize>() -> Mempool {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -89,7 +96,7 @@ fn init_mempool<T: MempoolSize>() -> Mempool {
     let mempool = Mempool::new();
     runtime.block_on(async {
         for tx in transactions().iter().take(T::checked_size()) {
-            mempool.insert(tx.clone(), 0).await.unwrap();
+            mempool.insert(Arc::new(tx.clone()), 0).await.unwrap();
         }
         for i in 0..super::REMOVAL_CACHE_SIZE {
             let hash = Sha256::digest(i.to_le_bytes()).into();
@@ -127,7 +134,7 @@ fn insert<T: MempoolSize>(bencher: divan::Bencher) {
         .with_inputs(|| (init_mempool::<T>(), get_unused_tx::<T>()))
         .bench_values(move |(mempool, tx)| {
             runtime.block_on(async {
-                mempool.insert(tx, 0).await.unwrap();
+                mempool.insert(Arc::new(tx), 0).await.unwrap();
             });
         });
 }

@@ -104,9 +104,9 @@ async fn app_finalize_block_snapshot() {
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
     let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(&bridge_address, &rollup_id);
+    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
     state_tx
-        .put_bridge_account_ibc_asset(&bridge_address, nria())
+        .put_bridge_account_ibc_asset(bridge_address, nria())
         .unwrap();
     app.apply(state_tx);
 
@@ -246,7 +246,7 @@ async fn app_execute_transaction_with_every_action_snapshot() {
     };
 
     let signed_tx = Arc::new(tx.into_signed(&alice));
-    app.execute_transaction(signed_tx).await.unwrap();
+    app.deliver_tx(signed_tx).await.unwrap();
 
     let tx = UnsignedTransaction {
         params: TransactionParams::builder()
@@ -265,7 +265,7 @@ async fn app_execute_transaction_with_every_action_snapshot() {
         ],
     };
     let signed_tx = Arc::new(tx.into_signed(&bridge));
-    app.execute_transaction(signed_tx).await.unwrap();
+    app.deliver_tx(signed_tx).await.unwrap();
 
     let tx = UnsignedTransaction {
         params: TransactionParams::builder()
@@ -300,7 +300,7 @@ async fn app_execute_transaction_with_every_action_snapshot() {
     };
 
     let signed_tx = Arc::new(tx.into_signed(&bridge));
-    app.execute_transaction(signed_tx).await.unwrap();
+    app.deliver_tx(signed_tx).await.unwrap();
 
     app.prepare_commit(storage.clone()).await.unwrap();
     app.commit(storage.clone()).await;
