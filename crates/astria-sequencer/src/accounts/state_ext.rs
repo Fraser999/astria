@@ -74,6 +74,7 @@ pub(crate) trait StateReadExt: StateRead + crate::assets::StateReadExt {
 
         let mut stream = std::pin::pin!(self.prefix_keys(&prefix));
         while let Some(Ok(key)) = stream.next().await {
+            tracing::error!("get_account_balances");
             let Some(value) = self
                 .get_raw(&key)
                 .await
@@ -130,6 +131,7 @@ pub(crate) trait StateReadExt: StateRead + crate::assets::StateReadExt {
         TAddress: AddressBytes,
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("get_account_balance");
         let Some(bytes) = self
             .get_raw(&balance_storage_key(address, asset))
             .await
@@ -143,6 +145,7 @@ pub(crate) trait StateReadExt: StateRead + crate::assets::StateReadExt {
 
     #[instrument(skip_all)]
     async fn get_account_nonce<T: AddressBytes>(&self, address: T) -> Result<u32> {
+        tracing::error!("get_account_nonce");
         let bytes = self
             .get_raw(&nonce_storage_key(address))
             .await
@@ -158,6 +161,7 @@ pub(crate) trait StateReadExt: StateRead + crate::assets::StateReadExt {
 
     #[instrument(skip_all)]
     async fn get_transfer_base_fee(&self) -> Result<u128> {
+        tracing::error!("get_transfer_base_fee");
         let bytes = self
             .get_raw(TRANSFER_BASE_FEE_STORAGE_KEY)
             .await
@@ -186,6 +190,7 @@ pub(crate) trait StateWriteExt: StateWrite {
         TAddress: AddressBytes,
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("put_account_balance");
         let bytes = borsh::to_vec(&Balance(balance)).context("failed to serialize balance")?;
         self.put_raw(balance_storage_key(address, asset), bytes);
         Ok(())
@@ -193,6 +198,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_account_nonce<T: AddressBytes>(&mut self, address: T, nonce: u32) -> Result<()> {
+        tracing::error!("put_account_nonce");
         let bytes = borsh::to_vec(&Nonce(nonce)).context("failed to serialize nonce")?;
         self.put_raw(nonce_storage_key(address), bytes);
         Ok(())
@@ -209,6 +215,7 @@ pub(crate) trait StateWriteExt: StateWrite {
         TAddress: AddressBytes,
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("increase_balance");
         let asset = asset.into();
         let balance = self
             .get_account_balance(&address, asset)
@@ -236,6 +243,7 @@ pub(crate) trait StateWriteExt: StateWrite {
         TAddress: AddressBytes,
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("decrease_balance");
         let asset = asset.into();
         let balance = self
             .get_account_balance(&address, asset)
@@ -254,6 +262,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_transfer_base_fee(&mut self, fee: u128) -> Result<()> {
+        tracing::error!("put_transfer_base_fee");
         let bytes = borsh::to_vec(&Fee(fee)).context("failed to serialize fee")?;
         self.put_raw(TRANSFER_BASE_FEE_STORAGE_KEY.to_string(), bytes);
         Ok(())

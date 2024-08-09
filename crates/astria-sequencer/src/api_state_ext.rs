@@ -133,6 +133,7 @@ impl From<RollupId> for RollupIdSer {
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_block_hash_by_height(&self, height: u64) -> Result<[u8; 32]> {
+        tracing::error!("get_block_hash_by_height");
         let key = block_hash_by_height_key(height);
         let Some(hash) = self
             .get_raw(&key)
@@ -153,6 +154,7 @@ pub(crate) trait StateReadExt: StateRead {
         &self,
         hash: &[u8],
     ) -> Result<SequencerBlockHeader> {
+        tracing::error!("get_sequencer_block_header_by_hash");
         let key = sequencer_block_header_by_hash_key(hash);
         let Some(header_bytes) = self
             .get_raw(&key)
@@ -171,6 +173,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_rollup_ids_by_block_hash(&self, hash: &[u8]) -> Result<Vec<RollupId>> {
+        tracing::error!("get_rollup_ids_by_block_hash");
         let key = rollup_ids_by_hash_key(hash);
         let Some(rollup_ids_bytes) = self
             .get_raw(&key)
@@ -187,6 +190,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_sequencer_block_by_hash(&self, hash: &[u8]) -> Result<SequencerBlock> {
+        tracing::error!("get_sequencer_block_by_hash");
         let Some(header_bytes) = self
             .get_raw(&sequencer_block_header_by_hash_key(hash))
             .await
@@ -205,6 +209,7 @@ pub(crate) trait StateReadExt: StateRead {
 
         let mut rollup_transactions = Vec::with_capacity(rollup_ids.len());
         for id in &rollup_ids {
+            tracing::error!("get rollup_data_by_hash_and_rollup_id_key");
             let key = rollup_data_by_hash_and_rollup_id_key(hash, id);
             let raw = self
                 .get_raw(&key)
@@ -257,6 +262,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_sequencer_block_by_height(&self, height: u64) -> Result<SequencerBlock> {
+        tracing::error!("get_sequencer_block_by_height");
         let hash = self
             .get_block_hash_by_height(height)
             .await
@@ -272,6 +278,7 @@ pub(crate) trait StateReadExt: StateRead {
         hash: &[u8],
         rollup_id: &RollupId,
     ) -> Result<RollupTransactions> {
+        tracing::error!("get_rollup_data");
         let key = rollup_data_by_hash_and_rollup_id_key(hash, rollup_id);
         let Some(bytes) = self
             .get_raw(&key)
@@ -294,6 +301,7 @@ pub(crate) trait StateReadExt: StateRead {
         &self,
         hash: &[u8],
     ) -> Result<(primitiveRaw::Proof, primitiveRaw::Proof)> {
+        tracing::error!("get_block_proofs_by_block_hash");
         let Some(rollup_transactions_proof) = self
             .get_raw(&rollup_transactions_proof_by_hash_key(hash))
             .await
@@ -326,6 +334,7 @@ impl<T: StateRead> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_sequencer_block(&mut self, block: SequencerBlock) -> Result<()> {
+        tracing::error!("put_sequencer_block");
         // split up and write the sequencer block to state in the following order:
         // 1. height to block hash
         // 2. block hash to rollup IDs
@@ -364,6 +373,7 @@ pub(crate) trait StateWriteExt: StateWrite {
         self.put_raw(key, header.encode_to_vec());
 
         for (id, rollup_data) in rollup_transactions {
+            tracing::error!("put rollup_data_by_hash_and_rollup_id_key");
             let key = rollup_data_by_hash_and_rollup_id_key(&block_hash, &id);
             self.put_raw(key, rollup_data.into_raw().encode_to_vec());
         }

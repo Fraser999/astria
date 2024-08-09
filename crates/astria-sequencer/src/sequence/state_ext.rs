@@ -25,6 +25,7 @@ struct Fee(u128);
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_sequence_action_base_fee(&self) -> Result<u128> {
+        tracing::error!("get_sequence_action_base_fee");
         let bytes = self
             .get_raw(SEQUENCE_ACTION_BASE_FEE_STORAGE_KEY)
             .await
@@ -36,6 +37,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_sequence_action_byte_cost_multiplier(&self) -> Result<u128> {
+        tracing::error!("get_sequence_action_byte_cost_multiplier");
         let bytes = self
             .get_raw(SEQUENCE_ACTION_BYTE_COST_MULTIPLIER_STORAGE_KEY)
             .await
@@ -52,6 +54,7 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_sequence_action_base_fee(&mut self, fee: u128) {
+        tracing::error!("put_sequence_action_base_fee");
         self.put_raw(
             SEQUENCE_ACTION_BASE_FEE_STORAGE_KEY.to_string(),
             borsh::to_vec(&Fee(fee)).expect("failed to serialize fee"),
@@ -60,6 +63,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_sequence_action_byte_cost_multiplier(&mut self, fee: u128) {
+        tracing::error!("put_sequence_action_byte_cost_multiplier");
         self.put_raw(
             SEQUENCE_ACTION_BYTE_COST_MULTIPLIER_STORAGE_KEY.to_string(),
             borsh::to_vec(&Fee(fee)).expect("failed to serialize fee"),

@@ -66,6 +66,7 @@ fn construct_tx_fee_event<T: std::fmt::Display>(
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_native_asset(&self) -> Result<asset::TracePrefixed> {
+        tracing::error!("get_native_asset");
         let Some(bytes) = self
             .nonverifiable_get_raw(NATIVE_ASSET_KEY)
             .await
@@ -86,6 +87,7 @@ pub(crate) trait StateReadExt: StateRead {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("has_ibc_asset");
         Ok(self
             .get_raw(&asset_storage_key(asset))
             .await
@@ -98,6 +100,7 @@ pub(crate) trait StateReadExt: StateRead {
         &self,
         asset: asset::IbcPrefixed,
     ) -> Result<Option<asset::TracePrefixed>> {
+        tracing::error!("map_ibc_to_trace_prefixed_asset");
         let Some(bytes) = self
             .get_raw(&asset_storage_key(asset))
             .await
@@ -121,6 +124,7 @@ pub(crate) trait StateReadExt: StateRead {
         let mut stream =
             std::pin::pin!(self.nonverifiable_prefix_raw(BLOCK_FEES_PREFIX.as_bytes()));
         while let Some(Ok((key, value))) = stream.next().await {
+            tracing::error!("get_block_fees");
             // if the key isn't of the form `block_fees/{asset_id}`, then we have a bug
             // in `put_block_fees`
             let suffix = key
@@ -147,6 +151,7 @@ pub(crate) trait StateReadExt: StateRead {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("is_allowed_fee_asset");
         Ok(self
             .nonverifiable_get_raw(fee_asset_key(asset).as_bytes())
             .await
@@ -160,6 +165,7 @@ pub(crate) trait StateReadExt: StateRead {
 
         let mut stream = std::pin::pin!(self.nonverifiable_prefix_raw(FEE_ASSET_PREFIX.as_bytes()));
         while let Some(Ok((key, _))) = stream.next().await {
+            tracing::error!("get_allowed_fee_assets");
             // if the key isn't of the form `fee_asset/{asset_id}`, then we have a bug
             // in `put_allowed_fee_asset`
             let suffix = key
@@ -183,11 +189,13 @@ impl<T: ?Sized + StateRead> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_native_asset(&mut self, asset: &asset::TracePrefixed) {
+        tracing::error!("put_native_asset");
         self.nonverifiable_put_raw(NATIVE_ASSET_KEY.to_vec(), asset.to_string().into_bytes());
     }
 
     #[instrument(skip_all)]
     fn put_ibc_asset(&mut self, asset: &asset::TracePrefixed) -> Result<()> {
+        tracing::error!("put_ibc_asset");
         let bytes = borsh::to_vec(&DenominationTrace(asset.to_string()))
             .context("failed to serialize asset")?;
         self.put_raw(asset_storage_key(asset), bytes);
@@ -205,6 +213,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("get_and_increase_block_fees");
         let tx_fee_event = construct_tx_fee_event(&asset, amount, action_type);
         let block_fees_key = block_fees_key(asset);
 
@@ -235,6 +244,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     async fn clear_block_fees(&mut self) {
+        tracing::error!("clear_block_fees");
         let mut stream =
             std::pin::pin!(self.nonverifiable_prefix_raw(BLOCK_FEES_PREFIX.as_bytes()));
         while let Some(Ok((key, _))) = stream.next().await {
@@ -247,6 +257,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display,
     {
+        tracing::error!("delete_allowed_fee_asset");
         self.nonverifiable_delete(fee_asset_key(asset).into());
     }
 
@@ -255,6 +266,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("put_allowed_fee_asset");
         self.nonverifiable_put_raw(fee_asset_key(asset).into(), vec![]);
     }
 }

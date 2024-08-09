@@ -21,6 +21,7 @@ fn storage_version_by_height_key(height: u64) -> Vec<u8> {
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_chain_id(&self) -> Result<tendermint::chain::Id> {
+        tracing::error!("get_chain_id");
         let Some(bytes) = self
             .get_raw("chain_id")
             .await
@@ -37,6 +38,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_revision_number(&self) -> Result<u64> {
+        tracing::error!("get_revision_number");
         let Some(bytes) = self
             .get_raw(REVISION_NUMBER_KEY)
             .await
@@ -57,6 +59,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_block_height(&self) -> Result<u64> {
+        tracing::error!("get_block_height");
         let Some(bytes) = self
             .get_raw("block_height")
             .await
@@ -72,6 +75,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_block_timestamp(&self) -> Result<Time> {
+        tracing::error!("get_block_timestamp");
         let Some(bytes) = self
             .get_raw("block_timestamp")
             .await
@@ -86,6 +90,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_storage_version_by_height(&self, height: u64) -> Result<u64> {
+        tracing::error!("get_storage_version_by_height");
         let key = storage_version_by_height_key(height);
         let Some(bytes) = self
             .nonverifiable_get_raw(&key)
@@ -107,6 +112,7 @@ impl<T: StateRead> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_chain_id_and_revision_number(&mut self, chain_id: tendermint::chain::Id) {
+        tracing::error!("put_chain_id_and_revision_number");
         let revision_number = revision_number_from_chain_id(chain_id.as_str());
         self.put_raw("chain_id".into(), chain_id.as_bytes().to_vec());
         self.put_revision_number(revision_number);
@@ -114,6 +120,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_revision_number(&mut self, revision_number: u64) {
+        tracing::error!("put_revision_number");
         self.put_raw(
             REVISION_NUMBER_KEY.into(),
             revision_number.to_be_bytes().to_vec(),
@@ -122,16 +129,19 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_block_height(&mut self, height: u64) {
+        tracing::error!("put_block_height");
         self.put_raw("block_height".into(), height.to_be_bytes().to_vec());
     }
 
     #[instrument(skip_all)]
     fn put_block_timestamp(&mut self, timestamp: Time) {
+        tracing::error!("put_block_timestamp");
         self.put_raw("block_timestamp".into(), timestamp.to_rfc3339().into());
     }
 
     #[instrument(skip_all)]
     fn put_storage_version_by_height(&mut self, height: u64, version: u64) {
+        tracing::error!("put_storage_version_by_height");
         self.nonverifiable_put_raw(
             storage_version_by_height_key(height),
             version.to_be_bytes().to_vec(),

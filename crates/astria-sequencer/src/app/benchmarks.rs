@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// The max time for any benchmark.
-const MAX_TIME: Duration = Duration::from_secs(120);
+const MAX_TIME: Duration = Duration::from_secs(20);
 
 struct Fixture {
     app: App,
@@ -85,6 +85,15 @@ fn execute_transactions_prepare_proposal(bencher: divan::Bencher) {
         .enable_all()
         .build()
         .unwrap();
+    runtime.block_on(async {
+        telemetry::configure()
+            .set_pretty_print(true)
+            .set_force_stdout(true)
+            .filter_directives("error")
+            .try_init()
+            .unwrap();
+    });
+
     let mut fixture = runtime.block_on(async { Fixture::new().await });
     bencher
         .with_inputs(|| BlockSizeConstraints::new(22_019_254).unwrap())

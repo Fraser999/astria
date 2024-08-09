@@ -32,6 +32,7 @@ const VALIDATOR_UPDATES_KEY: &[u8] = b"valupdates";
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_sudo_address(&self) -> Result<[u8; ADDRESS_LEN]> {
+        tracing::error!("get_sudo_address");
         let Some(bytes) = self
             .get_raw(SUDO_STORAGE_KEY)
             .await
@@ -47,6 +48,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_validator_set(&self) -> Result<ValidatorSet> {
+        tracing::error!("get_validator_set");
         let Some(bytes) = self
             .get_raw(VALIDATOR_SET_STORAGE_KEY)
             .await
@@ -63,6 +65,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_validator_updates(&self) -> Result<ValidatorSet> {
+        tracing::error!("get_validator_updates");
         let Some(bytes) = self
             .nonverifiable_get_raw(VALIDATOR_UPDATES_KEY)
             .await
@@ -84,6 +87,7 @@ impl<T: StateRead> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_sudo_address<T: AddressBytes>(&mut self, address: T) -> Result<()> {
+        tracing::error!("put_sudo_address");
         self.put_raw(
             SUDO_STORAGE_KEY.to_string(),
             borsh::to_vec(&SudoAddress(address.address_bytes()))
@@ -94,6 +98,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_validator_set(&mut self, validator_set: ValidatorSet) -> Result<()> {
+        tracing::error!("put_validator_set");
         self.put_raw(
             VALIDATOR_SET_STORAGE_KEY.to_string(),
             serde_json::to_vec(&validator_set).context("failed to serialize validator set")?,
@@ -103,6 +108,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_validator_updates(&mut self, validator_updates: ValidatorSet) -> Result<()> {
+        tracing::error!("put_validator_updates");
         self.nonverifiable_put_raw(
             VALIDATOR_UPDATES_KEY.to_vec(),
             serde_json::to_vec(&validator_updates)
@@ -113,6 +119,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn clear_validator_updates(&mut self) {
+        tracing::error!("clear_validator_updates");
         self.nonverifiable_delete(VALIDATOR_UPDATES_KEY.to_vec());
     }
 }

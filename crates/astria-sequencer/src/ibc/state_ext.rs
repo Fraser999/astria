@@ -77,6 +77,7 @@ pub(crate) trait StateReadExt: StateRead {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("get_ibc_channel_balance");
         let Some(bytes) = self
             .get_raw(&channel_balance_storage_key(channel, asset))
             .await
@@ -91,6 +92,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_ibc_sudo_address(&self) -> Result<[u8; ADDRESS_LEN]> {
+        tracing::error!("get_ibc_sudo_address");
         let Some(bytes) = self
             .get_raw(IBC_SUDO_STORAGE_KEY)
             .await
@@ -106,6 +108,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn is_ibc_relayer<T: AddressBytes>(&self, address: T) -> Result<bool> {
+        tracing::error!("is_ibc_relayer");
         Ok(self
             .get_raw(&ibc_relayer_key(&address))
             .await
@@ -115,6 +118,7 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_ics20_withdrawal_base_fee(&self) -> Result<u128> {
+        tracing::error!("get_ics20_withdrawal_base_fee");
         let Some(bytes) = self
             .get_raw(ICS20_WITHDRAWAL_BASE_FEE_STORAGE_KEY)
             .await
@@ -141,6 +145,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     where
         TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
     {
+        tracing::error!("put_ibc_channel_balance");
         let bytes = borsh::to_vec(&Balance(balance)).context("failed to serialize balance")?;
         self.put_raw(channel_balance_storage_key(channel, asset), bytes);
         Ok(())
@@ -148,6 +153,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_ibc_sudo_address<T: AddressBytes>(&mut self, address: T) -> Result<()> {
+        tracing::error!("put_ibc_sudo_address");
         self.put_raw(
             IBC_SUDO_STORAGE_KEY.to_string(),
             borsh::to_vec(&SudoAddress(address.address_bytes()))
@@ -158,16 +164,19 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     fn put_ibc_relayer_address<T: AddressBytes>(&mut self, address: T) {
+        tracing::error!("put_ibc_relayer_address");
         self.put_raw(ibc_relayer_key(&address), vec![]);
     }
 
     #[instrument(skip_all)]
     fn delete_ibc_relayer_address<T: AddressBytes>(&mut self, address: T) {
+        tracing::error!("delete_ibc_relayer_address");
         self.delete(ibc_relayer_key(&address));
     }
 
     #[instrument(skip_all)]
     fn put_ics20_withdrawal_base_fee(&mut self, fee: u128) -> Result<()> {
+        tracing::error!("put_ics20_withdrawal_base_fee");
         self.put_raw(
             ICS20_WITHDRAWAL_BASE_FEE_STORAGE_KEY.to_string(),
             borsh::to_vec(&Fee(fee)).context("failed to serialize fee")?,

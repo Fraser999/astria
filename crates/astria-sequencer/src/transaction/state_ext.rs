@@ -32,17 +32,20 @@ impl From<&SignedTransaction> for TransactionContext {
 
 pub(crate) trait StateWriteExt: StateWrite {
     fn put_current_source(&mut self, transaction: impl Into<TransactionContext>) {
+        tracing::error!("rollup_data_by_hash_and_rollup_id_key");
         let context: TransactionContext = transaction.into();
         self.object_put(current_source(), context);
     }
 
     fn delete_current_source(&mut self) {
+        tracing::error!("rollup_data_by_hash_and_rollup_id_key");
         self.object_delete(current_source());
     }
 }
 
 pub(crate) trait StateReadExt: StateRead {
     fn get_current_source(&self) -> Option<TransactionContext> {
+        tracing::error!("rollup_data_by_hash_and_rollup_id_key");
         self.object_get(current_source())
     }
 }
