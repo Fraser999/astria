@@ -10,6 +10,7 @@ use cnidarium::StateWrite;
 use crate::{
     address::StateReadExt as _,
     app::ActionHandler,
+    cache::Cache,
     ibc::{
         StateReadExt as _,
         StateWriteExt as _,
@@ -25,7 +26,7 @@ impl ActionHandler for IbcRelayerChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")

@@ -22,6 +22,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    cache::Cache,
     transaction::StateReadExt as _,
 };
 
@@ -33,7 +34,7 @@ impl ActionHandler for InitBridgeAccountAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")
@@ -82,7 +83,7 @@ impl ActionHandler for InitBridgeAccountAction {
         }
 
         let balance = state
-            .get_account_balance(from, &self.fee_asset)
+            .get_account_balance(from, &self.fee_asset, cache)
             .await
             .context("failed getting `from` account balance for fee payment")?;
 
@@ -102,7 +103,7 @@ impl ActionHandler for InitBridgeAccountAction {
         );
 
         state
-            .decrease_balance(from, &self.fee_asset, fee)
+            .decrease_balance(from, &self.fee_asset, fee, cache)
             .await
             .context("failed to deduct fee from account balance")?;
         Ok(())

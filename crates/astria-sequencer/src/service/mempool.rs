@@ -39,6 +39,7 @@ use crate::{
     accounts,
     address,
     app::ActionHandler as _,
+    cache::Cache,
     mempool::{
         Mempool as AppMempool,
         RemovalReason,
@@ -113,6 +114,9 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
     metrics: &'static Metrics,
 ) -> response::CheckTx {
     use sha2::Digest as _;
+
+    let c = Cache::new();
+    let cache = &c;
 
     let start_parsing = Instant::now();
 
@@ -216,7 +220,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_check_chain_id.saturating_duration_since(finished_check_nonce),
     );
 
-    if let Err(e) = transaction::check_balance_mempool(&signed_tx, &state).await {
+    if let Err(e) = transaction::check_balance_mempool(&signed_tx, &state, cache).await {
         mempool.remove(tx_hash).await;
         metrics.increment_check_tx_removed_account_balance();
         return response::CheckTx {

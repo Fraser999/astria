@@ -1,5 +1,7 @@
 use cnidarium::StateWrite;
 
+use crate::cache::Cache;
+
 /// This trait is a verbatim copy of [`cnidarium_component::ActionHandler`].
 ///
 /// It's duplicated here because all actions are foreign types, forbidding
@@ -18,5 +20,9 @@ pub(crate) trait ActionHandler {
     // }
     // ```
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> anyhow::Result<()>;
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        mut state: S,
+        cache: &Cache,
+    ) -> anyhow::Result<()>;
 }

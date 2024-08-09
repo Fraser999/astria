@@ -26,6 +26,7 @@ use crate::{
         StateWriteExt as _,
     },
     bridge::StateReadExt as _,
+    cache::Cache,
     transaction::StateReadExt as _,
 };
 
@@ -37,7 +38,7 @@ impl ActionHandler for TransferAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, state: S, cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")
@@ -52,8 +53,8 @@ impl ActionHandler for TransferAction {
             "cannot transfer out of bridge account; BridgeUnlock must be used",
         );
 
-        check_transfer(self, from, &state).await?;
-        execute_transfer(self, from, state).await?;
+        check_transfer(self, from, &state, cache).await?;
+        execute_transfer(self, from, state, cache).await?;
 
         Ok(())
     }
@@ -63,6 +64,7 @@ pub(crate) async fn execute_transfer<S: StateWrite>(
     action: &TransferAction,
     from: [u8; ADDRESS_LEN],
     mut state: S,
+    cache: &Cache,
 ) -> anyhow::Result<()> {
     let fee = state
         .get_transfer_base_fee()
@@ -83,28 +85,28 @@ pub(crate) async fn execute_transfer<S: StateWrite>(
             .expect("transfer amount plus fee should not overflow");
 
         state
-            .decrease_balance(from, &action.asset, payment_amount)
+            .decrease_balance(from, &action.asset, payment_amount, cache)
             .await
             .context("failed decreasing `from` account balance")?;
         state
-            .increase_balance(action.to, &action.asset, action.amount)
+            .increase_balance(action.to, &action.asset, action.amount, cache)
             .await
             .context("failed increasing `to` account balance")?;
     } else {
         // otherwise, just transfer the transfer asset and deduct fee from fee asset balance
         // later
         state
-            .decrease_balance(from, &action.asset, action.amount)
+            .decrease_balance(from, &action.asset, action.amount, cache)
             .await
             .context("failed decreasing `from` account balance")?;
         state
-            .increase_balance(action.to, &action.asset, action.amount)
+            .increase_balance(action.to, &action.asset, action.amount, cache)
             .await
             .context("failed increasing `to` account balance")?;
 
         // deduct fee from fee asset balance
         state
-            .decrease_balance(from, &action.fee_asset, fee)
+            .decrease_balance(from, &action.fee_asset, fee, cache)
             .await
             .context("failed decreasing `from` account balance for fee payment")?;
     }
@@ -115,6 +117,7 @@ pub(crate) async fn check_transfer<S, TAddress>(
     action: &TransferAction,
     from: TAddress,
     state: &S,
+    cache: &Cache,
 ) -> Result<()>
 where
     S: StateRead,
@@ -138,7 +141,7 @@ where
     let transfer_asset = action.asset.clone();
 
     let from_fee_balance = state
-        .get_account_balance(&from, &action.fee_asset)
+        .get_account_balance(&from, &action.fee_asset, cache)
         .await
         .context("failed getting `from` account balance for fee payment")?;
 
@@ -163,7 +166,7 @@ where
         );
 
         let from_transfer_balance = state
-            .get_account_balance(from, transfer_asset)
+            .get_account_balance(from, transfer_asset, cache)
             .await
             .context("failed to get account balance in transfer check")?;
         ensure!(
