@@ -14,6 +14,7 @@ use tendermint::abci::{
 
 use crate::{
     assets::StateReadExt as _,
+    cache::Cache,
     state_ext::StateReadExt as _,
     transaction::checks::get_fees_for_transaction,
 };
@@ -44,7 +45,8 @@ pub(crate) async fn transaction_fee_request(
         }
     };
 
-    let fees_with_ibc_denoms = match get_fees_for_transaction(&tx, &snapshot).await {
+    let cache = Cache::new();
+    let fees_with_ibc_denoms = match get_fees_for_transaction(&tx, &snapshot, &cache).await {
         Ok(fees) => fees,
         Err(err) => {
             return response::Query {

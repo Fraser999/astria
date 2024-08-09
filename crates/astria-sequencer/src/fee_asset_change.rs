@@ -15,6 +15,7 @@ use crate::{
         StateWriteExt as _,
     },
     authority::StateReadExt as _,
+    cache::Cache,
     transaction::StateReadExt as _,
 };
 
@@ -26,7 +27,7 @@ impl ActionHandler for FeeAssetChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, mut state: S, _cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")

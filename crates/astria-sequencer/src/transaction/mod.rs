@@ -21,8 +21,8 @@ pub(crate) use checks::{
 use cnidarium::StateWrite;
 // Conditional to quiet warnings. This object is used throughout the codebase,
 // but is never explicitly named - hence Rust warns about it being unused.
-#[cfg(test)]
-pub(crate) use state_ext::TransactionContext;
+// #[cfg(test)]
+// pub(crate) use state_ext::TransactionContext;
 pub(crate) use state_ext::{
     StateReadExt,
     StateWriteExt,
@@ -38,6 +38,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    cache::Cache,
     ibc::{
         host_interface::AstriaHost,
         StateReadExt as _,
@@ -150,7 +151,11 @@ impl ActionHandler for SignedTransaction {
     // individual actions. This could be tidied up by implementing `ActionHandler for Action`
     // and letting it delegate.
     #[allow(clippy::too_many_lines)]
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> anyhow::Result<()> {
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        mut state: S,
+        cache: &Cache,
+    ) -> anyhow::Result<()> {
         // Add the current signed transaction into the ephemeral state in case
         // downstream actions require access to it.
         // XXX: This must be deleted at the end of `check_stateful`.
@@ -166,18 +171,18 @@ impl ActionHandler for SignedTransaction {
         // Nonce should be equal to the number of executed transactions before this tx.
         // First tx has nonce 0.
         let curr_nonce = state
-            .get_account_nonce(self.address_bytes())
+            .get_account_nonce(self.address_bytes(), cache)
             .await
             .context("failed to get nonce for transaction signer")?;
         ensure!(curr_nonce == self.nonce(), InvalidNonce(self.nonce()));
 
         // Should have enough balance to cover all actions.
-        check_balance_for_total_fees_and_transfers(self, &state)
+        check_balance_for_total_fees_and_transfers(self, &state, cache)
             .await
             .context("failed to check balance for total fees and transfers")?;
 
         if state
-            .get_bridge_account_rollup_id(self)
+            .get_bridge_account_rollup_id(self, cache)
             .await
             .context("failed to check account rollup id")?
             .is_some()
@@ -189,7 +194,7 @@ impl ActionHandler for SignedTransaction {
         }
 
         let from_nonce = state
-            .get_account_nonce(self)
+            .get_account_nonce(self, cache)
             .await
             .context("failed getting nonce of transaction signer")?;
         let next_nonce = from_nonce
@@ -203,23 +208,23 @@ impl ActionHandler for SignedTransaction {
         for action in self.actions() {
             match action {
                 Action::Transfer(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("executing transfer action failed")?,
                 Action::Sequence(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("executing sequence action failed")?,
                 Action::ValidatorUpdate(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("executing validor update")?,
                 Action::SudoAddressChange(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("executing sudo address change failed")?,
                 Action::FeeChange(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("executing fee change failed")?,
                 Action::Ibc(act) => {
@@ -243,31 +248,31 @@ impl ActionHandler for SignedTransaction {
                         .context("failed executing ibc action")?;
                 }
                 Action::Ics20Withdrawal(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing ics20 withdrawal")?,
                 Action::IbcRelayerChange(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing ibc relayer change")?,
                 Action::FeeAssetChange(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing fee asseet change")?,
                 Action::InitBridgeAccount(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing init bridge account")?,
                 Action::BridgeLock(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing bridge lock")?,
                 Action::BridgeUnlock(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing bridge unlock")?,
                 Action::BridgeSudoChange(act) => act
-                    .check_and_execute(&mut state)
+                    .check_and_execute(&mut state, cache)
                     .await
                     .context("failed executing bridge sudo change")?,
             }

@@ -13,6 +13,7 @@ use tracing::instrument;
 use crate::{
     accounts,
     assets,
+    cache::Cache,
     component::Component,
 };
 
@@ -32,9 +33,10 @@ impl Component for AccountsComponent {
             .get_native_asset()
             .await
             .context("failed to read native asset from state")?;
+        let cache = Cache::new();
         for account in app_state.accounts() {
             state
-                .put_account_balance(account.address, &native_asset, account.balance)
+                .put_account_balance(account.address, &native_asset, account.balance, &cache)
                 .context("failed writing account balance to state")?;
         }
 

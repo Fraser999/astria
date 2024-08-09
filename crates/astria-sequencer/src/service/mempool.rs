@@ -39,6 +39,7 @@ use crate::{
     accounts,
     address,
     app::ActionHandler as _,
+    cache::Cache,
     mempool::{
         Mempool as AppMempool,
         RemovalReason,
@@ -114,6 +115,9 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
 ) -> response::CheckTx {
     use sha2::Digest as _;
 
+    let mut c = Cache::new();
+    let cache = &mut c;
+
     let start_parsing = Instant::now();
 
     let request::CheckTx {
@@ -185,7 +189,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_check_stateless.saturating_duration_since(finished_parsing),
     );
 
-    if let Err(e) = transaction::check_nonce_mempool(&signed_tx, &state).await {
+    if let Err(e) = transaction::check_nonce_mempool(&signed_tx, &state, cache).await {
         mempool.remove(tx_hash).await;
         metrics.increment_check_tx_removed_stale_nonce();
         return response::CheckTx {
@@ -216,7 +220,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_check_chain_id.saturating_duration_since(finished_check_nonce),
     );
 
-    if let Err(e) = transaction::check_balance_mempool(&signed_tx, &state).await {
+    if let Err(e) = transaction::check_balance_mempool(&signed_tx, &state, cache).await {
         mempool.remove(tx_hash).await;
         metrics.increment_check_tx_removed_account_balance();
         return response::CheckTx {
@@ -263,9 +267,11 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
     );
 
     // tx is valid, push to mempool
+    let mut c2 = Cache::new();
+    let cache2 = &mut c2;
     let current_account_nonce = match state
-        .try_base_prefixed(&signed_tx.verification_key().address_bytes())
-        .and_then(|address| state.get_account_nonce(address))
+        .try_base_prefixed(&signed_tx.verification_key().address_bytes(), cache)
+        .and_then(|address| state.get_account_nonce(address, cache2))
         .await
         .context("failed fetching nonce for account")
     {

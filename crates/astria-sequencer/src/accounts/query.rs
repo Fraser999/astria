@@ -18,6 +18,7 @@ use tendermint::{
 
 use crate::{
     accounts::state_ext::StateReadExt as _,
+    cache::Cache,
     state_ext::StateReadExt as _,
 };
 
@@ -70,7 +71,8 @@ pub(crate) async fn nonce_request(
         Ok(tup) => tup,
         Err(err_rsp) => return err_rsp,
     };
-    let nonce = match snapshot.get_account_nonce(address).await {
+    let cache = Cache::new();
+    let nonce = match snapshot.get_account_nonce(address, &cache).await {
         Ok(nonce) => nonce,
         Err(err) => {
             return response::Query {

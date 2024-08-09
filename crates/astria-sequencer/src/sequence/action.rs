@@ -19,6 +19,7 @@ use crate::{
         StateReadExt,
         StateWriteExt,
     },
+    cache::Cache,
     sequence,
     transaction::StateReadExt as _,
 };
@@ -37,7 +38,7 @@ impl ActionHandler for SequenceAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")
@@ -45,14 +46,14 @@ impl ActionHandler for SequenceAction {
 
         ensure!(
             state
-                .is_allowed_fee_asset(&self.fee_asset)
+                .is_allowed_fee_asset(&self.fee_asset, cache)
                 .await
                 .context("failed accessing state to check if fee is allowed")?,
             "invalid fee asset",
         );
 
         let curr_balance = state
-            .get_account_balance(from, &self.fee_asset)
+            .get_account_balance(from, &self.fee_asset, cache)
             .await
             .context("failed getting `from` account balance for fee payment")?;
         let fee = calculate_fee_from_state(&self.data, &state)
@@ -61,11 +62,11 @@ impl ActionHandler for SequenceAction {
         ensure!(curr_balance >= fee, "insufficient funds");
 
         state
-            .get_and_increase_block_fees(&self.fee_asset, fee, Self::full_name())
+            .get_and_increase_block_fees(&self.fee_asset, fee, Self::full_name(), cache)
             .await
             .context("failed to add to block fees")?;
         state
-            .decrease_balance(from, &self.fee_asset, fee)
+            .decrease_balance(from, &self.fee_asset, fee, cache)
             .await
             .context("failed updating `from` account balance")?;
         Ok(())

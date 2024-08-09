@@ -22,6 +22,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    cache::Cache,
     transaction::StateReadExt as _,
 };
 
@@ -33,26 +34,26 @@ impl ActionHandler for InitBridgeAccountAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")
             .address_bytes();
         if let Some(withdrawer_address) = &self.withdrawer_address {
             state
-                .ensure_base_prefix(withdrawer_address)
+                .ensure_base_prefix(withdrawer_address, cache)
                 .await
                 .context("failed check for base prefix of withdrawer address")?;
         }
         if let Some(sudo_address) = &self.sudo_address {
             state
-                .ensure_base_prefix(sudo_address)
+                .ensure_base_prefix(sudo_address, cache)
                 .await
                 .context("failed check for base prefix of sudo address")?;
         }
 
         ensure!(
-            state.is_allowed_fee_asset(&self.fee_asset).await?,
+            state.is_allowed_fee_asset(&self.fee_asset, cache).await?,
             "invalid fee asset",
         );
 
@@ -73,7 +74,7 @@ impl ActionHandler for InitBridgeAccountAction {
         // after the account becomes a bridge account, it can no longer receive funds
         // via `TransferAction`, only via `BridgeLockAction`.
         if state
-            .get_bridge_account_rollup_id(from)
+            .get_bridge_account_rollup_id(from, cache)
             .await
             .context("failed getting rollup ID of bridge account")?
             .is_some()
@@ -82,7 +83,7 @@ impl ActionHandler for InitBridgeAccountAction {
         }
 
         let balance = state
-            .get_account_balance(from, &self.fee_asset)
+            .get_account_balance(from, &self.fee_asset, cache)
             .await
             .context("failed getting `from` account balance for fee payment")?;
 
@@ -102,7 +103,7 @@ impl ActionHandler for InitBridgeAccountAction {
         );
 
         state
-            .decrease_balance(from, &self.fee_asset, fee)
+            .decrease_balance(from, &self.fee_asset, fee, cache)
             .await
             .context("failed to deduct fee from account balance")?;
         Ok(())

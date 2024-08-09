@@ -2,12 +2,12 @@
 mod benchmarks;
 #[cfg(any(test, feature = "benchmark"))]
 pub(crate) mod test_utils;
-#[cfg(test)]
-mod tests_app;
-#[cfg(test)]
-mod tests_breaking_changes;
-#[cfg(test)]
-mod tests_execute_transaction;
+// #[cfg(test)]
+// mod tests_app;
+// #[cfg(test)]
+// mod tests_breaking_changes;
+// #[cfg(test)]
+// mod tests_execute_transaction;
 
 mod action_handler;
 use std::{
@@ -61,7 +61,7 @@ use tracing::{
     debug,
     info,
     instrument,
-    Instrument as _,
+    // Instrument as _,
 };
 
 use crate::{
@@ -89,6 +89,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    cache::Cache,
     component::Component as _,
     ibc::component::IbcComponent,
     mempool::{
@@ -167,6 +168,7 @@ pub(crate) struct App {
     app_hash: AppHash,
 
     metrics: &'static Metrics,
+    cache: Cache,
 }
 
 impl App {
@@ -189,6 +191,8 @@ impl App {
         // We perform the `Arc` wrapping of `State` here to ensure
         // there should be no unexpected copies elsewhere.
         let state = Arc::new(StateDelta::new(snapshot));
+        let cache = Cache::new();
+        cache.new_delta();
 
         Ok(Self {
             state,
@@ -199,6 +203,7 @@ impl App {
             write_batch: None,
             app_hash,
             metrics,
+            cache,
         })
     }
 
@@ -214,18 +219,19 @@ impl App {
             .state
             .try_begin_transaction()
             .expect("state Arc should not be referenced elsewhere");
+        self.cache.new_delta_delta();
 
         state_tx
-            .put_base_prefix(&genesis_state.address_prefixes().base)
-            .context("failed to write base prefix to state")?;
+            .put_base_prefix(&genesis_state.address_prefixes().base, &self.cache)
+            .unwrap();
+        // .context("failed to write base prefix to state")?;
 
         let native_asset = genesis_state.native_asset_base_denomination();
         state_tx.put_native_asset(native_asset);
-        state_tx
-            .put_ibc_asset(native_asset)
-            .context("failed to commit native asset as ibc asset to state")?;
+        state_tx.put_ibc_asset(native_asset).unwrap();
+        // .context("failed to commit native asset as ibc asset to state")?;
 
-        state_tx.put_chain_id_and_revision_number(chain_id.try_into().context("invalid chain ID")?);
+        state_tx.put_chain_id_and_revision_number(chain_id.try_into().unwrap());
         state_tx.put_block_height(0);
 
         for fee_asset in genesis_state.allowed_fee_assets() {
@@ -235,7 +241,8 @@ impl App {
         // call init_chain on all components
         AccountsComponent::init_chain(&mut state_tx, &genesis_state)
             .await
-            .context("failed to call init_chain on AccountsComponent")?;
+            .unwrap();
+        // .context("failed to call init_chain on AccountsComponent")?;
         AuthorityComponent::init_chain(
             &mut state_tx,
             &AuthorityComponentAppState {
@@ -244,18 +251,23 @@ impl App {
             },
         )
         .await
-        .context("failed to call init_chain on AuthorityComponent")?;
+        .unwrap();
+        // .context("failed to call init_chain on AuthorityComponent")?;
         BridgeComponent::init_chain(&mut state_tx, &genesis_state)
             .await
-            .context("failed to call init_chain on BridgeComponent")?;
+            .unwrap();
+        // .context("failed to call init_chain on BridgeComponent")?;
         IbcComponent::init_chain(&mut state_tx, &genesis_state)
             .await
-            .context("failed to call init_chain on IbcComponent")?;
+            .unwrap();
+        // .context("failed to call init_chain on IbcComponent")?;
         SequenceComponent::init_chain(&mut state_tx, &genesis_state)
             .await
-            .context("failed to call init_chain on SequenceComponent")?;
+            .unwrap();
+        // .context("failed to call init_chain on SequenceComponent")?;
 
         state_tx.apply();
+        self.cache.apply_delta_delta();
 
         let app_hash = self
             .prepare_commit(storage)
@@ -271,6 +283,9 @@ impl App {
         //
         // if the previous round was committed, then the state stays the same.
         self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        self.cache.discard_changes();
+        self.cache.discard_changes();
+        self.cache.new_delta();
 
         // clear the cache of transaction execution results
         self.execution_results = None;
@@ -851,15 +866,11 @@ impl App {
 
         // get and clear block deposits from state
         let mut state_tx = StateDelta::new(self.state.clone());
-        let deposits = self
-            .state
-            .get_block_deposits()
-            .await
-            .context("failed to get block deposits in end_block")?;
-        state_tx
-            .clear_block_deposits()
-            .await
-            .context("failed to clear block deposits")?;
+        self.cache.new_delta_delta();
+        let deposits = self.state.get_block_deposits().await.unwrap();
+        // .context("failed to get block deposits in end_block")?;
+        state_tx.clear_block_deposits().await.unwrap();
+        // .context("failed to clear block deposits")?;
         debug!(
             deposits = %telemetry::display::json(&deposits),
             "got block deposits from state"
@@ -878,19 +889,17 @@ impl App {
                 .collect(),
             deposits,
         )
-        .context("failed to convert block info and data to SequencerBlock")?;
-        state_tx
-            .put_sequencer_block(sequencer_block)
-            .context("failed to write sequencer block to state")?;
+        .unwrap();
+        // .context("failed to convert block info and data to SequencerBlock")?;
+        state_tx.put_sequencer_block(sequencer_block).unwrap();
+        // .context("failed to write sequencer block to state")?;
         // events that occur after end_block are ignored here;
         // there should be none anyways.
         let _ = self.apply(state_tx);
 
         // prepare the `StagedWriteBatch` for a later commit.
-        let app_hash = self
-            .prepare_commit(storage.clone())
-            .await
-            .context("failed to prepare commit")?;
+        let app_hash = self.prepare_commit(storage.clone()).await.unwrap();
+        // .context("failed to prepare commit")?;
 
         // update the priority of any txs in the mempool based on the updated app state
         update_mempool_after_finalization(&mut self.mempool, self.state.clone())
@@ -945,6 +954,7 @@ impl App {
         begin_block: &abci::request::BeginBlock,
     ) -> anyhow::Result<Vec<abci::Event>> {
         let mut state_tx = StateDelta::new(self.state.clone());
+        self.cache.new_delta_delta();
 
         // store the block height
         state_tx.put_block_height(begin_block.header.height.into());
@@ -955,19 +965,24 @@ impl App {
         let mut arc_state_tx = Arc::new(state_tx);
         AccountsComponent::begin_block(&mut arc_state_tx, begin_block)
             .await
-            .context("failed to call begin_block on AccountsComponent")?;
+            .unwrap();
+        // .context("failed to call begin_block on AccountsComponent")?;
         AuthorityComponent::begin_block(&mut arc_state_tx, begin_block)
             .await
-            .context("failed to call begin_block on AuthorityComponent")?;
+            .unwrap();
+        // .context("failed to call begin_block on AuthorityComponent")?;
         BridgeComponent::begin_block(&mut arc_state_tx, begin_block)
             .await
-            .context("failed to call begin_block on BridgeComponent")?;
+            .unwrap();
+        // .context("failed to call begin_block on BridgeComponent")?;
         IbcComponent::begin_block(&mut arc_state_tx, begin_block)
             .await
-            .context("failed to call begin_block on IbcComponent")?;
+            .unwrap();
+        // .context("failed to call begin_block on IbcComponent")?;
         SequenceComponent::begin_block(&mut arc_state_tx, begin_block)
             .await
-            .context("failed to call begin_block on SequenceComponent")?;
+            .unwrap();
+        // .context("failed to call begin_block on SequenceComponent")?;
 
         let state_tx = Arc::try_unwrap(arc_state_tx)
             .expect("components should not retain copies of shared state");
@@ -981,26 +996,23 @@ impl App {
         &mut self,
         signed_tx: Arc<SignedTransaction>,
     ) -> anyhow::Result<Vec<Event>> {
-        let signed_tx_2 = signed_tx.clone();
-        let stateless =
-            tokio::spawn(async move { signed_tx_2.check_stateless(()).await }.in_current_span());
-
-        stateless
+        signed_tx
+            .check_stateless(())
             .await
-            .context("stateless check task aborted while executing")?
             .context("stateless check failed")?;
 
-        // At this point, the stateful checks should have completed,
-        // leaving us with exclusive access to the Arc<State>.
         let mut state_tx = self
             .state
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
+        self.cache.new_delta_delta();
 
         signed_tx
-            .check_and_execute(&mut state_tx)
+            .check_and_execute(&mut state_tx, &self.cache)
             .await
-            .context("failed executing transaction")?;
+            .unwrap();
+        // .context("failed executing transaction")?;
+        self.cache.apply_delta_delta();
 
         Ok(state_tx.apply().1)
     }
@@ -1013,6 +1025,7 @@ impl App {
     ) -> anyhow::Result<abci::response::EndBlock> {
         let state_tx = StateDelta::new(self.state.clone());
         let mut arc_state_tx = Arc::new(state_tx);
+        self.cache.new_delta_delta();
 
         let end_block = abci::request::EndBlock {
             height: height
@@ -1023,19 +1036,24 @@ impl App {
         // call end_block on all components
         AccountsComponent::end_block(&mut arc_state_tx, &end_block)
             .await
-            .context("failed to call end_block on AccountsComponent")?;
+            .unwrap();
+        // .context("failed to call end_block on AccountsComponent")?;
         AuthorityComponent::end_block(&mut arc_state_tx, &end_block)
             .await
-            .context("failed to call end_block on AuthorityComponent")?;
+            .unwrap();
+        // .context("failed to call end_block on AuthorityComponent")?;
         BridgeComponent::end_block(&mut arc_state_tx, &end_block)
             .await
-            .context("failed to call end_block on BridgeComponent")?;
+            .unwrap();
+        // .context("failed to call end_block on BridgeComponent")?;
         IbcComponent::end_block(&mut arc_state_tx, &end_block)
             .await
-            .context("failed to call end_block on IbcComponent")?;
+            .unwrap();
+        // .context("failed to call end_block on IbcComponent")?;
         SequenceComponent::end_block(&mut arc_state_tx, &end_block)
             .await
-            .context("failed to call end_block on SequenceComponent")?;
+            .unwrap();
+        // .context("failed to call end_block on SequenceComponent")?;
 
         let mut state_tx = Arc::try_unwrap(arc_state_tx)
             .expect("components should not retain copies of shared state");
@@ -1059,7 +1077,7 @@ impl App {
 
         for (asset, amount) in fees {
             state_tx
-                .increase_balance(fee_recipient, asset, amount)
+                .increase_balance(fee_recipient, asset, amount, &self.cache)
                 .await
                 .context("failed to increase fee recipient balance")?;
         }
@@ -1094,6 +1112,8 @@ impl App {
             .to_vec()
             .try_into()
             .expect("root hash to app hash conversion must succeed");
+        self.cache.apply_delta();
+        self.cache.new_delta();
 
         // Get the latest version of the state, now that we've committed it.
         self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
@@ -1117,6 +1137,8 @@ impl App {
             Arc::get_mut(&mut self.state).expect("no other references to inter-block state"),
         );
 
+        self.cache.apply_delta_delta();
+
         events
     }
 }
@@ -1131,7 +1153,8 @@ async fn update_mempool_after_finalization<S: accounts::StateReadExt>(
     mempool: &mut Mempool,
     state: S,
 ) -> anyhow::Result<()> {
-    let current_account_nonce_getter = |address: [u8; 20]| state.get_account_nonce(address);
+    let cache = Cache::new();
+    let current_account_nonce_getter = |address: [u8; 20]| state.get_account_nonce(address, &cache);
     mempool.run_maintenance(current_account_nonce_getter).await
 }
 

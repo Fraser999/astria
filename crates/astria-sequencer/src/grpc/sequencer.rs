@@ -26,6 +26,7 @@ use tracing::{
 
 use crate::{
     api_state_ext::StateReadExt as _,
+    cache::Cache,
     mempool::Mempool,
     state_ext::StateReadExt as _,
 };
@@ -196,13 +197,17 @@ impl SequencerService for SequencerServer {
 
         // nonce wasn't in mempool, so just look it up from storage
         let snapshot = self.storage.latest_snapshot();
-        let nonce = snapshot.get_account_nonce(address).await.map_err(|e| {
-            error!(
-                error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                "failed to parse get account nonce from storage",
-            );
-            Status::internal(format!("failed to get account nonce from storage: {e}"))
-        })?;
+        let cache = Cache::new();
+        let nonce = snapshot
+            .get_account_nonce(address, &cache)
+            .await
+            .map_err(|e| {
+                error!(
+                    error = AsRef::<dyn std::error::Error>::as_ref(&e),
+                    "failed to parse get account nonce from storage",
+                );
+                Status::internal(format!("failed to get account nonce from storage: {e}"))
+            })?;
 
         Ok(Response::new(GetPendingNonceResponse {
             inner: nonce,

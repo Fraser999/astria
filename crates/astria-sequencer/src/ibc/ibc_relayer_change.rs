@@ -10,6 +10,7 @@ use cnidarium::StateWrite;
 use crate::{
     address::StateReadExt as _,
     app::ActionHandler,
+    cache::Cache,
     ibc::{
         StateReadExt as _,
         StateWriteExt as _,
@@ -25,14 +26,14 @@ impl ActionHandler for IbcRelayerChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
         let from = state
             .get_current_source()
             .expect("transaction source must be present in state when executing an action")
             .address_bytes();
         match self {
             IbcRelayerChangeAction::Addition(addr) | IbcRelayerChangeAction::Removal(addr) => {
-                state.ensure_base_prefix(addr).await.context(
+                state.ensure_base_prefix(addr, cache).await.context(
                     "failed check for base prefix of provided address to be added/removed",
                 )?;
             }
