@@ -21,7 +21,7 @@ use crate::{
     },
     cache::Cache,
     sequence,
-    transaction::StateReadExt as _,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait::async_trait]
@@ -38,11 +38,16 @@ impl ActionHandler for SequenceAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        mut state: S,
+        cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
 
         ensure!(
             state

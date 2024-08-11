@@ -7,6 +7,7 @@ use astria_core::sequencer::{
     UncheckedGenesisState,
 };
 use cnidarium::Storage;
+use divan::counter::ItemsCount;
 use penumbra_ibc::params::IBCParameters;
 
 use crate::{
@@ -88,6 +89,7 @@ fn execute_transactions_prepare_proposal(bencher: divan::Bencher) {
     let mut fixture = runtime.block_on(async { Fixture::new().await });
     bencher
         .with_inputs(|| BlockSizeConstraints::new(22_019_254).unwrap())
+        .counter(ItemsCount::new(111_u32 * 2886))
         .bench_local_refs(|constraints| {
             let (_tx_bytes, included_txs) = runtime.block_on(async {
                 fixture

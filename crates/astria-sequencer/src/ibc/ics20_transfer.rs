@@ -159,7 +159,7 @@ impl AppHandlerCheck for Ics20Transfer {
             &msg.packet.port_on_a,
             &msg.packet.chan_on_a,
         )
-            .await
+        .await
     }
 
     async fn acknowledge_packet_check<S: StateRead>(
@@ -181,7 +181,7 @@ impl AppHandlerCheck for Ics20Transfer {
             &msg.packet.port_on_a,
             &msg.packet.chan_on_a,
         )
-            .await
+        .await
     }
 }
 
@@ -255,7 +255,7 @@ impl AppHandlerExecute for Ics20Transfer {
             &msg.packet.chan_on_b,
             false,
         )
-            .await
+        .await
         {
             Ok(()) => TokenTransferAcknowledgement::success(),
             Err(e) => {
@@ -290,15 +290,15 @@ impl AppHandlerExecute for Ics20Transfer {
             &msg.packet.chan_on_a,
             true,
         )
-            .await
-            .context("failed to refund tokens during timeout_packet_execute")
+        .await
+        .context("failed to refund tokens during timeout_packet_execute")
     }
 
     async fn acknowledge_packet_execute<S: StateWrite>(mut state: S, msg: &MsgAcknowledgement) {
         let ack: TokenTransferAcknowledgement = serde_json::from_slice(
             msg.acknowledgement.as_slice(),
         )
-            .expect("valid acknowledgement, should have been checked in acknowledge_packet_check");
+        .expect("valid acknowledgement, should have been checked in acknowledge_packet_check");
         if ack.is_successful() {
             return;
         }
@@ -314,7 +314,7 @@ impl AppHandlerExecute for Ics20Transfer {
             &msg.packet.chan_on_a,
             true,
         )
-            .await
+        .await
         {
             let error: &dyn std::error::Error = e.as_ref();
             tracing::error!(
@@ -412,7 +412,7 @@ async fn execute_ics20_transfer<S: ibc::StateWriteExt>(
     // emit a `Deposit` event to send the tokens back to the rollup.
     if is_refund
         && serde_json::from_str::<memos::v1alpha1::Ics20WithdrawalFromRollup>(&packet_data.memo)
-        .is_ok()
+            .is_ok()
     {
         let bridge_account = packet_data.sender.parse().context(
             "sender not an Astria Address: for refunds of ics20 withdrawals that came from a \
@@ -426,8 +426,8 @@ async fn execute_ics20_transfer<S: ibc::StateWriteExt>(
             recipient,
             cache,
         )
-            .await
-            .context("failed to execute rollup withdrawal refund")?;
+        .await
+        .context("failed to execute rollup withdrawal refund")?;
         return Ok(());
     }
 
@@ -458,8 +458,8 @@ async fn execute_ics20_transfer<S: ibc::StateWriteExt>(
         is_refund,
         cache,
     )
-        .await
-        .context("failed to execute ics20 transfer to bridge account")?;
+    .await
+    .context("failed to execute ics20 transfer to bridge account")?;
 
     if is_source {
         // the asset being transferred in is an asset that originated from astria
@@ -543,7 +543,7 @@ async fn execute_rollup_withdrawal_refund<S: ibc::StateWriteExt>(
         destination_address,
         cache,
     )
-        .await?;
+    .await?;
 
     state
         .increase_balance(bridge_address, denom, amount, cache)
@@ -614,7 +614,7 @@ async fn execute_ics20_transfer_bridge_lock<S: ibc::StateWriteExt>(
         deposit_memo.rollup_deposit_address,
         cache,
     )
-        .await
+    .await
 }
 
 async fn execute_deposit<S: ibc::StateWriteExt>(

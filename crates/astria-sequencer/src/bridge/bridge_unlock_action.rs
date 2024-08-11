@@ -22,7 +22,7 @@ use crate::{
     app::ActionHandler,
     bridge::StateReadExt as _,
     cache::Cache,
-    transaction::StateReadExt as _,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait::async_trait]
@@ -33,11 +33,16 @@ impl ActionHandler for BridgeUnlockAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: S, cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        state: S,
+        cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
         state
             .ensure_base_prefix(&self.to, cache)
             .await

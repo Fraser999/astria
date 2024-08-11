@@ -15,7 +15,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait]
@@ -26,11 +26,16 @@ impl ActionHandler for IbcRelayerChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        mut state: S,
+        cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
         match self {
             IbcRelayerChangeAction::Addition(addr) | IbcRelayerChangeAction::Removal(addr) => {
                 state.ensure_base_prefix(addr, cache).await.context(

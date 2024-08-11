@@ -22,6 +22,7 @@ pub(crate) trait ActionHandler {
 
     async fn check_and_execute<S: StateWrite>(
         &self,
+        from: [u8; 20],
         mut state: S,
         cache: &Cache,
     ) -> anyhow::Result<()>;

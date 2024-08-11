@@ -38,7 +38,7 @@ use tracing::{
 use crate::{
     accounts,
     address,
-    app::ActionHandler as _,
+    // app::ActionHandler as _,
     cache::Cache,
     mempool::{
         Mempool as AppMempool,
@@ -173,7 +173,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_parsing.saturating_duration_since(start_parsing),
     );
 
-    if let Err(e) = signed_tx.check_stateless(()).await {
+    if let Err(e) = crate::transaction::check_stateless(&signed_tx).await {
         mempool.remove(tx_hash).await;
         metrics.increment_check_tx_removed_failed_stateless();
         return response::CheckTx {

@@ -24,7 +24,7 @@ use crate::{
     cache::Cache,
     ibc::StateWriteExt as _,
     sequence::StateWriteExt as _,
-    transaction::StateReadExt as _,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait::async_trait]
@@ -35,11 +35,16 @@ impl ActionHandler for ValidatorUpdate {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S, _cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        mut state: S,
+        _cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
         // ensure signer is the valid `sudo` key in state
         let sudo_address = state
             .get_sudo_address()
@@ -88,11 +93,16 @@ impl ActionHandler for SudoAddressChangeAction {
 
     /// check that the signer of the transaction is the current sudo address,
     /// as only that address can change the sudo address
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        mut state: S,
+        cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
         state
             .ensure_base_prefix(&self.new_address, cache)
             .await
@@ -120,11 +130,16 @@ impl ActionHandler for FeeChangeAction {
 
     /// check that the signer of the transaction is the current sudo address,
     /// as only that address can change the fee
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S, _cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        mut state: S,
+        _cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
         // ensure signer is the valid `sudo` key in state
         let sudo_address = state
             .get_sudo_address()

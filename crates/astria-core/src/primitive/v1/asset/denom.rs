@@ -1,6 +1,11 @@
 use std::{
     collections::VecDeque,
+    hash::{
+        Hash,
+        Hasher,
+    },
     str::FromStr,
+    sync::OnceLock,
 };
 
 /// Represents a denomination of a sequencer asset.
@@ -178,25 +183,44 @@ impl From<ParseTracePrefixedError> for ParseDenomError {
 }
 
 /// An ICS20 denomination of the form `[port/channel/..]base_denom`.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct TracePrefixed {
     trace: TraceSegments,
     base_denom: String,
+    ibc_id: OnceLock<[u8; 32]>,
 }
+
+impl Hash for TracePrefixed {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.trace.hash(state);
+        self.base_denom.hash(state);
+    }
+}
+
+impl PartialEq for TracePrefixed {
+    fn eq(&self, other: &Self) -> bool {
+        self.trace == other.trace && self.base_denom == other.base_denom
+    }
+}
+
+impl Eq for TracePrefixed {}
 
 impl TracePrefixed {
     #[must_use]
     pub fn to_ibc_prefixed(&self) -> IbcPrefixed {
         use sha2::Digest as _;
-        let mut hasher = sha2::Sha256::new();
-        for segment in &self.trace.inner {
-            hasher.update(segment.port().as_bytes());
-            hasher.update(b"/");
-            hasher.update(segment.channel().as_bytes());
-            hasher.update(b"/");
-        }
-        hasher.update(self.base_denom.as_bytes());
-        let id = hasher.finalize().into();
+
+        let id = *self.ibc_id.get_or_init(|| {
+            let mut hasher = sha2::Sha256::new();
+            for segment in &self.trace.inner {
+                hasher.update(segment.port().as_bytes());
+                hasher.update(b"/");
+                hasher.update(segment.channel().as_bytes());
+                hasher.update(b"/");
+            }
+            hasher.update(self.base_denom.as_bytes());
+            hasher.finalize().into()
+        });
         IbcPrefixed {
             id,
         }
@@ -463,6 +487,7 @@ impl FromStr for TracePrefixed {
         Ok(Self {
             base_denom: base_denom.into(),
             trace,
+            ibc_id: OnceLock::new(),
         })
     }
 }

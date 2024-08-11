@@ -16,7 +16,7 @@ use crate::{
         StateWriteExt as _,
     },
     cache::Cache,
-    transaction::StateReadExt as _,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait::async_trait]
@@ -27,11 +27,16 @@ impl ActionHandler for BridgeSudoChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S, cache: &Cache) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        from: [u8; 20],
+        mut state: S,
+        cache: &Cache,
+    ) -> Result<()> {
+        // let from = state
+        //     .get_current_source()
+        //     .expect("transaction source must be present in state when executing an action")
+        //     .address_bytes();
         state
             .ensure_base_prefix(&self.bridge_address, cache)
             .await
