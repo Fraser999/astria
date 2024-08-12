@@ -13,7 +13,7 @@ use astria_core::protocol::transaction::v1alpha1::{
     SignedTransaction,
 };
 pub(crate) use checks::{
-    check_balance_for_total_fees_and_transfers,
+    // check_balance_for_total_fees_and_transfers,
     check_balance_mempool,
     check_chain_id_mempool,
     check_nonce_mempool,
@@ -43,23 +43,23 @@ use crate::{
         host_interface::AstriaHost,
         StateReadExt as _,
     },
-    state_ext::StateReadExt as _,
+    // state_ext::StateReadExt as _,
 };
 
-#[derive(Debug)]
-pub(crate) struct InvalidChainId(pub(crate) String);
-
-impl fmt::Display for InvalidChainId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "provided chain id {} does not match expected chain id",
-            self.0,
-        )
-    }
-}
-
-impl std::error::Error for InvalidChainId {}
+// #[derive(Debug)]
+// pub(crate) struct InvalidChainId(pub(crate) String);
+//
+// impl fmt::Display for InvalidChainId {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "provided chain id {} does not match expected chain id",
+//             self.0,
+//         )
+//     }
+// }
+//
+// impl std::error::Error for InvalidChainId {}
 
 #[derive(Debug)]
 pub(crate) struct InvalidNonce(pub(crate) u32);
@@ -152,7 +152,7 @@ pub(crate) async fn check_and_execute<S: StateWrite>(
     mut state: S,
     cache: &Cache,
 ) -> anyhow::Result<()> {
-    let s = std::time::Instant::now();
+    // let s = std::time::Instant::now();
     // Add the current signed transaction into the ephemeral state in case
     // downstream actions require access to it.
     // XXX: This must be deleted at the end of `check_stateful`.
@@ -205,16 +205,14 @@ pub(crate) async fn check_and_execute<S: StateWrite>(
     for action in tx.actions() {
         match action {
             Action::Transfer(act) => {
-                let ss = std::time::Instant::now();
-                let res = act
-                    .check_and_execute(from, &mut state, cache)
+                // let ss = std::time::Instant::now();
+                act.check_and_execute(from, &mut state, cache)
                     .await
                     .context("executing transfer action failed")?;
-                println!(
-                    "IN tx check and exec: awaited action check and exec: {}",
-                    ss.elapsed().as_secs_f32()
-                );
-                res
+                // println!(
+                //     "IN tx check and exec: awaited action check and exec: {}",
+                //     ss.elapsed().as_secs_f32()
+                // );
             }
             Action::Sequence(act) => act
                 .check_and_execute(from, &mut state, cache)
@@ -285,6 +283,6 @@ pub(crate) async fn check_and_execute<S: StateWrite>(
 
     // XXX: Delete the current transaction data from the ephemeral state.
     // state.delete_current_source();
-    println!("IN tx check and exec: {}", s.elapsed().as_secs_f32());
+    // println!("IN tx check and exec: {}", s.elapsed().as_secs_f32());
     Ok(())
 }

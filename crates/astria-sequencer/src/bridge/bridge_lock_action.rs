@@ -102,8 +102,8 @@ impl ActionHandler for BridgeLockAction {
             fee_asset: self.fee_asset.clone(),
         };
 
-        check_transfer(&transfer_action, from, &state, cache).await?;
-        execute_transfer(&transfer_action, from, &mut state, cache).await?;
+        check_transfer(&transfer_action, &state, cache).await?;
+        execute_transfer(&transfer_action, from, &state, cache).await?;
 
         let rollup_id = state
             .get_bridge_account_rollup_id(self.to, cache)

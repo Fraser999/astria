@@ -41,7 +41,7 @@ impl ActionHandler for SequenceAction {
     async fn check_and_execute<S: StateWrite>(
         &self,
         from: [u8; 20],
-        mut state: S,
+        state: S,
         cache: &Cache,
     ) -> Result<()> {
         // let from = state

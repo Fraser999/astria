@@ -1798,7 +1798,7 @@ dependencies = [
 [[package]]
 name = "cnidarium"
 version = "0.78.0"
-source = "git+https://github.com/penumbra-zone/penumbra.git?tag=v0.78.0#14959350abcb8cfbf33f9aedc7463fccfd8e3f9f"
+source = "git+https://github.com/Fraser999/penumbra.git?branch=v0.78.0-with-state-write-methods-taking-ref-self#61318fa533b67413b4f8a5070f80d30021c11765"
 dependencies = [
  "anyhow",
  "async-trait",

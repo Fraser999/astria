@@ -84,8 +84,8 @@ impl ActionHandler for BridgeUnlockAction {
             fee_asset: self.fee_asset.clone(),
         };
 
-        check_transfer(&transfer_action, bridge_address, &state, cache).await?;
-        execute_transfer(&transfer_action, bridge_address, state, cache).await?;
+        check_transfer(&transfer_action, &state, cache).await?;
+        execute_transfer(&transfer_action, bridge_address, &state, cache).await?;
 
         Ok(())
     }

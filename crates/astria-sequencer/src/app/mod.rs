@@ -250,8 +250,8 @@ impl App {
                 genesis_validators,
             },
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         // .context("failed to call init_chain on AuthorityComponent")?;
         BridgeComponent::init_chain(&mut state_tx, &genesis_state)
             .await
@@ -313,7 +313,7 @@ impl App {
             usize::try_from(prepare_proposal.max_tx_bytes)
                 .context("failed to convert max_tx_bytes to usize")?,
         )
-        .context("failed to create block size constraints")?;
+            .context("failed to create block size constraints")?;
 
         let block_data = BlockData {
             misbehavior: prepare_proposal.misbehavior,
@@ -503,23 +503,23 @@ impl App {
         let mut execution_results = Vec::new();
         let mut txs_to_readd_to_mempool = Vec::new();
 
-        let mut s = std::time::Instant::now();
+        // let mut s = std::time::Instant::now();
         let mut nxt = self.mempool.pop().await;
-        println!("mempool pop: {}", s.elapsed().as_secs_f32());
-        s = std::time::Instant::now();
+        // println!("mempool pop: {}", s.elapsed().as_secs_f32());
+        // s = std::time::Instant::now();
         while let Some((enqueued_tx, priority)) = nxt {
             let tx_hash_base64 = telemetry::display::base64(&enqueued_tx.tx_hash()).to_string();
             let tx = enqueued_tx.signed_tx();
             let bytes = tx.to_raw().encode_to_vec();
             let tx_len = bytes.len();
             info!(transaction_hash = %tx_hash_base64, "executing transaction");
-            println!("prep: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("prep: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
 
             // don't include tx if it would make the cometBFT block too large
             let ttt = block_size_constraints.cometbft_has_space(tx_len);
-            println!("cometbft_has_space: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("cometbft_has_space: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
 
             if !ttt {
                 self.metrics
@@ -543,12 +543,12 @@ impl App {
                 .iter()
                 .filter_map(Action::as_sequence)
                 .fold(0usize, |acc, seq| acc.saturating_add(seq.data.len()));
-            println!("calc size: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("calc size: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
 
             let hhh = block_size_constraints.sequencer_has_space(tx_sequence_data_bytes);
-            println!("sequencer_has_space: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("sequencer_has_space: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
 
             if !hhh {
                 self.metrics
@@ -563,15 +563,15 @@ impl App {
 
                 // continue as there might be non-sequence txs that can fit
                 nxt = self.mempool.pop().await;
-                println!("mempool pop: {}", s.elapsed().as_secs_f32());
-                s = std::time::Instant::now();
+                // println!("mempool pop: {}", s.elapsed().as_secs_f32());
+                // s = std::time::Instant::now();
                 continue;
             }
 
             // execute tx and store in `execution_results` list on success
             let ddd = self.execute_transaction(tx.clone()).await;
-            println!("exec: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("exec: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
             match ddd {
                 Ok(events) => {
                     execution_results.push(ExecTxResult {
@@ -615,12 +615,12 @@ impl App {
                     }
                 }
             }
-            println!("post exec: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("post exec: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
 
             nxt = self.mempool.pop().await;
-            println!("mempool pop: {}", s.elapsed().as_secs_f32());
-            s = std::time::Instant::now();
+            // println!("mempool pop: {}", s.elapsed().as_secs_f32());
+            // s = std::time::Instant::now();
         }
 
         if failed_tx_count > 0 {
@@ -641,12 +641,12 @@ impl App {
         debug!(mempool_len, "finished executing transactions from mempool");
         self.metrics.set_transactions_in_mempool_total(mempool_len);
 
-        println!(
-            "EXECUTED TX: {} txs, {} actions, {}s",
-            execution_results.len(),
-            execution_results.len() * 2886,
-            s.elapsed().as_secs_f32()
-        );
+        // println!(
+        //     "EXECUTED TX: {} txs, {} actions, {}s",
+        //     execution_results.len(),
+        //     execution_results.len() * 2886,
+        //     s.elapsed().as_secs_f32()
+        // );
         self.execution_results = Some(execution_results);
         Ok((validated_txs, included_signed_txs))
     }
@@ -923,7 +923,7 @@ impl App {
                 .collect(),
             deposits,
         )
-        .unwrap();
+            .unwrap();
         // .context("failed to convert block info and data to SequencerBlock")?;
         state_tx.put_sequencer_block(sequencer_block).unwrap();
         // .context("failed to write sequencer block to state")?;
@@ -1030,33 +1030,33 @@ impl App {
         &mut self,
         signed_tx: Arc<SignedTransaction>,
     ) -> anyhow::Result<Vec<Event>> {
-        let mut s = std::time::Instant::now();
+        // let mut s = std::time::Instant::now();
         crate::transaction::check_stateless(&signed_tx)
             .await
             .context("stateless check failed")?;
-        println!("IN EXEC: check_stateless: {}", s.elapsed().as_secs_f32());
-        s = std::time::Instant::now();
+        // println!("IN EXEC: check_stateless: {}", s.elapsed().as_secs_f32());
+        // s = std::time::Instant::now();
 
         let mut state_tx = self
             .state
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
         self.cache.new_delta_delta();
-        println!("IN EXEC: begin tx: {}", s.elapsed().as_secs_f32());
-        s = std::time::Instant::now();
+        // println!("IN EXEC: begin tx: {}", s.elapsed().as_secs_f32());
+        // s = std::time::Instant::now();
 
         crate::transaction::check_and_execute(&signed_tx, &mut state_tx, &self.cache)
             .await
             .unwrap();
-        println!("IN EXEC: check and exec: {}", s.elapsed().as_secs_f32());
-        s = std::time::Instant::now();
+        // println!("IN EXEC: check and exec: {}", s.elapsed().as_secs_f32());
+        // s = std::time::Instant::now();
         // .context("failed executing transaction")?;
         self.cache.apply_delta_delta();
-        println!("IN EXEC: apply_delta_delta: {}", s.elapsed().as_secs_f32());
-        s = std::time::Instant::now();
+        // println!("IN EXEC: apply_delta_delta: {}", s.elapsed().as_secs_f32());
+        // s = std::time::Instant::now();
 
         let ret = state_tx.apply().1;
-        println!("IN EXEC: state_tx.apply(): {}", s.elapsed().as_secs_f32());
+        // println!("IN EXEC: state_tx.apply(): {}", s.elapsed().as_secs_f32());
         Ok(ret)
     }
 

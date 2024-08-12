@@ -200,7 +200,7 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_account_balance<TAddress, TAsset>(
-        &mut self,
+        &self,
         address: TAddress,
         asset: TAsset,
         balance: u128,
@@ -227,7 +227,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     async fn increase_balance<TAddress, TAsset>(
-        &mut self,
+        &self,
         address: TAddress,
         asset: TAsset,
         amount: u128,
@@ -256,7 +256,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     async fn decrease_balance<TAddress, TAsset>(
-        &mut self,
+        &self,
         address: TAddress,
         asset: TAsset,
         amount: u128,
