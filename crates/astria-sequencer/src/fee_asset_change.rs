@@ -15,7 +15,8 @@ use crate::{
         StateWriteExt as _,
     },
     authority::StateReadExt as _,
-    transaction::StateReadExt as _,
+    immutable_data::ImmutableData,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait]
@@ -26,15 +27,13 @@ impl ActionHandler for FeeAssetChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
-        let authority_sudo_address = state
-            .get_sudo_address()
-            .await
-            .context("failed to get authority sudo address")?;
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        mut state: S,
+        immutable_data: &ImmutableData,
+        from: [u8; 20],
+    ) -> Result<()> {
+        let authority_sudo_address = state.get_sudo_address(immutable_data);
         ensure!(
             authority_sudo_address == from,
             "unauthorized address for fee asset change"

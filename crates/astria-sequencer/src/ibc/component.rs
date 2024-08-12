@@ -20,6 +20,7 @@ use crate::{
         host_interface::AstriaHost,
         state_ext::StateWriteExt,
     },
+    immutable_data::ImmutableData,
 };
 
 #[derive(Default)]
@@ -30,7 +31,11 @@ impl Component for IbcComponent {
     type AppState = astria_core::sequencer::GenesisState;
 
     #[instrument(name = "IbcComponent::init_chain", skip_all)]
-    async fn init_chain<S: StateWriteExt>(mut state: S, app_state: &Self::AppState) -> Result<()> {
+    async fn init_chain<S: StateWriteExt>(
+        mut state: S,
+        app_state: &Self::AppState,
+        _immutable_data: &ImmutableData,
+    ) -> Result<()> {
         Ibc::init_chain(
             &mut state,
             Some(&Content {

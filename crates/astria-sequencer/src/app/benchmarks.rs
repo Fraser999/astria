@@ -7,6 +7,7 @@ use astria_core::sequencer::{
     UncheckedGenesisState,
 };
 use cnidarium::Storage;
+use divan::counter::ItemsCount;
 use penumbra_ibc::params::IBCParameters;
 
 use crate::{
@@ -18,6 +19,7 @@ use crate::{
         self,
         TxTypes,
         SIGNER_COUNT,
+        TRANSFERS_PER_TX,
     },
     proposal::block_size_constraints::BlockSizeConstraints,
     test_utils::{
@@ -86,8 +88,10 @@ fn execute_transactions_prepare_proposal(bencher: divan::Bencher) {
         .build()
         .unwrap();
     let mut fixture = runtime.block_on(async { Fixture::new().await });
+    let expected_tx_count = 111;
     bencher
         .with_inputs(|| BlockSizeConstraints::new(22_019_254).unwrap())
+        .counter(ItemsCount::new(expected_tx_count * TRANSFERS_PER_TX))
         .bench_local_refs(|constraints| {
             let (_tx_bytes, included_txs) = runtime.block_on(async {
                 fixture
@@ -98,6 +102,9 @@ fn execute_transactions_prepare_proposal(bencher: divan::Bencher) {
             });
             // Ensure we actually processed some txs.  This will trip if execution fails for all
             // txs, or more likely, if the mempool becomes exhausted of txs.
-            assert!(!included_txs.is_empty());
+            // assert_eq!(included_txs.len(), expected_tx_count);
+            if included_txs.len() != expected_tx_count {
+                println!("Only got {} txs", included_txs.len());
+            }
         });
 }

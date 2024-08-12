@@ -19,7 +19,10 @@ use super::{
     StateWriteExt,
     ValidatorSet,
 };
-use crate::component::Component;
+use crate::{
+    component::Component,
+    immutable_data::ImmutableData,
+};
 
 #[derive(Default)]
 pub(crate) struct AuthorityComponent;
@@ -35,7 +38,11 @@ impl Component for AuthorityComponent {
     type AppState = AuthorityComponentAppState;
 
     #[instrument(name = "AuthorityComponent::init_chain", skip_all)]
-    async fn init_chain<S: StateWriteExt>(mut state: S, app_state: &Self::AppState) -> Result<()> {
+    async fn init_chain<S: StateWriteExt>(
+        mut state: S,
+        app_state: &Self::AppState,
+        _immutable_data: &ImmutableData,
+    ) -> Result<()> {
         // set sudo key and initial validator set
         state
             .put_sudo_address(app_state.authority_sudo_address)

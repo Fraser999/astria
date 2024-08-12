@@ -8,7 +8,10 @@ use tendermint::abci::request::{
 use tracing::instrument;
 
 use super::state_ext::StateWriteExt;
-use crate::component::Component;
+use crate::{
+    component::Component,
+    immutable_data::ImmutableData,
+};
 
 #[derive(Default)]
 pub(crate) struct BridgeComponent;
@@ -18,7 +21,11 @@ impl Component for BridgeComponent {
     type AppState = astria_core::sequencer::GenesisState;
 
     #[instrument(name = "BridgeComponent::init_chain", skip_all)]
-    async fn init_chain<S: StateWriteExt>(mut state: S, app_state: &Self::AppState) -> Result<()> {
+    async fn init_chain<S: StateWriteExt>(
+        mut state: S,
+        app_state: &Self::AppState,
+        _immutable_data: &ImmutableData,
+    ) -> Result<()> {
         state.put_init_bridge_account_base_fee(app_state.fees().init_bridge_account_base_fee);
         state.put_bridge_lock_byte_cost_multiplier(
             app_state.fees().bridge_lock_byte_cost_multiplier,

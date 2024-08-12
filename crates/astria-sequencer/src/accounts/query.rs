@@ -26,38 +26,40 @@ pub(crate) async fn balance_request(
     request: request::Query,
     params: Vec<(String, String)>,
 ) -> response::Query {
-    use astria_core::protocol::account::v1alpha1::BalanceResponse;
-    let (address, snapshot, height) = match preprocess_request(&storage, &request, &params).await {
+    // use astria_core::protocol::account::v1alpha1::BalanceResponse;
+    let (_address, _snapshot, _height) = match preprocess_request(&storage, &request, &params).await
+    {
         Ok(tup) => tup,
         Err(err_rsp) => return err_rsp,
     };
+    unreachable!()
 
-    let balances = match snapshot.get_account_balances(address).await {
-        Ok(balance) => balance,
-        Err(err) => {
-            return response::Query {
-                code: AbciErrorCode::INTERNAL_ERROR.into(),
-                info: AbciErrorCode::INTERNAL_ERROR.to_string(),
-                log: format!("failed getting balance for provided address: {err:?}"),
-                height,
-                ..response::Query::default()
-            };
-        }
-    };
-    let payload = BalanceResponse {
-        height: height.value(),
-        balances,
-    }
-    .into_raw()
-    .encode_to_vec()
-    .into();
-    response::Query {
-        code: 0.into(),
-        key: request.path.clone().into_bytes().into(),
-        value: payload,
-        height,
-        ..response::Query::default()
-    }
+    // let balances = match snapshot.get_account_balances(address).await {
+    //     Ok(balance) => balance,
+    //     Err(err) => {
+    //         return response::Query {
+    //             code: AbciErrorCode::INTERNAL_ERROR.into(),
+    //             info: AbciErrorCode::INTERNAL_ERROR.to_string(),
+    //             log: format!("failed getting balance for provided address: {err:?}"),
+    //             height,
+    //             ..response::Query::default()
+    //         };
+    //     }
+    // };
+    // let payload = BalanceResponse {
+    //     height: height.value(),
+    //     balances,
+    // }
+    // .into_raw()
+    // .encode_to_vec()
+    // .into();
+    // response::Query {
+    //     code: 0.into(),
+    //     key: request.path.clone().into_bytes().into(),
+    //     value: payload,
+    //     height,
+    //     ..response::Query::default()
+    // }
 }
 
 pub(crate) async fn nonce_request(

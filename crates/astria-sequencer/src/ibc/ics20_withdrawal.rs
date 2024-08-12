@@ -40,7 +40,8 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    immutable_data::ImmutableData,
+    // transaction::StateReadExt as _,
 };
 
 fn withdrawal_to_unchecked_ibc_packet(
@@ -115,29 +116,29 @@ impl ActionHandler for action::Ics20Withdrawal {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
-
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        mut state: S,
+        immutable_data: &ImmutableData,
+        from: [u8; 20],
+    ) -> Result<()> {
         state
-            .ensure_base_prefix(&self.return_address)
+            .ensure_base_prefix(&self.return_address, immutable_data)
             .await
             .context("failed to verify that return address address has permitted base prefix")?;
 
         if let Some(bridge_address) = &self.bridge_address {
-            state.ensure_base_prefix(bridge_address).await.context(
-                "failed to verify that bridge address address has permitted base prefix",
-            )?;
+            state
+                .ensure_base_prefix(bridge_address, immutable_data)
+                .await
+                .context(
+                    "failed to verify that bridge address address has permitted base prefix",
+                )?;
         }
 
         ics20_withdrawal_check_stateful_bridge_account(self, &state, from).await?;
 
-        let fee = state
-            .get_ics20_withdrawal_base_fee()
-            .await
-            .context("failed to get ics20 withdrawal base fee")?;
+        let fee = state.get_ics20_withdrawal_base_fee(immutable_data);
 
         let packet = {
             let packet = withdrawal_to_unchecked_ibc_packet(self);

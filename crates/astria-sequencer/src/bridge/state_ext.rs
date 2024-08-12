@@ -38,6 +38,7 @@ use tracing::{
 use crate::{
     accounts::AddressBytes,
     address,
+    immutable_data::ImmutableData,
 };
 
 /// Newtype wrapper to read and write a u128 from rocksdb.
@@ -143,8 +144,8 @@ fn last_transaction_hash_for_bridge_account_storage_key<T: AddressBytes>(address
             address
         }
     )
-    .as_bytes()
-    .to_vec()
+        .as_bytes()
+        .to_vec()
 }
 
 #[async_trait]
@@ -302,36 +303,39 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
     }
 
     #[instrument(skip_all)]
-    async fn get_init_bridge_account_base_fee(&self) -> Result<u128> {
-        let bytes = self
-            .get_raw(INIT_BRIDGE_ACCOUNT_BASE_FEE_STORAGE_KEY)
-            .await
-            .context("failed reading raw init bridge account base fee from state")?
-            .ok_or_else(|| anyhow!("init bridge account base fee not found"))?;
-        let Fee(fee) = Fee::try_from_slice(&bytes).context("invalid fee bytes")?;
-        Ok(fee)
+    fn get_init_bridge_account_base_fee(&self, immutable_data: &ImmutableData) -> u128 {
+        immutable_data.fees.init_bridge_account_base_fee
+        // let bytes = self
+        //     .get_raw(INIT_BRIDGE_ACCOUNT_BASE_FEE_STORAGE_KEY)
+        //     .await
+        //     .context("failed reading raw init bridge account base fee from state")?
+        //     .ok_or_else(|| anyhow!("init bridge account base fee not found"))?;
+        // let Fee(fee) = Fee::try_from_slice(&bytes).context("invalid fee bytes")?;
+        // Ok(fee)
     }
 
     #[instrument(skip_all)]
-    async fn get_bridge_lock_byte_cost_multiplier(&self) -> Result<u128> {
-        let bytes = self
-            .get_raw(BRIDGE_LOCK_BYTE_COST_MULTIPLIER_STORAGE_KEY)
-            .await
-            .context("failed reading raw bridge lock byte cost multiplier from state")?
-            .ok_or_else(|| anyhow!("bridge lock byte cost multiplier not found"))?;
-        let Fee(fee) = Fee::try_from_slice(&bytes).context("invalid fee bytes")?;
-        Ok(fee)
+    fn get_bridge_lock_byte_cost_multiplier(&self, immutable_data: &ImmutableData) -> u128 {
+        immutable_data.fees.bridge_lock_byte_cost_multiplier
+        // let bytes = self
+        //     .get_raw(BRIDGE_LOCK_BYTE_COST_MULTIPLIER_STORAGE_KEY)
+        //     .await
+        //     .context("failed reading raw bridge lock byte cost multiplier from state")?
+        //     .ok_or_else(|| anyhow!("bridge lock byte cost multiplier not found"))?;
+        // let Fee(fee) = Fee::try_from_slice(&bytes).context("invalid fee bytes")?;
+        // Ok(fee)
     }
 
     #[instrument(skip_all)]
-    async fn get_bridge_sudo_change_base_fee(&self) -> Result<u128> {
-        let bytes = self
-            .get_raw(BRIDGE_SUDO_CHANGE_FEE_STORAGE_KEY)
-            .await
-            .context("failed reading raw bridge sudo change fee from state")?
-            .ok_or_else(|| anyhow!("bridge sudo change fee not found"))?;
-        let Fee(fee) = Fee::try_from_slice(&bytes).context("invalid fee bytes")?;
-        Ok(fee)
+    fn get_bridge_sudo_change_base_fee(&self, immutable_data: &ImmutableData) -> u128 {
+        immutable_data.fees.bridge_sudo_change_fee
+        // let bytes = self
+        //     .get_raw(BRIDGE_SUDO_CHANGE_FEE_STORAGE_KEY)
+        //     .await
+        //     .context("failed reading raw bridge sudo change fee from state")?
+        //     .ok_or_else(|| anyhow!("bridge sudo change fee not found"))?;
+        // let Fee(fee) = Fee::try_from_slice(&bytes).context("invalid fee bytes")?;
+        // Ok(fee)
     }
 
     #[instrument(skip_all)]

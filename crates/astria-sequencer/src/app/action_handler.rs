@@ -1,5 +1,7 @@
 use cnidarium::StateWrite;
 
+use crate::immutable_data::ImmutableData;
+
 /// This trait is a verbatim copy of [`cnidarium_component::ActionHandler`].
 ///
 /// It's duplicated here because all actions are foreign types, forbidding
@@ -18,5 +20,10 @@ pub(crate) trait ActionHandler {
     // }
     // ```
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> anyhow::Result<()>;
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        state: S,
+        immutable_data: &ImmutableData,
+        from: [u8; 20],
+    ) -> anyhow::Result<()>;
 }

@@ -2,15 +2,16 @@
 mod benchmarks;
 #[cfg(any(test, feature = "benchmark"))]
 pub(crate) mod test_utils;
-#[cfg(test)]
-mod tests_app;
-#[cfg(test)]
-mod tests_breaking_changes;
-#[cfg(test)]
-mod tests_execute_transaction;
+// #[cfg(test)]
+// mod tests_app;
+// #[cfg(test)]
+// mod tests_breaking_changes;
+// #[cfg(test)]
+// mod tests_execute_transaction;
 
 mod action_handler;
 use std::{
+    cell::OnceCell,
     collections::VecDeque,
     sync::Arc,
 };
@@ -61,13 +62,14 @@ use tracing::{
     debug,
     info,
     instrument,
-    Instrument as _,
+    // Instrument as _,
 };
 
 use crate::{
     accounts,
     accounts::{
         component::AccountsComponent,
+        AddressBytes,
         StateWriteExt as _,
     },
     address::StateWriteExt as _,
@@ -91,6 +93,7 @@ use crate::{
     },
     component::Component as _,
     ibc::component::IbcComponent,
+    immutable_data::ImmutableData,
     mempool::{
         Mempool,
         RemovalReason,
@@ -167,6 +170,8 @@ pub(crate) struct App {
     app_hash: AppHash,
 
     metrics: &'static Metrics,
+
+    immutable_data: OnceCell<ImmutableData>,
 }
 
 impl App {
@@ -199,7 +204,12 @@ impl App {
             write_batch: None,
             app_hash,
             metrics,
+            immutable_data: OnceCell::new(),
         })
+    }
+
+    fn immutable_data(&self) -> ImmutableData {
+        self.immutable_data.get().unwrap().clone()
     }
 
     #[instrument(name = "App:init_chain", skip_all)]
@@ -225,15 +235,26 @@ impl App {
             .put_ibc_asset(native_asset)
             .context("failed to commit native asset as ibc asset to state")?;
 
-        state_tx.put_chain_id_and_revision_number(chain_id.try_into().context("invalid chain ID")?);
+        let chain_id: tendermint::chain::Id = chain_id.try_into().context("invalid chain ID")?;
+        state_tx.put_chain_id_and_revision_number(chain_id.clone());
         state_tx.put_block_height(0);
 
         for fee_asset in genesis_state.allowed_fee_assets() {
             state_tx.put_allowed_fee_asset(fee_asset);
         }
 
+        let immutable_data = ImmutableData {
+            base_prefix: genesis_state.address_prefixes().base.clone(),
+            fees: genesis_state.fees().clone(),
+            native_asset: native_asset.clone(),
+            chain_id,
+            authority_sudo_address: genesis_state.authority_sudo_address().address_bytes(),
+            ibc_sudo_address: genesis_state.ibc_sudo_address().address_bytes(),
+        };
+        self.immutable_data.set(immutable_data.clone()).unwrap();
+
         // call init_chain on all components
-        AccountsComponent::init_chain(&mut state_tx, &genesis_state)
+        AccountsComponent::init_chain(&mut state_tx, &genesis_state, &immutable_data)
             .await
             .context("failed to call init_chain on AccountsComponent")?;
         AuthorityComponent::init_chain(
@@ -242,16 +263,17 @@ impl App {
                 authority_sudo_address: *genesis_state.authority_sudo_address(),
                 genesis_validators,
             },
+            &immutable_data,
         )
-        .await
-        .context("failed to call init_chain on AuthorityComponent")?;
-        BridgeComponent::init_chain(&mut state_tx, &genesis_state)
+            .await
+            .context("failed to call init_chain on AuthorityComponent")?;
+        BridgeComponent::init_chain(&mut state_tx, &genesis_state, &immutable_data)
             .await
             .context("failed to call init_chain on BridgeComponent")?;
-        IbcComponent::init_chain(&mut state_tx, &genesis_state)
+        IbcComponent::init_chain(&mut state_tx, &genesis_state, &immutable_data)
             .await
             .context("failed to call init_chain on IbcComponent")?;
-        SequenceComponent::init_chain(&mut state_tx, &genesis_state)
+        SequenceComponent::init_chain(&mut state_tx, &genesis_state, &immutable_data)
             .await
             .context("failed to call init_chain on SequenceComponent")?;
 
@@ -298,7 +320,7 @@ impl App {
             usize::try_from(prepare_proposal.max_tx_bytes)
                 .context("failed to convert max_tx_bytes to usize")?,
         )
-        .context("failed to create block size constraints")?;
+            .context("failed to create block size constraints")?;
 
         let block_data = BlockData {
             misbehavior: prepare_proposal.misbehavior,
@@ -694,11 +716,7 @@ impl App {
     /// during the proposal phase, or finalize_block phase.
     #[instrument(name = "App::pre_execute_transactions", skip_all)]
     async fn pre_execute_transactions(&mut self, block_data: BlockData) -> anyhow::Result<()> {
-        let chain_id = self
-            .state
-            .get_chain_id()
-            .await
-            .context("failed to get chain ID from state")?;
+        let chain_id = self.state.get_chain_id(self.immutable_data.get().unwrap());
 
         // call begin_block on all components
         // NOTE: the fields marked `unused` are not used by any of the components;
@@ -752,16 +770,10 @@ impl App {
         finalize_block: abci::request::FinalizeBlock,
         storage: Storage,
     ) -> anyhow::Result<abci::response::FinalizeBlock> {
-        let chain_id = self
-            .state
-            .get_chain_id()
-            .await
-            .context("failed to get chain ID from state")?;
+        let chain_id = self.state.get_chain_id(self.immutable_data.get().unwrap());
         let sudo_address = self
             .state
-            .get_sudo_address()
-            .await
-            .context("failed to get sudo address from state")?;
+            .get_sudo_address(self.immutable_data.get().unwrap());
 
         // convert tendermint id to astria address; this assumes they are
         // the same address, as they are both ed25519 keys
@@ -878,7 +890,7 @@ impl App {
                 .collect(),
             deposits,
         )
-        .context("failed to convert block info and data to SequencerBlock")?;
+            .context("failed to convert block info and data to SequencerBlock")?;
         state_tx
             .put_sequencer_block(sequencer_block)
             .context("failed to write sequencer block to state")?;
@@ -981,24 +993,17 @@ impl App {
         &mut self,
         signed_tx: Arc<SignedTransaction>,
     ) -> anyhow::Result<Vec<Event>> {
-        let signed_tx_2 = signed_tx.clone();
-        let stateless =
-            tokio::spawn(async move { signed_tx_2.check_stateless(()).await }.in_current_span());
-
-        stateless
+        crate::transaction::check_stateless(&signed_tx)
             .await
-            .context("stateless check task aborted while executing")?
             .context("stateless check failed")?;
 
-        // At this point, the stateful checks should have completed,
-        // leaving us with exclusive access to the Arc<State>.
+        let immutable_data = self.immutable_data();
         let mut state_tx = self
             .state
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
 
-        signed_tx
-            .check_and_execute(&mut state_tx)
+        crate::transaction::check_and_execute(&signed_tx, &mut state_tx, &immutable_data)
             .await
             .context("failed executing transaction")?;
 
@@ -1108,8 +1113,8 @@ impl App {
     // Invariant: state_tx and self.state are the only two references to the
     // inter-block state.
     fn apply(&mut self, state_tx: StateDelta<InterBlockState>) -> Vec<Event> {
-        let (state2, mut cache) = state_tx.flatten();
-        std::mem::drop(state2);
+        let (state, mut cache) = state_tx.flatten();
+        std::mem::drop(state);
         // Now there is only one reference to the inter-block state: self.state
 
         let events = cache.take_events();

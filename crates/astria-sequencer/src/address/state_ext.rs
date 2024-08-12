@@ -1,5 +1,4 @@
 use anyhow::{
-    bail,
     ensure,
     Context as _,
     Result,
@@ -12,17 +11,24 @@ use cnidarium::{
 };
 use tracing::instrument;
 
+use crate::immutable_data::ImmutableData;
+
 fn base_prefix_key() -> &'static str {
     "prefixes/base"
 }
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    async fn ensure_base_prefix(&self, address: &Address) -> anyhow::Result<()> {
-        let prefix = self
-            .get_base_prefix()
-            .await
-            .context("failed to read base prefix from state")?;
+    async fn ensure_base_prefix(
+        &self,
+        address: &Address,
+        immutable_data: &ImmutableData,
+    ) -> anyhow::Result<()> {
+        // let prefix = self
+        //     .get_base_prefix()
+        //     .await
+        //     .context("failed to read base prefix from state")?;
+        let prefix = &immutable_data.base_prefix;
         ensure!(
             prefix == address.prefix(),
             "address has prefix `{}` but only `{prefix}` is permitted",
@@ -45,14 +51,15 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_base_prefix(&self) -> Result<String> {
-        let Some(bytes) = self
-            .get_raw(base_prefix_key())
-            .await
-            .context("failed reading address base prefix")?
-        else {
-            bail!("no base prefix found");
-        };
-        String::from_utf8(bytes).context("prefix retrieved from storage is not valid utf8")
+        panic!();
+        // let Some(bytes) = self
+        //     .get_raw(base_prefix_key())
+        //     .await
+        //     .context("failed reading address base prefix")?
+        // else {
+        //     bail!("no base prefix found");
+        // };
+        // String::from_utf8(bytes).context("prefix retrieved from storage is not valid utf8")
     }
 }
 

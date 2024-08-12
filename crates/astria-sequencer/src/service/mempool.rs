@@ -1,5 +1,6 @@
 use std::{
     pin::Pin,
+    str::FromStr,
     task::{
         Context,
         Poll,
@@ -10,10 +11,12 @@ use std::{
 use anyhow::Context as _;
 use astria_core::{
     generated::protocol::transaction::v1alpha1 as raw,
+    primitive::v1::asset,
     protocol::{
         abci::AbciErrorCode,
         transaction::v1alpha1::SignedTransaction,
     },
+    sequencer::Fees,
 };
 use cnidarium::Storage;
 use futures::{
@@ -38,7 +41,8 @@ use tracing::{
 use crate::{
     accounts,
     address,
-    app::ActionHandler as _,
+    // app::ActionHandler as _,
+    immutable_data::ImmutableData,
     mempool::{
         Mempool as AppMempool,
         RemovalReason,
@@ -169,7 +173,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_parsing.saturating_duration_since(start_parsing),
     );
 
-    if let Err(e) = signed_tx.check_stateless(()).await {
+    if let Err(e) = crate::transaction::check_stateless(&signed_tx).await {
         mempool.remove(tx_hash).await;
         metrics.increment_check_tx_removed_failed_stateless();
         return response::CheckTx {
@@ -201,22 +205,38 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_check_nonce.saturating_duration_since(finished_check_stateless),
     );
 
-    if let Err(e) = transaction::check_chain_id_mempool(&signed_tx, &state).await {
-        mempool.remove(tx_hash).await;
-        return response::CheckTx {
-            code: AbciErrorCode::INVALID_CHAIN_ID.into(),
-            info: "failed verifying chain id".into(),
-            log: e.to_string(),
-            ..response::CheckTx::default()
-        };
-    }
-
+    // if let Err(e) = transaction::check_chain_id_mempool(&signed_tx, &state).await {
+    //     mempool.remove(tx_hash).await;
+    //     return response::CheckTx {
+    //         code: AbciErrorCode::INVALID_CHAIN_ID.into(),
+    //         info: "failed verifying chain id".into(),
+    //         log: e.to_string(),
+    //         ..response::CheckTx::default()
+    //     };
+    // }
+    //
     let finished_check_chain_id = Instant::now();
     metrics.record_check_tx_duration_seconds_check_chain_id(
         finished_check_chain_id.saturating_duration_since(finished_check_nonce),
     );
 
-    if let Err(e) = transaction::check_balance_mempool(&signed_tx, &state).await {
+    let immutable_data = ImmutableData {
+        base_prefix: "1".to_string(),
+        fees: Fees {
+            transfer_base_fee: 0,
+            sequence_base_fee: 0,
+            sequence_byte_cost_multiplier: 0,
+            init_bridge_account_base_fee: 0,
+            bridge_lock_byte_cost_multiplier: 0,
+            bridge_sudo_change_fee: 0,
+            ics20_withdrawal_base_fee: 0,
+        },
+        native_asset: asset::TracePrefixed::from_str("f").unwrap(),
+        chain_id: tendermint::chain::Id::from_str("s").unwrap(),
+        authority_sudo_address: [0; 20],
+        ibc_sudo_address: [0; 20],
+    };
+    if let Err(e) = transaction::check_balance_mempool(&signed_tx, &state, &immutable_data).await {
         mempool.remove(tx_hash).await;
         metrics.increment_check_tx_removed_account_balance();
         return response::CheckTx {

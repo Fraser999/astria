@@ -1,9 +1,13 @@
+use std::str::FromStr;
+
 use astria_core::{
     generated::protocol::transaction::v1alpha1::UnsignedTransaction as RawUnsignedTransaction,
+    primitive::v1::asset,
     protocol::{
         abci::AbciErrorCode,
         transaction::v1alpha1::UnsignedTransaction,
     },
+    sequencer::Fees,
 };
 use cnidarium::Storage;
 use prost::Message as _;
@@ -14,6 +18,7 @@ use tendermint::abci::{
 
 use crate::{
     assets::StateReadExt as _,
+    immutable_data::ImmutableData,
     state_ext::StateReadExt as _,
     transaction::checks::get_fees_for_transaction,
 };
@@ -44,7 +49,23 @@ pub(crate) async fn transaction_fee_request(
         }
     };
 
-    let fees_with_ibc_denoms = match get_fees_for_transaction(&tx, &snapshot).await {
+    let immutable_data = ImmutableData {
+        base_prefix: "2".to_string(),
+        fees: Fees {
+            transfer_base_fee: 0,
+            sequence_base_fee: 0,
+            sequence_byte_cost_multiplier: 0,
+            init_bridge_account_base_fee: 0,
+            bridge_lock_byte_cost_multiplier: 0,
+            bridge_sudo_change_fee: 0,
+            ics20_withdrawal_base_fee: 0,
+        },
+        native_asset: asset::TracePrefixed::from_str("f").unwrap(),
+        chain_id: tendermint::chain::Id::from_str("s").unwrap(),
+        authority_sudo_address: [0; 20],
+        ibc_sudo_address: [0; 20],
+    };
+    let fees_with_ibc_denoms = match get_fees_for_transaction(&tx, &snapshot, &immutable_data) {
         Ok(fees) => fees,
         Err(err) => {
             return response::Query {

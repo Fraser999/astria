@@ -13,6 +13,7 @@ pub mod config;
 pub(crate) mod fee_asset_change;
 pub(crate) mod grpc;
 pub(crate) mod ibc;
+pub(crate) mod immutable_data;
 mod mempool;
 pub(crate) mod metrics;
 pub(crate) mod proposal;

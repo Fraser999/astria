@@ -19,8 +19,9 @@ use crate::{
         StateReadExt,
         StateWriteExt,
     },
+    immutable_data::ImmutableData,
     sequence,
-    transaction::StateReadExt as _,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait::async_trait]
@@ -37,12 +38,12 @@ impl ActionHandler for SequenceAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
-
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        mut state: S,
+        immutable_data: &ImmutableData,
+        from: [u8; 20],
+    ) -> Result<()> {
         ensure!(
             state
                 .is_allowed_fee_asset(&self.fee_asset)
@@ -55,9 +56,7 @@ impl ActionHandler for SequenceAction {
             .get_account_balance(from, &self.fee_asset)
             .await
             .context("failed getting `from` account balance for fee payment")?;
-        let fee = calculate_fee_from_state(&self.data, &state)
-            .await
-            .context("calculated fee overflows u128")?;
+        let fee = calculate_fee_from_state(&self.data, &state, immutable_data)?;
         ensure!(curr_balance >= fee, "insufficient funds");
 
         state
@@ -73,18 +72,13 @@ impl ActionHandler for SequenceAction {
 }
 
 /// Calculates the fee for a sequence `Action` based on the length of the `data`.
-pub(crate) async fn calculate_fee_from_state<S: sequence::StateReadExt>(
+pub(crate) fn calculate_fee_from_state<S: sequence::StateReadExt>(
     data: &[u8],
     state: &S,
+    immutable_data: &ImmutableData,
 ) -> Result<u128> {
-    let base_fee = state
-        .get_sequence_action_base_fee()
-        .await
-        .context("failed to get base fee")?;
-    let fee_per_byte = state
-        .get_sequence_action_byte_cost_multiplier()
-        .await
-        .context("failed to get fee per byte")?;
+    let base_fee = state.get_sequence_action_base_fee(immutable_data);
+    let fee_per_byte = state.get_sequence_action_byte_cost_multiplier(immutable_data);
     calculate_fee(data, fee_per_byte, base_fee).context("calculated fee overflows u128")
 }
 

@@ -22,7 +22,8 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    immutable_data::ImmutableData,
+    // transaction::StateReadExt as _,
 };
 
 #[async_trait::async_trait]
@@ -33,20 +34,21 @@ impl ActionHandler for InitBridgeAccountAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(
+        &self,
+        mut state: S,
+        immutable_data: &ImmutableData,
+        from: [u8; 20],
+    ) -> Result<()> {
         if let Some(withdrawer_address) = &self.withdrawer_address {
             state
-                .ensure_base_prefix(withdrawer_address)
+                .ensure_base_prefix(withdrawer_address, immutable_data)
                 .await
                 .context("failed check for base prefix of withdrawer address")?;
         }
         if let Some(sudo_address) = &self.sudo_address {
             state
-                .ensure_base_prefix(sudo_address)
+                .ensure_base_prefix(sudo_address, immutable_data)
                 .await
                 .context("failed check for base prefix of sudo address")?;
         }
@@ -56,10 +58,7 @@ impl ActionHandler for InitBridgeAccountAction {
             "invalid fee asset",
         );
 
-        let fee = state
-            .get_init_bridge_account_base_fee()
-            .await
-            .context("failed to get base fee for initializing bridge account")?;
+        let fee = state.get_init_bridge_account_base_fee(immutable_data);
 
         // this prevents the address from being registered as a bridge account
         // if it's been previously initialized as a bridge account.

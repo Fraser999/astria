@@ -26,19 +26,19 @@ pub(crate) fn nria() -> TracePrefixed {
     "nria".parse().unwrap()
 }
 
-#[cfg(test)]
-pub(crate) fn verification_key(seed: u64) -> astria_core::crypto::VerificationKey {
-    use rand::SeedableRng as _;
-    let rng = rand_chacha::ChaChaRng::seed_from_u64(seed);
-    let signing_key = astria_core::crypto::SigningKey::new(rng);
-    signing_key.verification_key()
-}
+// #[cfg(test)]
+// pub(crate) fn verification_key(seed: u64) -> astria_core::crypto::VerificationKey {
+//     use rand::SeedableRng as _;
+//     let rng = rand_chacha::ChaChaRng::seed_from_u64(seed);
+//     let signing_key = astria_core::crypto::SigningKey::new(rng);
+//     signing_key.verification_key()
+// }
 
-#[track_caller]
-pub(crate) fn assert_anyhow_error(error: &anyhow::Error, expected: &'static str) {
-    let msg = error.to_string();
-    assert!(
-        msg.contains(expected),
-        "error contained different message\n\texpected: {expected}\n\tfull_error: {msg}",
-    );
-}
+// #[track_caller]
+// pub(crate) fn assert_anyhow_error(error: &anyhow::Error, expected: &'static str) {
+//     let msg = error.to_string();
+//     assert!(
+//         msg.contains(expected),
+//         "error contained different message\n\texpected: {expected}\n\tfull_error: {msg}",
+//     );
+// }

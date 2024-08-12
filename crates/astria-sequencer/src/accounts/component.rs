@@ -14,6 +14,7 @@ use crate::{
     accounts,
     assets,
     component::Component,
+    immutable_data::ImmutableData,
 };
 
 #[derive(Default)]
@@ -24,14 +25,15 @@ impl Component for AccountsComponent {
     type AppState = astria_core::sequencer::GenesisState;
 
     #[instrument(name = "AccountsComponent::init_chain", skip_all)]
-    async fn init_chain<S>(mut state: S, app_state: &Self::AppState) -> Result<()>
+    async fn init_chain<S>(
+        mut state: S,
+        app_state: &Self::AppState,
+        immutable_data: &ImmutableData,
+    ) -> Result<()>
     where
         S: accounts::StateWriteExt + assets::StateReadExt,
     {
-        let native_asset = state
-            .get_native_asset()
-            .await
-            .context("failed to read native asset from state")?;
+        let native_asset = state.get_native_asset(immutable_data);
         for account in app_state.accounts() {
             state
                 .put_account_balance(account.address, &native_asset, account.balance)
