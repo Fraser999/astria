@@ -80,8 +80,8 @@ impl ActionHandler for BridgeUnlockAction {
             fee_asset: self.fee_asset.clone(),
         };
 
-        check_transfer(&transfer_action, bridge_address, &state, immutable_data).await?;
-        execute_transfer(&transfer_action, bridge_address, state, immutable_data).await?;
+        check_transfer(&transfer_action, &state, immutable_data).await?;
+        execute_transfer(&transfer_action, bridge_address, &state, immutable_data).await?;
 
         Ok(())
     }

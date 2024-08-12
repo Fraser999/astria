@@ -40,7 +40,7 @@ impl ActionHandler for SequenceAction {
 
     async fn check_and_execute<S: StateWrite>(
         &self,
-        mut state: S,
+        state: S,
         immutable_data: &ImmutableData,
         from: [u8; 20],
     ) -> Result<()> {

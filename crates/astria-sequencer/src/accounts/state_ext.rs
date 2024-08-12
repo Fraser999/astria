@@ -180,7 +180,7 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
     fn put_account_balance<TAddress, TAsset>(
-        &mut self,
+        &self,
         address: TAddress,
         asset: TAsset,
         balance: u128,
@@ -195,7 +195,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     }
 
     #[instrument(skip_all)]
-    fn put_account_nonce<T: AddressBytes>(&mut self, address: T, nonce: u32) -> Result<()> {
+    fn put_account_nonce<T: AddressBytes>(&self, address: T, nonce: u32) -> Result<()> {
         let bytes = borsh::to_vec(&Nonce(nonce)).context("failed to serialize nonce")?;
         self.put_raw(nonce_storage_key(address), bytes);
         Ok(())
@@ -203,7 +203,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     async fn increase_balance<TAddress, TAsset>(
-        &mut self,
+        &self,
         address: TAddress,
         asset: TAsset,
         amount: u128,
@@ -230,7 +230,7 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     #[instrument(skip_all)]
     async fn decrease_balance<TAddress, TAsset>(
-        &mut self,
+        &self,
         address: TAddress,
         asset: TAsset,
         amount: u128,

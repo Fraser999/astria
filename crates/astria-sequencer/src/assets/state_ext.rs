@@ -200,7 +200,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     /// Adds `amount` to the block fees for `asset`.
     #[instrument(skip_all)]
     async fn get_and_increase_block_fees<TAsset>(
-        &mut self,
+        &self,
         asset: TAsset,
         amount: u128,
         action_type: String,

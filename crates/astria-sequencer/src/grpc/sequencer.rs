@@ -143,7 +143,7 @@ impl SequencerService for SequencerServer {
                 .get_rollup_data(&block_hash, &rollup_id)
                 .await
                 .map_err(|e| {
-                    Status::internal(format!("failed to get rollup data from storage: {e}",))
+                    Status::internal(format!("failed to get rollup data from storage: {e}", ))
                 })?;
             rollup_transactions.push(rollup_data.into_raw());
         }
@@ -231,7 +231,7 @@ mod test {
             height,
             ..Default::default()
         }
-        .make()
+            .make()
     }
 
     #[tokio::test]
@@ -284,7 +284,7 @@ mod test {
 
         let storage = cnidarium::TempStorage::new().await.unwrap();
         let mempool = Mempool::new();
-        let mut state_tx = StateDelta::new(storage.latest_snapshot());
+        let state_tx = StateDelta::new(storage.latest_snapshot());
         let alice = get_alice_signing_key();
         let alice_address = astria_address(&alice.address_bytes());
         state_tx.put_account_nonce(alice_address, 99).unwrap();

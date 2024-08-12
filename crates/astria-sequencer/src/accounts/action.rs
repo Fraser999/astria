@@ -13,7 +13,6 @@ use cnidarium::{
     StateWrite,
 };
 
-use super::AddressBytes;
 use crate::{
     accounts::{
         StateReadExt as _,
@@ -56,16 +55,17 @@ impl ActionHandler for TransferAction {
                 }
                 Ok(())
             },
-            check_transfer(self, from, &state, immutable_data),
+            check_transfer(self, &state, immutable_data),
+            execute_transfer(self, from, &state, immutable_data),
         )?;
-        execute_transfer(self, from, state, immutable_data).await
+        Ok(())
     }
 }
 
 pub(crate) async fn execute_transfer<S: StateWrite>(
     action: &TransferAction,
     from: [u8; ADDRESS_LEN],
-    mut state: S,
+    state: &S,
     immutable_data: &ImmutableData,
 ) -> anyhow::Result<()> {
     let fee = state.get_transfer_base_fee(immutable_data);
@@ -112,16 +112,11 @@ pub(crate) async fn execute_transfer<S: StateWrite>(
     Ok(())
 }
 
-pub(crate) async fn check_transfer<S, TAddress>(
+pub(crate) async fn check_transfer<S: StateRead>(
     action: &TransferAction,
-    _from: TAddress,
     state: &S,
     immutable_data: &ImmutableData,
-) -> Result<()>
-where
-    S: StateRead,
-    TAddress: AddressBytes,
-{
+) -> Result<()> {
     tokio::try_join!(
         state.ensure_base_prefix(&action.to, immutable_data),
         async {
