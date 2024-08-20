@@ -1,17 +1,25 @@
 use anyhow::{
-    bail,
     Context as _,
     Result,
 };
 use async_trait::async_trait;
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 use tendermint::Time;
 use tracing::instrument;
 
+use crate::storage::{
+    BlockHeight,
+    BlockTimestamp,
+    ChainId,
+    RevisionNumber,
+    StateRead,
+    StateWrite,
+    StorageVersion,
+};
+
+const CHAIN_ID_KEY: &str = "chain_id";
 const REVISION_NUMBER_KEY: &str = "revision_number";
+const BLOCK_HEIGHT_KEY: &str = "block_height";
+const BLOCK_TIMESTAMP_KEY: &str = "block_timestamp";
 
 fn storage_version_by_height_key(height: u64) -> Vec<u8> {
     format!("storage_version/{height}").into()
@@ -21,83 +29,55 @@ fn storage_version_by_height_key(height: u64) -> Vec<u8> {
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_chain_id(&self) -> Result<tendermint::chain::Id> {
-        let Some(bytes) = self
-            .get_raw("chain_id")
-            .await
-            .context("failed to read raw chain_id from state")?
-        else {
-            bail!("chain id not found in state");
-        };
-
-        Ok(String::from_utf8(bytes)
-            .context("failed to parse chain id from raw bytes")?
-            .try_into()
-            .expect("only valid chain ids should be stored in the state"))
+        tendermint::chain::Id::try_from(
+            self.get::<_, ChainId>(CHAIN_ID_KEY)
+                .await
+                .transpose()
+                .context("chain id not found in state")?
+                .context("failed to read chain_id from state")?
+                .0,
+        )
+        .context("invalid chain id from state")
     }
 
     #[instrument(skip_all)]
     async fn get_revision_number(&self) -> Result<u64> {
-        let Some(bytes) = self
-            .get_raw(REVISION_NUMBER_KEY)
+        Ok(self
+            .get::<_, RevisionNumber>(REVISION_NUMBER_KEY)
             .await
-            .context("failed to read raw revision number from state")?
-        else {
-            bail!("revision number not found in state");
-        };
-
-        let bytes = TryInto::<[u8; 8]>::try_into(bytes).map_err(|b| {
-            anyhow::anyhow!(
-                "expected 8 revision number bytes but got {}; this is a bug",
-                b.len()
-            )
-        })?;
-
-        Ok(u64::from_be_bytes(bytes))
+            .context("failed to read revision number from state")?
+            .context("revision number not found in state")?
+            .0)
     }
 
     #[instrument(skip_all)]
     async fn get_block_height(&self) -> Result<u64> {
-        let Some(bytes) = self
-            .get_raw("block_height")
+        Ok(self
+            .get::<_, BlockHeight>(BLOCK_HEIGHT_KEY)
             .await
-            .context("failed to read raw block_height from state")?
-        else {
-            bail!("block height not found state");
-        };
-        let Ok(bytes): Result<[u8; 8], _> = bytes.try_into() else {
-            bail!("failed turning raw block height bytes into u64; not 8 bytes?");
-        };
-        Ok(u64::from_be_bytes(bytes))
+            .context("failed to read block_height from state")?
+            .context("block height not found in state")?
+            .0)
     }
 
     #[instrument(skip_all)]
     async fn get_block_timestamp(&self) -> Result<Time> {
-        let Some(bytes) = self
-            .get_raw("block_timestamp")
+        Ok(self
+            .get::<_, BlockTimestamp>(BLOCK_TIMESTAMP_KEY)
             .await
-            .context("failed to read raw block_timestamp from state")?
-        else {
-            bail!("block timestamp not found");
-        };
-        // no extra allocations in the happy path (meaning the bytes are utf8)
-        Time::parse_from_rfc3339(&String::from_utf8_lossy(&bytes))
-            .context("failed to parse timestamp from raw timestamp bytes")
+            .context("failed to read block_timestamp from state")?
+            .context("block timestamp not found")?
+            .0)
     }
 
     #[instrument(skip_all)]
     async fn get_storage_version_by_height(&self, height: u64) -> Result<u64> {
-        let key = storage_version_by_height_key(height);
-        let Some(bytes) = self
-            .nonverifiable_get_raw(&key)
+        Ok(self
+            .nonverifiable_get::<_, StorageVersion>(storage_version_by_height_key(height))
             .await
-            .context("failed to read raw storage_version from state")?
-        else {
-            bail!("storage version not found");
-        };
-        let Ok(bytes): Result<[u8; 8], _> = bytes.try_into() else {
-            bail!("failed turning raw storage version bytes into u64; not 8 bytes?");
-        };
-        Ok(u64::from_be_bytes(bytes))
+            .context("failed to read storage_version from state")?
+            .context("storage version not found")?
+            .0)
     }
 }
 
@@ -106,35 +86,27 @@ impl<T: StateRead> StateReadExt for T {}
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all)]
-    fn put_chain_id_and_revision_number(&mut self, chain_id: tendermint::chain::Id) {
+    fn put_chain_id_and_revision_number(&self, chain_id: tendermint::chain::Id) {
         let revision_number = revision_number_from_chain_id(chain_id.as_str());
-        self.put_raw("chain_id".into(), chain_id.as_bytes().to_vec());
-        self.put_revision_number(revision_number);
+        self.put(CHAIN_ID_KEY, ChainId(chain_id.to_string()));
+        self.put(REVISION_NUMBER_KEY, RevisionNumber(revision_number));
     }
 
     #[instrument(skip_all)]
-    fn put_revision_number(&mut self, revision_number: u64) {
-        self.put_raw(
-            REVISION_NUMBER_KEY.into(),
-            revision_number.to_be_bytes().to_vec(),
-        );
+    fn put_block_height(&self, height: u64) {
+        self.put(BLOCK_HEIGHT_KEY, BlockHeight(height));
     }
 
     #[instrument(skip_all)]
-    fn put_block_height(&mut self, height: u64) {
-        self.put_raw("block_height".into(), height.to_be_bytes().to_vec());
+    fn put_block_timestamp(&self, timestamp: Time) {
+        self.put(BLOCK_TIMESTAMP_KEY, BlockTimestamp(timestamp));
     }
 
     #[instrument(skip_all)]
-    fn put_block_timestamp(&mut self, timestamp: Time) {
-        self.put_raw("block_timestamp".into(), timestamp.to_rfc3339().into());
-    }
-
-    #[instrument(skip_all)]
-    fn put_storage_version_by_height(&mut self, height: u64, version: u64) {
-        self.nonverifiable_put_raw(
+    fn put_storage_version_by_height(&self, height: u64, version: u64) {
+        self.nonverifiable_put(
             storage_version_by_height_key(height),
-            version.to_be_bytes().to_vec(),
+            StorageVersion(version),
         );
     }
 }
@@ -160,7 +132,6 @@ fn revision_number_from_chain_id(chain_id: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use cnidarium::StateDelta;
     use tendermint::Time;
 
     use super::{
@@ -168,6 +139,7 @@ mod tests {
         StateReadExt as _,
         StateWriteExt as _,
     };
+    use crate::storage::Storage;
 
     #[test]
     fn revision_number_from_chain_id_regex() {
@@ -192,9 +164,8 @@ mod tests {
 
     #[tokio::test]
     async fn put_chain_id_and_revision_number() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // doesn't exist at first
         state
@@ -268,9 +239,8 @@ mod tests {
 
     #[tokio::test]
     async fn block_height() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // doesn't exist at first
         state
@@ -305,9 +275,8 @@ mod tests {
 
     #[tokio::test]
     async fn block_timestamp() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // doesn't exist at first
         state
@@ -342,9 +311,8 @@ mod tests {
 
     #[tokio::test]
     async fn storage_version() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // doesn't exist at first
         let block_height_orig = 0;

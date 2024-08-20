@@ -1,9 +1,8 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use async_trait::async_trait;
-use cnidarium::StateWrite;
 use tendermint::abci;
+
+use crate::storage::StateWrite;
 
 /// A component of the Sequencer application.
 /// Based off Penumbra's [`Component`], but with modifications.
@@ -31,7 +30,7 @@ pub(crate) trait Component {
     /// implementor MUST ensure that any clones of the `Arc` are dropped before
     /// it returns, so that `state.get_mut().is_some()` on completion.
     async fn begin_block<S: StateWrite + 'static>(
-        state: &mut Arc<S>,
+        state: &S,
         begin_block: &abci::request::BeginBlock,
     ) -> Result<()>;
 
@@ -50,7 +49,7 @@ pub(crate) trait Component {
     /// implementor MUST ensure that any clones of the `Arc` are dropped before
     /// it returns, so that `state.get_mut().is_some()` on completion.
     async fn end_block<S: StateWrite + 'static>(
-        state: &mut Arc<S>,
+        state: &S,
         end_block: &abci::request::EndBlock,
     ) -> Result<()>;
 }

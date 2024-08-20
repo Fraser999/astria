@@ -10,6 +10,10 @@ use astria_core::{
     primitive::v1::ADDRESS_LEN,
     protocol::transaction::v1alpha1::action::ValidatorUpdate,
 };
+use borsh::{
+    BorshDeserialize,
+    BorshSerialize,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -19,7 +23,19 @@ pub(crate) use state_ext::{
     StateWriteExt,
 };
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    BorshSerialize,
+    BorshDeserialize,
+)]
 pub(crate) struct ValidatorSetKey(#[serde(with = "::hex::serde")] [u8; ADDRESS_LEN]);
 
 impl From<[u8; ADDRESS_LEN]> for ValidatorSetKey {
@@ -37,7 +53,9 @@ impl From<VerificationKey> for ValidatorSetKey {
 /// Newtype wrapper to read and write a validator set or set of updates from rocksdb.
 ///
 /// Contains a map of hex-encoded public keys to validator updates.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default, BorshSerialize, BorshDeserialize,
+)]
 pub(crate) struct ValidatorSet(BTreeMap<ValidatorSetKey, ValidatorUpdate>);
 
 impl ValidatorSet {

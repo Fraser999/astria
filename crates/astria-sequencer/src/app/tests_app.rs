@@ -17,7 +17,6 @@ use astria_core::{
     sequencer::Account,
     sequencerblock::v1alpha1::block::Deposit,
 };
-use cnidarium::StateDelta;
 use prost::{
     bytes::Bytes,
     Message as _,
@@ -50,10 +49,7 @@ use crate::{
         StateWriteExt as _,
         ValidatorSet,
     },
-    bridge::{
-        StateReadExt as _,
-        StateWriteExt as _,
-    },
+    bridge::StateWriteExt as _,
     proposal::commitment::generate_rollup_datas_commitment,
     state_ext::StateReadExt as _,
     test_utils::{
@@ -276,7 +272,7 @@ async fn app_transfer_block_fees_to_sudo() {
             .unwrap(),
         transfer_fee,
     );
-    assert_eq!(app.state.get_block_fees().await.unwrap().len(), 0);
+    assert_eq!(app.state.block_fees().len(), 0);
 }
 
 #[tokio::test]
@@ -294,12 +290,10 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     let bridge_address = astria_address(&[99; 20]);
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-    state_tx
-        .put_bridge_account_ibc_asset(bridge_address, nria())
-        .unwrap();
-    app.apply(state_tx);
+    let state_tx = app.state.new_delta();
+    state_tx.put_bridge_account_rollup_id(bridge_address, rollup_id);
+    state_tx.put_bridge_account_ibc_asset(bridge_address, nria());
+    state_tx.apply();
     app.prepare_commit(storage.clone()).await.unwrap();
     app.commit(storage.clone()).await;
 
@@ -355,7 +349,7 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     app.commit(storage).await;
 
     // ensure deposits are cleared at the end of the block
-    let deposit_events = app.state.get_deposit_events(&rollup_id).await.unwrap();
+    let deposit_events = app.state.bridge_deposits();
     assert_eq!(deposit_events.len(), 0);
 
     let block = app.state.get_sequencer_block_by_height(1).await.unwrap();
@@ -384,12 +378,10 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
     let asset = nria().clone();
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-    state_tx
-        .put_bridge_account_ibc_asset(bridge_address, &asset)
-        .unwrap();
-    app.apply(state_tx);
+    let state_tx = app.state.new_delta();
+    state_tx.put_bridge_account_rollup_id(bridge_address, rollup_id);
+    state_tx.put_bridge_account_ibc_asset(bridge_address, &asset);
+    state_tx.apply();
     app.prepare_commit(storage.clone()).await.unwrap();
     app.commit(storage.clone()).await;
 
@@ -717,11 +709,9 @@ async fn app_end_block_validator_updates() {
         },
     ];
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx
-        .put_validator_updates(ValidatorSet::new_from_updates(validator_updates.clone()))
-        .unwrap();
-    app.apply(state_tx);
+    let state_tx = app.state.new_delta();
+    state_tx.put_validator_updates(ValidatorSet::new_from_updates(validator_updates.clone()));
+    state_tx.apply();
 
     let resp = app.end_block(1, proposer_address).await.unwrap();
     // we only assert length here as the ordering of the updates is not guaranteed

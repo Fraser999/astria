@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    sync::Arc,
+};
 
 use astria_core::{
     generated::sequencerblock::v1alpha1::{
@@ -11,9 +14,10 @@ use astria_core::{
         SequencerBlock as RawSequencerBlock,
     },
     primitive::v1::RollupId,
+    sequencerblock::v1alpha1::block::SequencerBlockParts,
+    Protobuf,
 };
 use bytes::Bytes;
-use cnidarium::Storage;
 use tonic::{
     Request,
     Response,
@@ -29,6 +33,7 @@ use crate::{
     api_state_ext::StateReadExt as _,
     mempool::Mempool,
     state_ext::StateReadExt as _,
+    storage::Storage,
 };
 
 pub(crate) struct SequencerServer {
@@ -100,54 +105,30 @@ impl SequencerService for SequencerServer {
             .rollup_ids
             .iter()
             .map(RollupId::try_from_raw)
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<HashSet<_>, _>>()
             .map_err(|e| Status::invalid_argument(format!("invalid rollup ID: {e}")))?;
 
-        let block_hash = snapshot
-            .get_block_hash_by_height(request.height)
-            .await
-            .map_err(|e| Status::internal(format!("failed to get block hash from storage: {e}")))?;
-
-        let header = snapshot
-            .get_sequencer_block_header_by_hash(&block_hash)
-            .await
-            .map_err(|e| {
-                Status::internal(format!(
-                    "failed to get sequencer block header from storage: {e}"
-                ))
-            })?;
-
-        let (rollup_transactions_proof, rollup_ids_proof) = snapshot
-            .get_block_proofs_by_block_hash(&block_hash)
+        let SequencerBlockParts {
+            block_hash,
+            header,
+            rollup_transactions,
+            rollup_transactions_proof,
+            rollup_ids_proof,
+        } = snapshot
+            .get_sequencer_block_by_height(request.height)
             .await
             .map_err(|e| {
-                Status::internal(format!(
-                    "failed to get sequencer block proofs from storage: {e}"
-                ))
-            })?;
+                Status::internal(format!("failed to get sequencer block from storage: {e}"))
+            })?
+            .into_parts();
 
-        let mut all_rollup_ids = snapshot
-            .get_rollup_ids_by_block_hash(&block_hash)
-            .await
-            .map_err(|e| Status::internal(format!("failed to get rollup ids from storage: {e}")))?;
+        let mut all_rollup_ids = rollup_transactions.keys().copied().collect::<Vec<_>>();
         all_rollup_ids.sort_unstable();
 
-        // Filter out the Rollup Ids requested which have no data before grabbing
-        // so as to not error because the block had no data for the requested rollup
-        let rollup_ids: Vec<RollupId> = rollup_ids
+        let rollup_transactions = rollup_transactions
             .into_iter()
-            .filter(|id| all_rollup_ids.binary_search(id).is_ok())
+            .filter_map(|(rollup_id, tx)| rollup_ids.contains(&rollup_id).then_some(tx.into_raw()))
             .collect();
-        let mut rollup_transactions = Vec::with_capacity(rollup_ids.len());
-        for rollup_id in rollup_ids {
-            let rollup_data = snapshot
-                .get_rollup_data(&block_hash, &rollup_id)
-                .await
-                .map_err(|e| {
-                    Status::internal(format!("failed to get rollup data from storage: {e}",))
-                })?;
-            rollup_transactions.push(rollup_data.into_raw());
-        }
 
         let all_rollup_ids = all_rollup_ids
             .into_iter()
@@ -158,8 +139,8 @@ impl SequencerService for SequencerServer {
             block_hash: Bytes::copy_from_slice(&block_hash),
             header: Some(header.into_raw()),
             rollup_transactions,
-            rollup_transactions_proof: rollup_transactions_proof.into(),
-            rollup_ids_proof: rollup_ids_proof.into(),
+            rollup_transactions_proof: Some(rollup_transactions_proof.into_raw()),
+            rollup_ids_proof: Some(rollup_ids_proof.into_raw()),
             all_rollup_ids,
         };
 
@@ -220,13 +201,13 @@ mod test {
         protocol::test_utils::ConfigureSequencerBlock,
         sequencerblock::v1alpha1::SequencerBlock,
     };
-    use cnidarium::StateDelta;
 
     use super::*;
     use crate::{
         api_state_ext::StateWriteExt as _,
         app::test_utils::get_alice_signing_key,
         state_ext::StateWriteExt,
+        storage::Storage,
         test_utils::astria_address,
     };
 
@@ -241,9 +222,9 @@ mod test {
     #[tokio::test]
     async fn test_get_sequencer_block() {
         let block = make_test_sequencer_block(1);
-        let storage = cnidarium::TempStorage::new().await.unwrap();
         let mempool = Mempool::new();
-        let mut state_tx = StateDelta::new(storage.latest_snapshot());
+        let storage = Storage::new_temp().await;
+        let state_tx = storage.new_delta_of_latest_snapshot();
         state_tx.put_block_height(1);
         state_tx.put_sequencer_block(block.clone()).unwrap();
         storage.commit(state_tx).await.unwrap();
@@ -259,7 +240,7 @@ mod test {
 
     #[tokio::test]
     async fn get_pending_nonce_in_mempool() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let mempool = Mempool::new();
 
         let alice = get_alice_signing_key();
@@ -293,12 +274,12 @@ mod test {
     async fn get_pending_nonce_in_storage() {
         use crate::accounts::StateWriteExt as _;
 
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
+        let state_tx = storage.new_delta_of_latest_snapshot();
         let mempool = Mempool::new();
-        let mut state_tx = StateDelta::new(storage.latest_snapshot());
         let alice = get_alice_signing_key();
         let alice_address = astria_address(&alice.address_bytes());
-        state_tx.put_account_nonce(alice_address, 99).unwrap();
+        state_tx.put_account_nonce(alice_address, 99);
         storage.commit(state_tx).await.unwrap();
 
         let server = Arc::new(SequencerServer::new(storage.clone(), mempool));

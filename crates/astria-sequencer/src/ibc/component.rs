@@ -1,9 +1,4 @@
-use std::sync::Arc;
-
-use anyhow::{
-    Context,
-    Result,
-};
+use anyhow::Result;
 use penumbra_ibc::{
     component::Ibc,
     genesis::Content,
@@ -55,7 +50,7 @@ impl Component for IbcComponent {
 
     #[instrument(name = "IbcComponent::begin_block", skip_all)]
     async fn begin_block<S: StateWriteExt + 'static>(
-        state: &mut Arc<S>,
+        state: &S,
         begin_block: &BeginBlock,
     ) -> Result<()> {
         Ibc::begin_block::<AstriaHost, S>(state, begin_block).await;
@@ -64,10 +59,10 @@ impl Component for IbcComponent {
 
     #[instrument(name = "IbcComponent::end_block", skip_all)]
     async fn end_block<S: StateWriteExt + 'static>(
-        state: &mut Arc<S>,
-        end_block: &EndBlock,
+        _state: &S,
+        _end_block: &EndBlock,
     ) -> Result<()> {
-        Ibc::end_block(state, end_block).await;
+        // Ibc::end_block(state, end_block).await;
         Ok(())
     }
 }

@@ -11,10 +11,6 @@ use astria_core::{
     },
     protocol::transaction::v1alpha1::action,
 };
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 use ibc_types::core::channel::{
     ChannelId,
     PortId,
@@ -38,7 +34,10 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    storage::{
+        StateRead,
+        StateWrite,
+    },
 };
 
 fn withdrawal_to_unchecked_ibc_packet(
@@ -110,12 +109,7 @@ impl ActionHandler for action::Ics20Withdrawal {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
-
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.return_address)
             .await
@@ -189,13 +183,13 @@ fn is_source(source_port: &PortId, source_channel: &ChannelId, asset: &Denom) ->
 #[cfg(test)]
 mod tests {
     use astria_core::primitive::v1::RollupId;
-    use cnidarium::StateDelta;
     use ibc_types::core::client::Height;
 
     use super::*;
     use crate::{
         address::StateWriteExt as _,
         bridge::StateWriteExt as _,
+        storage::Storage,
         test_utils::{
             assert_anyhow_error,
             astria_address,
@@ -205,9 +199,8 @@ mod tests {
 
     #[tokio::test]
     async fn sender_is_withdrawal_target_if_bridge_is_not_set_and_sender_is_not_bridge() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         let denom = "test".parse::<Denom>().unwrap();
         let from = [1u8; 20];
@@ -234,9 +227,8 @@ mod tests {
 
     #[tokio::test]
     async fn sender_is_withdrawal_target_if_bridge_is_unset_but_sender_is_bridge() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
@@ -244,7 +236,7 @@ mod tests {
         let bridge_address = [1u8; 20];
         state.put_bridge_account_rollup_id(
             bridge_address,
-            &RollupId::from_unhashed_bytes("testrollupid"),
+            RollupId::from_unhashed_bytes("testrollupid"),
         );
         state.put_bridge_account_withdrawer_address(bridge_address, bridge_address);
 
@@ -297,7 +289,7 @@ mod tests {
         }
 
         async fn run_test(action: action::Ics20Withdrawal) {
-            let storage = cnidarium::TempStorage::new().await.unwrap();
+            let storage = Storage::new_temp().await;
             let snapshot = storage.latest_snapshot();
             let mut state = StateDelta::new(snapshot);
 
@@ -338,9 +330,8 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_sender_is_withdrawal_target() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
@@ -349,7 +340,7 @@ mod tests {
         let withdrawer_address = [2u8; 20];
         state.put_bridge_account_rollup_id(
             bridge_address,
-            &RollupId::from_unhashed_bytes("testrollupid"),
+            RollupId::from_unhashed_bytes("testrollupid"),
         );
         state.put_bridge_account_withdrawer_address(bridge_address, withdrawer_address);
 
@@ -377,9 +368,8 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_is_rejected_as_withdrawal_target_because_it_has_no_withdrawer_address_set() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // sender is not the withdrawer address, so must fail
         let not_bridge_address = [1u8; 20];

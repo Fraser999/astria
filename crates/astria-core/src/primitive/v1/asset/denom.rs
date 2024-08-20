@@ -179,6 +179,10 @@ impl From<ParseTracePrefixedError> for ParseDenomError {
 
 /// An ICS20 denomination of the form `[port/channel/..]base_denom`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct TracePrefixed {
     trace: TraceSegments,
     base_denom: String,
@@ -300,6 +304,10 @@ impl TracePrefixed {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 struct TraceSegments {
     inner: VecDeque<PortAndChannel>,
 }
@@ -366,6 +374,10 @@ impl FromStr for TraceSegments {
     }
 }
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct PortAndChannel {
     port: String,
     channel: String,
@@ -504,7 +516,11 @@ enum ParseIbcPrefixedErrorKind {
 }
 
 /// An ICS20 denomination of the form `ibc/<hex-sha256-hash>`.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct IbcPrefixed {
     id: [u8; 32],
 }

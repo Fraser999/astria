@@ -6,7 +6,6 @@ use anyhow::{
 };
 use astria_core::protocol::transaction::v1alpha1::action::FeeAssetChangeAction;
 use async_trait::async_trait;
-use cnidarium::StateWrite;
 
 use crate::{
     app::ActionHandler,
@@ -15,7 +14,7 @@ use crate::{
         StateWriteExt as _,
     },
     authority::StateReadExt as _,
-    transaction::StateReadExt as _,
+    storage::StateWrite,
 };
 
 #[async_trait]
@@ -24,11 +23,7 @@ impl ActionHandler for FeeAssetChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         let authority_sudo_address = state
             .get_sudo_address()
             .await

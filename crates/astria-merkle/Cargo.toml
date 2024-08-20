@@ -8,6 +8,7 @@ repository = "https://github.com/astriaorg/astria"
 homepage = "https://astria.org"
 
 [dependencies]
+borsh = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 sha2 = { workspace = true }
 

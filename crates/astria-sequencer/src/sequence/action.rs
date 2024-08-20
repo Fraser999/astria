@@ -7,7 +7,6 @@ use astria_core::{
     protocol::transaction::v1alpha1::action::SequenceAction,
     Protobuf as _,
 };
-use cnidarium::StateWrite;
 
 use crate::{
     accounts::{
@@ -20,7 +19,7 @@ use crate::{
         StateWriteExt,
     },
     sequence,
-    transaction::StateReadExt as _,
+    storage::StateWrite,
 };
 
 #[async_trait::async_trait]
@@ -35,12 +34,7 @@ impl ActionHandler for SequenceAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
-
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         ensure!(
             state
                 .is_allowed_fee_asset(&self.fee_asset)
@@ -60,7 +54,6 @@ impl ActionHandler for SequenceAction {
 
         state
             .get_and_increase_block_fees(&self.fee_asset, fee, Self::full_name())
-            .await
             .context("failed to add to block fees")?;
         state
             .decrease_balance(from, &self.fee_asset, fee)

@@ -7,10 +7,6 @@ use astria_core::{
     protocol::transaction::v1alpha1::action::TransferAction,
     Protobuf,
 };
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 
 use super::AddressBytes;
 use crate::{
@@ -25,7 +21,10 @@ use crate::{
         StateWriteExt as _,
     },
     bridge::StateReadExt as _,
-    transaction::StateReadExt as _,
+    storage::{
+        StateRead,
+        StateWrite,
+    },
 };
 
 #[async_trait::async_trait]
@@ -34,24 +33,22 @@ impl ActionHandler for TransferAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
-
-        ensure!(
-            state
-                .get_bridge_account_rollup_id(from)
-                .await
-                .context("failed to get bridge account rollup id")?
-                .is_none(),
-            "cannot transfer out of bridge account; BridgeUnlock must be used",
-        );
-
-        check_transfer(self, from, &state).await?;
-        execute_transfer(self, from, state).await?;
-
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+        tokio::try_join!(
+            async {
+                ensure!(
+                    state
+                        .get_bridge_account_rollup_id(from)
+                        .await
+                        .context("failed to get bridge account rollup id")?
+                        .is_none(),
+                    "cannot transfer out of bridge account; BridgeUnlock must be used",
+                );
+                Ok(())
+            },
+            check_transfer(self, from, &state),
+            execute_transfer(self, from, state),
+        )?;
         Ok(())
     }
 }
@@ -59,8 +56,8 @@ impl ActionHandler for TransferAction {
 pub(crate) async fn execute_transfer<S, TAddress>(
     action: &TransferAction,
     from: TAddress,
-    mut state: S,
-) -> anyhow::Result<()>
+    state: S,
+) -> Result<()>
 where
     S: StateWrite,
     TAddress: AddressBytes,
@@ -73,7 +70,6 @@ where
         .context("failed to get transfer base fee")?;
     state
         .get_and_increase_block_fees(&action.fee_asset, fee, TransferAction::full_name())
-        .await
         .context("failed to add to block fees")?;
 
     // if fee payment asset is same asset as transfer asset, deduct fee
@@ -116,8 +112,8 @@ where
 
 pub(crate) async fn check_transfer<S, TAddress>(
     action: &TransferAction,
-    from: TAddress,
-    state: &S,
+    _from: TAddress,
+    state: S,
 ) -> Result<()>
 where
     S: StateRead,
@@ -134,46 +130,46 @@ where
         "invalid fee asset",
     );
 
-    let fee = state
-        .get_transfer_base_fee()
-        .await
-        .context("failed to get transfer base fee")?;
-    let transfer_asset = action.asset.clone();
-
-    let from_fee_balance = state
-        .get_account_balance(&from, &action.fee_asset)
-        .await
-        .context("failed getting `from` account balance for fee payment")?;
-
-    // if fee asset is same as transfer asset, ensure accounts has enough funds
-    // to cover both the fee and the amount transferred
-    if action.fee_asset.to_ibc_prefixed() == transfer_asset.to_ibc_prefixed() {
-        let payment_amount = action
-            .amount
-            .checked_add(fee)
-            .context("transfer amount plus fee overflowed")?;
-
-        ensure!(
-            from_fee_balance >= payment_amount,
-            "insufficient funds for transfer and fee payment"
-        );
-    } else {
-        // otherwise, check the fee asset account has enough to cover the fees,
-        // and the transfer asset account has enough to cover the transfer
-        ensure!(
-            from_fee_balance >= fee,
-            "insufficient funds for fee payment"
-        );
-
-        let from_transfer_balance = state
-            .get_account_balance(from, transfer_asset)
-            .await
-            .context("failed to get account balance in transfer check")?;
-        ensure!(
-            from_transfer_balance >= action.amount,
-            "insufficient funds for transfer"
-        );
-    }
+    // let fee = state
+    //     .get_transfer_base_fee()
+    //     .await
+    //     .context("failed to get transfer base fee")?;
+    // let transfer_asset = action.asset.clone();
+    //
+    // let from_fee_balance = state
+    //     .get_account_balance(&from, &action.fee_asset)
+    //     .await
+    //     .context("failed getting `from` account balance for fee payment")?;
+    //
+    // // if fee asset is same as transfer asset, ensure accounts has enough funds
+    // // to cover both the fee and the amount transferred
+    // if action.fee_asset.to_ibc_prefixed() == transfer_asset.to_ibc_prefixed() {
+    //     let payment_amount = action
+    //         .amount
+    //         .checked_add(fee)
+    //         .context("transfer amount plus fee overflowed")?;
+    //
+    //     ensure!(
+    //         from_fee_balance >= payment_amount,
+    //         "insufficient funds for transfer and fee payment"
+    //     );
+    // } else {
+    //     // otherwise, check the fee asset account has enough to cover the fees,
+    //     // and the transfer asset account has enough to cover the transfer
+    //     ensure!(
+    //         from_fee_balance >= fee,
+    //         "insufficient funds for fee payment"
+    //     );
+    //
+    //     let from_transfer_balance = state
+    //         .get_account_balance(from, transfer_asset)
+    //         .await
+    //         .context("failed to get account balance in transfer check")?;
+    //     ensure!(
+    //         from_transfer_balance >= action.amount,
+    //         "insufficient funds for transfer"
+    //     );
+    // }
 
     Ok(())
 }

@@ -569,6 +569,10 @@ enum ValidatorUpdateErrorKind {
         try_from = "crate::generated::astria_vendored::tendermint::abci::ValidatorUpdate",
     )
 )]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct ValidatorUpdate {
     pub power: u32,
     pub verification_key: crate::crypto::VerificationKey,

@@ -28,16 +28,12 @@ use astria_core::{
     sequencerblock::v1alpha1::block::Deposit,
 };
 use bytes::Bytes;
-use cnidarium::StateDelta;
 use penumbra_ibc::params::IBCParameters;
 use tendermint::abci::EventAttributeIndexExt as _;
 
 use crate::{
     accounts::StateReadExt as _,
-    app::{
-        test_utils::*,
-        ActionHandler as _,
-    },
+    app::test_utils::*,
     assets::StateReadExt as _,
     authority::StateReadExt as _,
     bridge::{
@@ -46,12 +42,14 @@ use crate::{
     },
     ibc::StateReadExt as _,
     sequence::calculate_fee_from_state,
+    storage::StateWrite,
     test_utils::{
         astria_address,
         astria_address_from_hex_string,
         nria,
     },
     transaction::{
+        self,
         InvalidChainId,
         InvalidNonce,
     },
@@ -105,7 +103,7 @@ async fn app_execute_transaction_transfer() {
                 asset: crate::test_utils::nria().into(),
                 fee_asset: crate::test_utils::nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -142,11 +140,9 @@ async fn app_execute_transaction_transfer_not_native_token() {
     let alice = get_alice_signing_key();
     let alice_address = astria_address(&alice.address_bytes());
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx
-        .put_account_balance(alice_address, &test_asset(), value)
-        .unwrap();
-    app.apply(state_tx);
+    let state_tx = app.state.new_delta();
+    state_tx.put_account_balance(alice_address, test_asset(), value);
+    state_tx.apply();
 
     // transfer funds from Alice to Bob; use native token for fee payment
     let bob_address = astria_address_from_hex_string(BOB_ADDRESS);
@@ -162,7 +158,7 @@ async fn app_execute_transaction_transfer_not_native_token() {
                 asset: test_asset(),
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -227,7 +223,7 @@ async fn app_execute_transaction_transfer_balance_too_low_for_fee() {
                 asset: nria().into(),
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -246,10 +242,10 @@ async fn app_execute_transaction_sequence() {
     use crate::sequence::StateWriteExt as _;
 
     let mut app = initialize_app(None, vec![]).await;
-    let mut state_tx = StateDelta::new(app.state.clone());
+    let state_tx = app.state.new_delta();
     state_tx.put_sequence_action_base_fee(0);
     state_tx.put_sequence_action_byte_cost_multiplier(1);
-    app.apply(state_tx);
+    state_tx.apply();
 
     let alice = get_alice_signing_key();
     let alice_address = astria_address(&alice.address_bytes());
@@ -267,7 +263,7 @@ async fn app_execute_transaction_sequence() {
                 data,
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -302,7 +298,7 @@ async fn app_execute_transaction_invalid_fee_asset() {
                 data,
                 fee_asset: test_asset(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -372,8 +368,8 @@ async fn app_execute_transaction_ibc_relayer_change_deletion() {
         ibc_relayer_addresses: vec![alice_address],
         ..unchecked_genesis_state()
     }
-    .try_into()
-    .unwrap();
+        .try_into()
+        .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -399,8 +395,8 @@ async fn app_execute_transaction_ibc_relayer_change_invalid() {
         ibc_relayer_addresses: vec![alice_address],
         ..unchecked_genesis_state()
     }
-    .try_into()
-    .unwrap();
+        .try_into()
+        .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -453,8 +449,8 @@ async fn app_execute_transaction_sudo_address_change_error() {
         ibc_sudo_address: astria_address(&[0u8; 20]),
         ..unchecked_genesis_state()
     }
-    .try_into()
-    .unwrap();
+        .try_into()
+        .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -514,8 +510,8 @@ async fn app_execute_transaction_fee_asset_change_removal() {
         allowed_fee_assets: vec![nria().into(), test_asset()],
         ..unchecked_genesis_state()
     }
-    .try_into()
-    .unwrap();
+        .try_into()
+        .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -571,10 +567,10 @@ async fn app_execute_transaction_init_bridge_account_ok() {
     let alice_address = astria_address(&alice.address_bytes());
 
     let mut app = initialize_app(None, vec![]).await;
-    let mut state_tx = StateDelta::new(app.state.clone());
+    let state_tx = app.state.new_delta();
     let fee = 12; // arbitrary
     state_tx.put_init_bridge_account_base_fee(fee);
-    app.apply(state_tx);
+    state_tx.apply();
 
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
     let action = InitBridgeAccountAction {
@@ -680,12 +676,10 @@ async fn app_execute_transaction_bridge_lock_action_ok() {
     let bridge_address = astria_address(&[99; 20]);
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-    state_tx
-        .put_bridge_account_ibc_asset(bridge_address, nria())
-        .unwrap();
-    app.apply(state_tx);
+    let state_tx = app.state.new_delta();
+    state_tx.put_bridge_account_rollup_id(bridge_address, rollup_id);
+    state_tx.put_bridge_account_ibc_asset(bridge_address, nria());
+    state_tx.apply();
 
     let amount = 100;
     let action = BridgeLockAction {
@@ -729,11 +723,11 @@ async fn app_execute_transaction_bridge_lock_action_ok() {
 
     let fee = transfer_fee
         + app
-            .state
-            .get_bridge_lock_byte_cost_multiplier()
-            .await
-            .unwrap()
-            * crate::bridge::get_deposit_byte_len(&expected_deposit);
+        .state
+        .get_bridge_lock_byte_cost_multiplier()
+        .await
+        .unwrap()
+        * crate::bridge::get_deposit_byte_len(&expected_deposit);
     assert_eq!(
         app.state
             .get_account_balance(alice_address, nria())
@@ -749,9 +743,10 @@ async fn app_execute_transaction_bridge_lock_action_ok() {
         bridge_before_balance + amount
     );
 
-    let deposits = app.state.get_deposit_events(&rollup_id).await.unwrap();
+    let deposits = app.state.bridge_deposits();
     assert_eq!(deposits.len(), 1);
-    assert_eq!(deposits[0], expected_deposit);
+    assert_eq!(deposits.get(&rollup_id).unwrap().len(), 1);
+    assert_eq!(deposits.get(&rollup_id).unwrap()[0], expected_deposit);
 }
 
 #[tokio::test]
@@ -804,7 +799,7 @@ async fn app_execute_transaction_invalid_nonce() {
                 data,
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -851,7 +846,7 @@ async fn app_execute_transaction_invalid_chain_id() {
                 data,
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 
@@ -909,10 +904,10 @@ async fn app_stateful_check_fails_insufficient_total_balance() {
                 asset: nria().into(),
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     }
-    .into_signed(&alice);
+        .into_signed(&alice);
 
     // make transfer
     app.execute_transaction(Arc::new(signed_tx)).await.unwrap();
@@ -929,20 +924,19 @@ async fn app_stateful_check_fails_insufficient_total_balance() {
                 data: data.clone(),
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
             SequenceAction {
                 rollup_id: RollupId::from_unhashed_bytes(b"testchainid"),
                 data: data.clone(),
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     }
-    .into_signed(&keypair);
+        .into_signed(&keypair);
 
     // try double, see fails stateful check
-    let res = signed_tx_fail
-        .check_and_execute(Arc::get_mut(&mut app.state).unwrap())
+    let res = transaction::check_and_execute(&signed_tx_fail, &app.state)
         .await
         .unwrap_err()
         .root_cause()
@@ -961,13 +955,12 @@ async fn app_stateful_check_fails_insufficient_total_balance() {
                 data,
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     }
-    .into_signed(&keypair);
+        .into_signed(&keypair);
 
-    signed_tx_pass
-        .check_and_execute(Arc::get_mut(&mut app.state).unwrap())
+    transaction::check_and_execute(&signed_tx_pass, &app.state)
         .await
         .expect("stateful check should pass since we transferred enough to cover fee");
 }
@@ -980,7 +973,7 @@ async fn app_execute_transaction_bridge_lock_unlock_action_ok() {
     let alice_address = astria_address(&alice.address_bytes());
 
     let mut app = initialize_app(None, vec![]).await;
-    let mut state_tx = StateDelta::new(app.state.clone());
+    let state_tx = app.state.new_delta();
 
     let bridge = get_bridge_signing_key();
     let bridge_address = astria_address(&bridge.address_bytes());
@@ -989,17 +982,13 @@ async fn app_execute_transaction_bridge_lock_unlock_action_ok() {
     // give bridge eoa funds so it can pay for the
     // unlock transfer action
     let transfer_fee = app.state.get_transfer_base_fee().await.unwrap();
-    state_tx
-        .put_account_balance(bridge_address, nria(), transfer_fee)
-        .unwrap();
+    state_tx.put_account_balance(bridge_address, nria(), transfer_fee);
 
     // create bridge account
-    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-    state_tx
-        .put_bridge_account_ibc_asset(bridge_address, nria())
-        .unwrap();
+    state_tx.put_bridge_account_rollup_id(bridge_address, rollup_id);
+    state_tx.put_bridge_account_ibc_asset(bridge_address, nria());
     state_tx.put_bridge_account_withdrawer_address(bridge_address, bridge_address);
-    app.apply(state_tx);
+    state_tx.apply();
 
     let amount = 100;
     let action = BridgeLockAction {
@@ -1073,7 +1062,7 @@ async fn transaction_execution_records_fee_event() {
                 asset: nria().into(),
                 fee_asset: nria().into(),
             }
-            .into(),
+                .into(),
         ],
     };
 

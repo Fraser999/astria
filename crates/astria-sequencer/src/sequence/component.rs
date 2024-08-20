@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use tendermint::abci::request::{
     BeginBlock,
@@ -18,7 +16,7 @@ impl Component for SequenceComponent {
     type AppState = astria_core::sequencer::GenesisState;
 
     #[instrument(name = "SequenceComponent::init_chain", skip_all)]
-    async fn init_chain<S: StateWriteExt>(mut state: S, app_state: &Self::AppState) -> Result<()> {
+    async fn init_chain<S: StateWriteExt>(state: S, app_state: &Self::AppState) -> Result<()> {
         state.put_sequence_action_base_fee(app_state.fees().sequence_base_fee);
         state.put_sequence_action_byte_cost_multiplier(
             app_state.fees().sequence_byte_cost_multiplier,
@@ -28,7 +26,7 @@ impl Component for SequenceComponent {
 
     #[instrument(name = "SequenceComponent::begin_block", skip_all)]
     async fn begin_block<S: StateWriteExt + 'static>(
-        _state: &mut Arc<S>,
+        _state: &S,
         _begin_block: &BeginBlock,
     ) -> Result<()> {
         Ok(())
@@ -36,7 +34,7 @@ impl Component for SequenceComponent {
 
     #[instrument(name = "SequenceComponent::end_block", skip_all)]
     async fn end_block<S: StateWriteExt + 'static>(
-        _state: &mut Arc<S>,
+        _state: &S,
         _end_block: &EndBlock,
     ) -> Result<()> {
         Ok(())

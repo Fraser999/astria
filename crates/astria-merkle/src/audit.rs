@@ -408,6 +408,10 @@ impl UncheckedProof {
 /// the Merkle tree from a leaf. This is also called the audit path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct Proof {
     pub(super) audit_path: Vec<u8>,
     pub(super) leaf_index: usize,

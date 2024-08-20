@@ -232,6 +232,21 @@ impl TryFrom<[u8; 32]> for VerificationKey {
     }
 }
 
+#[cfg(feature = "borsh")]
+impl borsh::BorshSerialize for VerificationKey {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.as_bytes().serialize(writer)
+    }
+}
+
+#[cfg(feature = "borsh")]
+impl borsh::BorshDeserialize for VerificationKey {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let bytes = <[u8; 32]>::deserialize_reader(reader)?;
+        Self::try_from(bytes).map_err(std::io::Error::other)
+    }
+}
+
 /// An Ed25519 signature.
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Signature(Ed25519Signature);

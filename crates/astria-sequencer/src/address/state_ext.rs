@@ -6,11 +6,13 @@ use anyhow::{
 };
 use astria_core::primitive::v1::Address;
 use async_trait::async_trait;
-use cnidarium::{
+use tracing::instrument;
+
+use crate::storage::{
+    BasePrefix,
     StateRead,
     StateWrite,
 };
-use tracing::instrument;
 
 fn base_prefix_key() -> &'static str {
     "prefixes/base"
@@ -45,14 +47,14 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_base_prefix(&self) -> Result<String> {
-        let Some(bytes) = self
-            .get_raw(base_prefix_key())
+        let Some(base_prefix) = self
+            .get::<_, BasePrefix>(base_prefix_key())
             .await
             .context("failed reading address base prefix")?
         else {
             bail!("no base prefix found");
         };
-        String::from_utf8(bytes).context("prefix retrieved from storage is not valid utf8")
+        Ok(base_prefix.0)
     }
 }
 
@@ -60,11 +62,10 @@ impl<T: ?Sized + StateRead> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
-    fn put_base_prefix(&mut self, prefix: &str) -> anyhow::Result<()> {
+    fn put_base_prefix(&self, prefix: &str) -> Result<()> {
         try_construct_dummy_address_from_prefix(prefix)
             .context("failed constructing a dummy address from the provided prefix")?;
-        self.put_raw(base_prefix_key().into(), prefix.into());
+        self.put(base_prefix_key(), BasePrefix(prefix.to_string()));
         Ok(())
     }
 }
@@ -85,18 +86,16 @@ fn try_construct_dummy_address_from_prefix(
 
 #[cfg(test)]
 mod test {
-    use cnidarium::StateDelta;
-
     use super::{
         StateReadExt as _,
         StateWriteExt as _,
     };
+    use crate::storage::Storage;
 
     #[tokio::test]
     async fn put_and_get_base_prefix() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         state.put_base_prefix("astria").unwrap();
         assert_eq!("astria", &state.get_base_prefix().await.unwrap());

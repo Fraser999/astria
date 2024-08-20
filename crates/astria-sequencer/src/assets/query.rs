@@ -6,7 +6,6 @@ use astria_core::{
         asset::v1alpha1::AllowedFeeAssetsResponse,
     },
 };
-use cnidarium::Storage;
 use hex::FromHex as _;
 use prost::Message as _;
 use tendermint::abci::{
@@ -18,6 +17,7 @@ use tendermint::abci::{
 use crate::{
     assets::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::Storage,
 };
 
 // Retrieve the full asset denomination given the asset ID.

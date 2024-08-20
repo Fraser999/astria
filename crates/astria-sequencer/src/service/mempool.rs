@@ -16,7 +16,6 @@ use astria_core::{
         transaction::v1alpha1::SignedTransaction,
     },
 };
-use cnidarium::Storage;
 use futures::{
     Future,
     FutureExt,
@@ -42,12 +41,12 @@ use tracing::{
 use crate::{
     accounts,
     address,
-    app::ActionHandler as _,
     mempool::{
         Mempool as AppMempool,
         RemovalReason,
     },
     metrics::Metrics,
+    storage::Storage,
     transaction,
 };
 
@@ -170,7 +169,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
         finished_parsing.saturating_duration_since(start_parsing),
     );
 
-    if let Err(e) = signed_tx.check_stateless().await {
+    if let Err(e) = transaction::check_stateless(&signed_tx).await {
         metrics.increment_check_tx_removed_failed_stateless();
         return response::CheckTx {
             code: Code::Err(AbciErrorCode::INVALID_PARAMETER.value()),

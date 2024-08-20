@@ -37,7 +37,6 @@ use astria_core::{
     },
     sequencerblock::v1alpha1::block::Deposit,
 };
-use cnidarium::StateDelta;
 use penumbra_ibc::params::IBCParameters;
 use prost::{
     bytes::Bytes,
@@ -106,12 +105,10 @@ async fn app_finalize_block_snapshot() {
     let bridge_address = astria_address(&[99; 20]);
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-    state_tx
-        .put_bridge_account_ibc_asset(bridge_address, nria())
-        .unwrap();
-    app.apply(state_tx);
+    let state_tx = app.state.new_delta();
+    state_tx.put_bridge_account_rollup_id(bridge_address, rollup_id);
+    state_tx.put_bridge_account_ibc_asset(bridge_address, nria());
+    state_tx.apply();
 
     // the state changes must be committed, as `finalize_block` will execute the
     // changes on the latest snapshot, not the app's `StateDelta`.

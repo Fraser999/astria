@@ -5,7 +5,6 @@ use anyhow::{
 };
 use astria_core::protocol::transaction::v1alpha1::action::IbcRelayerChangeAction;
 use async_trait::async_trait;
-use cnidarium::StateWrite;
 
 use crate::{
     address::StateReadExt as _,
@@ -14,7 +13,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    storage::StateWrite,
 };
 
 #[async_trait]
@@ -23,11 +22,7 @@ impl ActionHandler for IbcRelayerChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         match self {
             IbcRelayerChangeAction::Addition(addr) | IbcRelayerChangeAction::Removal(addr) => {
                 state.ensure_base_prefix(addr).await.context(

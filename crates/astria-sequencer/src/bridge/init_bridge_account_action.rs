@@ -8,7 +8,6 @@ use astria_core::{
     primitive::v1::Address,
     protocol::transaction::v1alpha1::action::InitBridgeAccountAction,
 };
-use cnidarium::StateWrite;
 
 use crate::{
     accounts::{
@@ -22,7 +21,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    storage::StateWrite,
 };
 
 #[async_trait::async_trait]
@@ -31,11 +30,7 @@ impl ActionHandler for InitBridgeAccountAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         if let Some(withdrawer_address) = &self.withdrawer_address {
             state
                 .ensure_base_prefix(withdrawer_address)
@@ -89,10 +84,8 @@ impl ActionHandler for InitBridgeAccountAction {
             "insufficient funds for bridge account initialization",
         );
 
-        state.put_bridge_account_rollup_id(from, &self.rollup_id);
-        state
-            .put_bridge_account_ibc_asset(from, &self.asset)
-            .context("failed to put asset ID")?;
+        state.put_bridge_account_rollup_id(from, self.rollup_id);
+        state.put_bridge_account_ibc_asset(from, &self.asset);
         state.put_bridge_account_sudo_address(from, self.sudo_address.map_or(from, Address::bytes));
         state.put_bridge_account_withdrawer_address(
             from,

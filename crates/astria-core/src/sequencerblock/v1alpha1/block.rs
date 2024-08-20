@@ -78,6 +78,10 @@ pub struct RollupTransactionsParts {
 
 /// The opaque transactions belonging to a rollup identified by its rollup ID.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct RollupTransactions {
     /// The 32 bytes identifying a rollup. Usually the sha256 hash of a plain rollup name.
     rollup_id: RollupId,
@@ -478,6 +482,47 @@ impl SequencerBlockHeader {
     }
 }
 
+#[cfg(feature = "borsh")]
+impl borsh::BorshSerialize for SequencerBlockHeader {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.chain_id.as_str().serialize(writer)?;
+        self.height.value().serialize(writer)?;
+        self.time.unix_timestamp_nanos().serialize(writer)?;
+        self.rollup_transactions_root.serialize(writer)?;
+        self.data_hash.serialize(writer)?;
+        self.proposer_address.as_bytes().serialize(writer)
+    }
+}
+
+#[cfg(feature = "borsh")]
+impl borsh::BorshDeserialize for SequencerBlockHeader {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let chain_id = tendermint::chain::Id::try_from(String::deserialize_reader(reader)?)
+            .map_err(std::io::Error::other)?;
+        let height = tendermint::block::Height::try_from(u64::deserialize_reader(reader)?)
+            .map_err(std::io::Error::other)?;
+        let nanos = i128::deserialize_reader(reader)?;
+        #[allow(clippy::cast_sign_loss)]
+        let time = Time::from_unix_timestamp(
+            i64::try_from(nanos / 1_000_000_000).unwrap(),
+            (nanos % 1_000_000_000) as u32,
+        )
+        .map_err(std::io::Error::other)?;
+        let rollup_transactions_root = <[u8; 32]>::deserialize_reader(reader)?;
+        let data_hash = <[u8; 32]>::deserialize_reader(reader)?;
+        let proposer_address = account::Id::try_from(Vec::<u8>::deserialize_reader(reader)?)
+            .map_err(std::io::Error::other)?;
+        Ok(SequencerBlockHeader {
+            chain_id,
+            height,
+            time,
+            rollup_transactions_root,
+            data_hash,
+            proposer_address,
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct SequencerBlockHeaderError(SequencerBlockHeaderErrorKind);
@@ -567,6 +612,39 @@ pub struct SequencerBlock {
     // `MTH(rollup_ids)` is the Merkle Tree Hash derived from the rollup IDs listed in
     // the rollup transactions.
     rollup_ids_proof: merkle::Proof,
+}
+
+#[cfg(feature = "borsh")]
+impl borsh::BorshSerialize for SequencerBlock {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.block_hash.serialize(writer)?;
+        self.header.serialize(writer)?;
+        self.rollup_transactions
+            .iter()
+            .collect::<Vec<_>>()
+            .serialize(writer)?;
+        self.rollup_transactions_proof.serialize(writer)?;
+        self.rollup_ids_proof.serialize(writer)
+    }
+}
+
+#[cfg(feature = "borsh")]
+impl borsh::BorshDeserialize for SequencerBlock {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let block_hash = <[u8; 32]>::deserialize_reader(reader)?;
+        let header = SequencerBlockHeader::deserialize_reader(reader)?;
+        let rollup_txs_as_vec = Vec::<(RollupId, RollupTransactions)>::deserialize_reader(reader)?;
+        let rollup_transactions = rollup_txs_as_vec.into_iter().collect();
+        let rollup_transactions_proof = merkle::Proof::deserialize_reader(reader)?;
+        let rollup_ids_proof = merkle::Proof::deserialize_reader(reader)?;
+        Ok(SequencerBlock {
+            block_hash,
+            header,
+            rollup_transactions,
+            rollup_transactions_proof,
+            rollup_ids_proof,
+        })
+    }
 }
 
 impl SequencerBlock {

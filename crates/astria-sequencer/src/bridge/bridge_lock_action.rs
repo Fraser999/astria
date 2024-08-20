@@ -10,7 +10,6 @@ use astria_core::{
     },
     sequencerblock::v1alpha1::block::Deposit,
 };
-use cnidarium::StateWrite;
 
 use crate::{
     accounts::{
@@ -23,11 +22,8 @@ use crate::{
     },
     address::StateReadExt as _,
     app::ActionHandler,
-    bridge::{
-        StateReadExt as _,
-        StateWriteExt as _,
-    },
-    transaction::StateReadExt as _,
+    bridge::StateReadExt as _,
+    storage::StateWrite,
 };
 
 #[async_trait::async_trait]
@@ -36,11 +32,7 @@ impl ActionHandler for BridgeLockAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.to)
             .await
@@ -99,7 +91,7 @@ impl ActionHandler for BridgeLockAction {
         // FIXME: This is a very roundabout way of paying for fees. IMO it would be
         // better to just duplicate this entire logic here so that we don't call out
         // to the transfer-action logic.
-        execute_transfer(&transfer_action, from, &mut state).await?;
+        execute_transfer(&transfer_action, from, &state).await?;
 
         let rollup_id = state
             .get_bridge_account_rollup_id(self.to)
@@ -131,10 +123,7 @@ impl ActionHandler for BridgeLockAction {
             .await
             .context("failed to deduct fee from account balance")?;
 
-        state
-            .put_deposit_event(deposit)
-            .await
-            .context("failed to put deposit event into state")?;
+        state.put_bridge_deposit(deposit);
         Ok(())
     }
 }
@@ -152,20 +141,17 @@ mod tests {
         asset,
         RollupId,
     };
-    use cnidarium::StateDelta;
 
     use super::*;
     use crate::{
-        address::StateWriteExt,
+        address::StateWriteExt as _,
         assets::StateWriteExt as _,
+        bridge::StateWriteExt as _,
+        storage::Storage,
         test_utils::{
             assert_anyhow_error,
             astria_address,
             ASTRIA_PREFIX,
-        },
-        transaction::{
-            StateWriteExt as _,
-            TransactionContext,
         },
     };
 
@@ -175,18 +161,14 @@ mod tests {
 
     #[tokio::test]
     async fn execute_fee_calc() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
         let transfer_fee = 12;
 
         let from_address = astria_address(&[2; 20]);
-        state.put_current_source(TransactionContext {
-            address_bytes: from_address.bytes(),
-        });
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
-        state.put_transfer_base_fee(transfer_fee).unwrap();
+        state.put_transfer_base_fee(transfer_fee);
         state.put_bridge_lock_byte_cost_multiplier(2);
 
         let bridge_address = astria_address(&[1; 20]);
@@ -200,18 +182,17 @@ mod tests {
         };
 
         let rollup_id = RollupId::from_unhashed_bytes(b"test_rollup_id");
-        state.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-        state
-            .put_bridge_account_ibc_asset(bridge_address, &asset)
-            .unwrap();
+        state.put_bridge_account_rollup_id(bridge_address, rollup_id);
+        state.put_bridge_account_ibc_asset(bridge_address, &asset);
         state.put_allowed_fee_asset(&asset);
 
         // not enough balance; should fail
-        state
-            .put_account_balance(from_address, &asset, 100 + transfer_fee)
-            .unwrap();
+        state.put_account_balance(from_address, &asset, 100 + transfer_fee);
         assert_anyhow_error(
-            &bridge_lock.check_and_execute(&mut state).await.unwrap_err(),
+            &bridge_lock
+                .check_and_execute(&state, [0; 20])
+                .await
+                .unwrap_err(),
             "insufficient funds for fee payment",
         );
 
@@ -224,9 +205,10 @@ mod tests {
                 asset.clone(),
                 "someaddress".to_string(),
             )) * 2;
-        state
-            .put_account_balance(from_address, &asset, 100 + expected_deposit_fee)
+        state.put_account_balance(from_address, &asset, 100 + expected_deposit_fee);
+        bridge_lock
+            .check_and_execute(&state, [0; 20])
+            .await
             .unwrap();
-        bridge_lock.check_and_execute(&mut state).await.unwrap();
     }
 }

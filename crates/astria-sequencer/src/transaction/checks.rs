@@ -18,7 +18,6 @@ use astria_core::{
         UnsignedTransaction,
     },
 };
-use cnidarium::StateRead;
 use tracing::instrument;
 
 use crate::{
@@ -27,6 +26,7 @@ use crate::{
     bridge::StateReadExt as _,
     ibc::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::StateRead,
 };
 
 #[instrument(skip_all)]
@@ -310,7 +310,6 @@ mod tests {
         },
     };
     use bytes::Bytes;
-    use cnidarium::StateDelta;
 
     use super::*;
     use crate::{
@@ -324,20 +323,20 @@ mod tests {
         bridge::StateWriteExt as _,
         ibc::StateWriteExt as _,
         sequence::StateWriteExt as _,
+        storage::Storage,
     };
 
     #[tokio::test]
     async fn check_balance_mempool_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state_tx = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state_tx = storage.new_delta_of_latest_snapshot();
 
         state_tx.put_base_prefix("astria").unwrap();
-        state_tx.put_native_asset(&crate::test_utils::nria());
-        state_tx.put_transfer_base_fee(12).unwrap();
+        state_tx.put_native_asset(crate::test_utils::nria());
+        state_tx.put_transfer_base_fee(12);
         state_tx.put_sequence_action_base_fee(0);
         state_tx.put_sequence_action_byte_cost_multiplier(1);
-        state_tx.put_ics20_withdrawal_base_fee(1).unwrap();
+        state_tx.put_ics20_withdrawal_base_fee(1);
         state_tx.put_init_bridge_account_base_fee(12);
         state_tx.put_bridge_lock_byte_cost_multiplier(1);
         state_tx.put_bridge_sudo_change_base_fee(24);
@@ -405,16 +404,15 @@ mod tests {
 
     #[tokio::test]
     async fn check_balance_mempool_insufficient_other_asset_balance() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state_tx = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state_tx = storage.new_delta_of_latest_snapshot();
 
         state_tx.put_base_prefix("nria").unwrap();
-        state_tx.put_native_asset(&crate::test_utils::nria());
-        state_tx.put_transfer_base_fee(12).unwrap();
+        state_tx.put_native_asset(crate::test_utils::nria());
+        state_tx.put_transfer_base_fee(12);
         state_tx.put_sequence_action_base_fee(0);
         state_tx.put_sequence_action_byte_cost_multiplier(1);
-        state_tx.put_ics20_withdrawal_base_fee(1).unwrap();
+        state_tx.put_ics20_withdrawal_base_fee(1);
         state_tx.put_init_bridge_account_base_fee(12);
         state_tx.put_bridge_lock_byte_cost_multiplier(1);
         state_tx.put_bridge_sudo_change_base_fee(24);

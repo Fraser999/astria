@@ -635,10 +635,7 @@ async fn execute_deposit<S: ibc::StateWriteExt>(
         denom.into(),
         destination_address,
     );
-    state
-        .put_deposit_event(deposit)
-        .await
-        .context("failed to put deposit event into state")?;
+    state.put_bridge_deposit(deposit);
 
     Ok(())
 }
@@ -690,7 +687,7 @@ mod test {
 
     #[tokio::test]
     async fn convert_denomination_if_ibc_prefixed_with_prefix() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -707,7 +704,7 @@ mod test {
 
     #[tokio::test]
     async fn convert_denomination_if_ibc_prefixed_without_prefix() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -721,7 +718,7 @@ mod test {
 
     #[tokio::test]
     async fn execute_ics20_transfer_to_user_account() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -757,7 +754,7 @@ mod test {
 
     #[tokio::test]
     async fn execute_ics20_transfer_to_bridge_account_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -805,16 +802,13 @@ mod test {
             );
         assert_eq!(balance, 100);
 
-        let deposit = state_tx
-            .get_block_deposits()
-            .await
-            .expect("a deposit should exist as a result of the transfer to a bridge account");
+        let deposit = state_tx.bridge_deposits();
         assert_eq!(deposit.len(), 1);
     }
 
     #[tokio::test]
     async fn execute_ics20_transfer_to_bridge_account_invalid_memo() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -852,7 +846,7 @@ mod test {
 
     #[tokio::test]
     async fn execute_ics20_transfer_to_bridge_account_invalid_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -890,7 +884,7 @@ mod test {
 
     #[tokio::test]
     async fn execute_ics20_transfer_to_user_account_is_source_not_refund() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -940,7 +934,7 @@ mod test {
 
     #[tokio::test]
     async fn execute_ics20_transfer_to_user_account_is_source_refund() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -990,7 +984,7 @@ mod test {
 
     #[tokio::test]
     async fn execute_rollup_withdrawal_refund_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1023,16 +1017,13 @@ mod test {
             .expect("rollup withdrawal refund should have updated funds in the bridge address");
         assert_eq!(balance, 100);
 
-        let deposit = state_tx
-            .get_block_deposits()
-            .await
-            .expect("a deposit should exist as a result of the rollup withdrawal refund");
+        let deposit = state_tx.bridge_deposits();
         assert_eq!(deposit.len(), 1);
     }
 
     #[tokio::test]
     async fn execute_ics20_transfer_rollup_withdrawal_refund() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1082,10 +1073,7 @@ mod test {
             );
         assert_eq!(balance, 100);
 
-        let deposits = state_tx
-            .get_block_deposits()
-            .await
-            .expect("a deposit should exist as a result of the rollup withdrawal refund");
+        let deposits = state_tx.bridge_deposits();
         assert_eq!(deposits.len(), 1);
 
         let deposit = deposits.get(&rollup_id).unwrap().first().unwrap();

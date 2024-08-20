@@ -8,7 +8,6 @@ use std::{
 
 use anyhow::Context as _;
 use astria_core::protocol::abci::AbciErrorCode;
-use cnidarium::Storage;
 use futures::{
     Future,
     FutureExt,
@@ -29,6 +28,8 @@ use tracing::{
     instrument,
     Instrument as _,
 };
+
+use crate::storage::Storage;
 
 mod abci_query_router;
 
@@ -173,13 +174,15 @@ impl Service<InfoRequest> for Info {
 #[cfg(test)]
 mod test {
     use astria_core::{
-        primitive::v1::asset,
+        primitive::v1::{
+            asset,
+            asset::TracePrefixed,
+        },
         protocol::{
             account::v1alpha1::BalanceResponse,
             asset::v1alpha1::DenomResponse,
         },
     };
-    use cnidarium::StateDelta;
     use prost::Message as _;
     use tendermint::v0_38::abci::{
         request,
@@ -199,6 +202,7 @@ mod test {
             StateWriteExt as _,
         },
         state_ext::StateWriteExt as _,
+        storage::Storage,
     };
 
     #[tokio::test]
@@ -208,16 +212,14 @@ mod test {
             protocol::account::v1alpha1::AssetBalance,
         };
 
-        let storage = cnidarium::TempStorage::new()
-            .await
-            .expect("failed to create temp storage backing chain state");
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
         let height = 99;
         let version = storage.latest_version().wrapping_add(1);
-        let mut state = StateDelta::new(storage.latest_snapshot());
         state.put_storage_version_by_height(height, version);
 
         state.put_base_prefix("astria").unwrap();
-        state.put_native_asset(&crate::test_utils::nria());
+        state.put_native_asset(crate::test_utils::nria());
 
         let address = state
             .try_base_prefixed(&hex::decode("a034c743bed8f26cb8ee7b8db2230fd8347ae131").unwrap())
@@ -225,9 +227,7 @@ mod test {
             .unwrap();
 
         let balance = 1000;
-        state
-            .put_account_balance(address, crate::test_utils::nria(), balance)
-            .unwrap();
+        state.put_account_balance(address, crate::test_utils::nria(), balance);
         state.put_block_height(height);
         storage.commit(state).await.unwrap();
 
@@ -239,7 +239,7 @@ mod test {
         });
 
         let response = {
-            let storage = (*storage).clone();
+            let storage = storage.clone();
             let info_service = Info::new(storage).unwrap();
             info_service
                 .handle_info_request(info_request)
@@ -270,13 +270,13 @@ mod test {
     async fn handle_denom_query() {
         use astria_core::generated::protocol::asset::v1alpha1 as raw;
 
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let mut state = StateDelta::new(storage.latest_snapshot());
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
-        let denom = "some/ibc/asset".parse().unwrap();
+        let denom: TracePrefixed = "some/ibc/asset".parse().unwrap();
         let height = 99;
         state.put_block_height(height);
-        state.put_ibc_asset(&denom).unwrap();
+        state.put_ibc_asset(denom.clone());
         storage.commit(state).await.unwrap();
 
         let info_request = InfoRequest::Query(request::Query {
@@ -287,7 +287,7 @@ mod test {
         });
 
         let response = {
-            let storage = (*storage).clone();
+            let storage = storage.clone();
             let info_service = Info::new(storage).unwrap();
             info_service
                 .handle_info_request(info_request)
@@ -311,8 +311,8 @@ mod test {
     async fn handle_allowed_fee_assets_query() {
         use astria_core::generated::protocol::asset::v1alpha1 as raw;
 
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let mut state = StateDelta::new(storage.latest_snapshot());
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         let assets = vec![
             "asset_0".parse::<asset::Denom>().unwrap(),
@@ -342,7 +342,7 @@ mod test {
         });
 
         let response = {
-            let storage = (*storage).clone();
+            let storage = storage.clone();
             let info_service = Info::new(storage).unwrap();
             info_service
                 .handle_info_request(info_request)

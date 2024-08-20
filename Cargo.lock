@@ -54,6 +54,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e89da841a80418a9b391ebaea17f5c112ffaaa96f621d2c285b5174da76b9011"
 dependencies = [
  "cfg-if",
+ "getrandom 0.2.14",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -692,6 +693,7 @@ dependencies = [
  "base64 0.21.7",
  "base64-serde",
  "bech32 0.11.0",
+ "borsh",
  "brotli",
  "bytes",
  "celestia-tendermint",
@@ -770,6 +772,7 @@ dependencies = [
 name = "astria-merkle"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "ct-merkle",
  "divan",
  "hex-literal",
@@ -803,12 +806,14 @@ dependencies = [
  "penumbra-proto",
  "penumbra-tower-trace",
  "prost",
+ "quick_cache",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "regex",
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "tempfile",
  "tendermint",
  "tendermint-proto",
  "thiserror",
@@ -1355,19 +1360,20 @@ dependencies = [
 
 [[package]]
 name = "borsh"
-version = "1.4.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0901fc8eb0aca4c83be0106d6f2db17d86a08dfc2c25f0e84464bf381158add6"
+checksum = "a6362ed55def622cddc70a4746a68554d7b687713770de539e59a739b249f8ed"
 dependencies = [
  "borsh-derive",
+ "bytes",
  "cfg_aliases",
 ]
 
 [[package]]
 name = "borsh-derive"
-version = "1.4.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51670c3aa053938b0ee3bd67c3817e471e626151131b934038e83c5bf8de48f5"
+checksum = "c3ef8005764f53cd4dca619f5bf64cafd4664dada50ece25e4d81de54c80cc0b"
 dependencies = [
  "once_cell",
  "proc-macro-crate 3.1.0",
@@ -1650,9 +1656,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cfg_aliases"
-version = "0.1.1"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
+checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chacha20"
@@ -6130,6 +6136,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d6da84cc204722a989e01ba2f6e1e276e190f22263d0cb6ce8526fcdb0d2e1f"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "quick_cache"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc1dd700847420feb1735b16f8d7ee8a8704f4caec7b1aa19f074ea4f7f25ae"
+dependencies = [
+ "ahash",
+ "equivalent",
+ "hashbrown 0.14.3",
+ "parking_lot",
 ]
 
 [[package]]

@@ -8,7 +8,6 @@ use astria_core::protocol::transaction::v1alpha1::action::{
     BridgeUnlockAction,
     TransferAction,
 };
-use cnidarium::StateWrite;
 
 use crate::{
     accounts::action::{
@@ -18,7 +17,7 @@ use crate::{
     address::StateReadExt as _,
     app::ActionHandler,
     bridge::StateReadExt as _,
-    transaction::StateReadExt as _,
+    storage::StateWrite,
 };
 
 #[async_trait::async_trait]
@@ -27,11 +26,7 @@ impl ActionHandler for BridgeUnlockAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: S) -> Result<()> {
-        let from = state
-            .get_current_source()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.to)
             .await
@@ -83,7 +78,6 @@ mod tests {
         },
         protocol::transaction::v1alpha1::action::BridgeUnlockAction,
     };
-    use cnidarium::StateDelta;
 
     use crate::{
         accounts::StateWriteExt as _,
@@ -91,14 +85,11 @@ mod tests {
         app::ActionHandler as _,
         assets::StateWriteExt as _,
         bridge::StateWriteExt as _,
+        storage::Storage,
         test_utils::{
             assert_anyhow_error,
             astria_address,
             ASTRIA_PREFIX,
-        },
-        transaction::{
-            StateWriteExt as _,
-            TransactionContext,
         },
     };
 
@@ -108,13 +99,9 @@ mod tests {
 
     #[tokio::test]
     async fn fails_if_bridge_account_has_no_withdrawer_address() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
-        state.put_current_source(TransactionContext {
-            address_bytes: [1; 20],
-        });
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
         let asset = test_asset();
@@ -122,9 +109,7 @@ mod tests {
 
         let to_address = astria_address(&[2; 20]);
         let bridge_address = astria_address(&[3; 20]);
-        state
-            .put_bridge_account_ibc_asset(bridge_address, &asset)
-            .unwrap();
+        state.put_bridge_account_ibc_asset(bridge_address, &asset);
 
         let bridge_unlock = BridgeUnlockAction {
             to: to_address,
@@ -135,21 +120,21 @@ mod tests {
         };
 
         // invalid sender, doesn't match action's `from`, should fail
+        let from = [1; 20];
         assert_anyhow_error(
-            &bridge_unlock.check_and_execute(state).await.unwrap_err(),
+            &bridge_unlock
+                .check_and_execute(&state, from)
+                .await
+                .unwrap_err(),
             "bridge account does not have an associated withdrawer address",
         );
     }
 
     #[tokio::test]
     async fn fails_if_withdrawer_is_not_signer() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
-        state.put_current_source(TransactionContext {
-            address_bytes: [1; 20],
-        });
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
         let asset = test_asset();
@@ -159,9 +144,7 @@ mod tests {
         let bridge_address = astria_address(&[3; 20]);
         let withdrawer_address = astria_address(&[4; 20]);
         state.put_bridge_account_withdrawer_address(bridge_address, withdrawer_address);
-        state
-            .put_bridge_account_ibc_asset(bridge_address, &asset)
-            .unwrap();
+        state.put_bridge_account_ibc_asset(bridge_address, &asset);
 
         let bridge_unlock = BridgeUnlockAction {
             to: to_address,
@@ -172,36 +155,36 @@ mod tests {
         };
 
         // invalid sender, doesn't match action's bridge account's withdrawer, should fail
+        let from = [1; 20];
         assert_anyhow_error(
-            &bridge_unlock.check_and_execute(state).await.unwrap_err(),
+            &bridge_unlock
+                .check_and_execute(&state, from)
+                .await
+                .unwrap_err(),
             "unauthorized to unlock bridge account",
         );
     }
 
     #[tokio::test]
     async fn execute_with_bridge_address_unset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         let bridge_address = astria_address(&[1; 20]);
-        state.put_current_source(TransactionContext {
-            address_bytes: bridge_address.bytes(),
-        });
+        let from = bridge_address.bytes();
+
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
         let asset = test_asset();
         let transfer_fee = 10;
         let transfer_amount = 100;
-        state.put_transfer_base_fee(transfer_fee).unwrap();
+        state.put_transfer_base_fee(transfer_fee);
 
         let to_address = astria_address(&[2; 20]);
         let rollup_id = RollupId::from_unhashed_bytes(b"test_rollup_id");
 
-        state.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-        state
-            .put_bridge_account_ibc_asset(bridge_address, &asset)
-            .unwrap();
+        state.put_bridge_account_rollup_id(bridge_address, rollup_id);
+        state.put_bridge_account_ibc_asset(bridge_address, &asset);
         state.put_bridge_account_withdrawer_address(bridge_address, bridge_address);
         state.put_allowed_fee_asset(&asset);
 
@@ -214,48 +197,40 @@ mod tests {
         };
 
         // not enough balance; should fail
-        state
-            .put_account_balance(bridge_address, &asset, transfer_amount)
-            .unwrap();
+        state.put_account_balance(bridge_address, &asset, transfer_amount);
         assert_anyhow_error(
             &bridge_unlock
-                .check_and_execute(&mut state)
+                .check_and_execute(&state, from)
                 .await
                 .unwrap_err(),
             "insufficient funds for transfer and fee payment",
         );
 
         // enough balance; should pass
-        state
-            .put_account_balance(bridge_address, &asset, transfer_amount + transfer_fee)
-            .unwrap();
-        bridge_unlock.check_and_execute(&mut state).await.unwrap();
+        state.put_account_balance(bridge_address, &asset, transfer_amount + transfer_fee);
+        bridge_unlock.check_and_execute(&state, from).await.unwrap();
     }
 
     #[tokio::test]
     async fn execute_with_bridge_address_set() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         let bridge_address = astria_address(&[1; 20]);
-        state.put_current_source(TransactionContext {
-            address_bytes: bridge_address.bytes(),
-        });
+        let from = bridge_address.bytes();
+
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
         let asset = test_asset();
         let transfer_fee = 10;
         let transfer_amount = 100;
-        state.put_transfer_base_fee(transfer_fee).unwrap();
+        state.put_transfer_base_fee(transfer_fee);
 
         let to_address = astria_address(&[2; 20]);
         let rollup_id = RollupId::from_unhashed_bytes(b"test_rollup_id");
 
-        state.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-        state
-            .put_bridge_account_ibc_asset(bridge_address, &asset)
-            .unwrap();
+        state.put_bridge_account_rollup_id(bridge_address, rollup_id);
+        state.put_bridge_account_ibc_asset(bridge_address, &asset);
         state.put_bridge_account_withdrawer_address(bridge_address, bridge_address);
         state.put_allowed_fee_asset(&asset);
 
@@ -268,21 +243,17 @@ mod tests {
         };
 
         // not enough balance; should fail
-        state
-            .put_account_balance(bridge_address, &asset, transfer_amount)
-            .unwrap();
+        state.put_account_balance(bridge_address, &asset, transfer_amount);
         assert_anyhow_error(
             &bridge_unlock
-                .check_and_execute(&mut state)
+                .check_and_execute(&state, from)
                 .await
                 .unwrap_err(),
             "insufficient funds for transfer and fee payment",
         );
 
         // enough balance; should pass
-        state
-            .put_account_balance(bridge_address, &asset, transfer_amount + transfer_fee)
-            .unwrap();
-        bridge_unlock.check_and_execute(&mut state).await.unwrap();
+        state.put_account_balance(bridge_address, &asset, transfer_amount + transfer_fee);
+        bridge_unlock.check_and_execute(&state, from).await.unwrap();
     }
 }

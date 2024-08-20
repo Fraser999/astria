@@ -3,10 +3,6 @@ use astria_core::{
     primitive::v1::Address,
     protocol::abci::AbciErrorCode,
 };
-use cnidarium::{
-    Snapshot,
-    Storage,
-};
 use prost::Message as _;
 use tendermint::{
     abci::{
@@ -18,8 +14,15 @@ use tendermint::{
 };
 
 use crate::{
-    accounts::state_ext::StateReadExt as _,
+    accounts::{
+        self,
+        state_ext::StateReadExt as _,
+    },
     state_ext::StateReadExt as _,
+    storage::{
+        Snapshot,
+        Storage,
+    },
 };
 
 pub(crate) async fn balance_request(
@@ -33,7 +36,7 @@ pub(crate) async fn balance_request(
         Err(err_rsp) => return err_rsp,
     };
 
-    let balances = match snapshot.get_account_balances(address).await {
+    let balances = match accounts::state_ext::get_account_balances(&snapshot, address).await {
         Ok(balance) => balance,
         Err(err) => {
             return response::Query {
@@ -45,6 +48,7 @@ pub(crate) async fn balance_request(
             };
         }
     };
+
     let payload = BalanceResponse {
         height: height.value(),
         balances,

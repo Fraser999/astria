@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{
     bail,
     Context,
@@ -7,22 +5,17 @@ use anyhow::{
 };
 use astria_core::primitive::v1::ADDRESS_LEN;
 use async_trait::async_trait;
-use borsh::{
-    BorshDeserialize,
-    BorshSerialize,
-};
-use cnidarium::{
-    StateRead,
-    StateWrite,
-};
 use tracing::instrument;
 
 use super::ValidatorSet;
-use crate::accounts::AddressBytes;
-
-/// Newtype wrapper to read and write an address from rocksdb.
-#[derive(BorshSerialize, BorshDeserialize, Debug)]
-struct SudoAddress([u8; ADDRESS_LEN]);
+use crate::{
+    accounts::AddressBytes,
+    storage::{
+        self,
+        StateRead,
+        StateWrite,
+    },
+};
 
 const SUDO_STORAGE_KEY: &str = "sudo";
 const VALIDATOR_SET_STORAGE_KEY: &str = "valset";
@@ -32,49 +25,32 @@ const VALIDATOR_UPDATES_KEY: &[u8] = b"valupdates";
 pub(crate) trait StateReadExt: StateRead {
     #[instrument(skip_all)]
     async fn get_sudo_address(&self) -> Result<[u8; ADDRESS_LEN]> {
-        let Some(bytes) = self
-            .get_raw(SUDO_STORAGE_KEY)
+        let Some(sudo_address) = self
+            .get::<_, storage::AddressBytes>(SUDO_STORAGE_KEY)
             .await
-            .context("failed reading raw sudo key from state")?
+            .context("failed reading sudo key from state")?
         else {
-            // return error because sudo key must be set
             bail!("sudo key not found");
         };
-        let SudoAddress(address_bytes) =
-            SudoAddress::try_from_slice(&bytes).context("invalid sudo key bytes")?;
-        Ok(address_bytes)
+        Ok(sudo_address.0)
     }
 
     #[instrument(skip_all)]
     async fn get_validator_set(&self) -> Result<ValidatorSet> {
-        let Some(bytes) = self
-            .get_raw(VALIDATOR_SET_STORAGE_KEY)
+        self.get(VALIDATOR_SET_STORAGE_KEY)
             .await
-            .context("failed reading raw validator set from state")?
-        else {
-            // return error because validator set must be set
-            bail!("validator set not found")
-        };
-
-        let ValidatorSet(validator_set) =
-            serde_json::from_slice(&bytes).context("invalid validator set bytes")?;
-        Ok(ValidatorSet(validator_set))
+            .transpose()
+            .context("validator set not found")?
+            .context("failed reading validator set from state")
     }
 
     #[instrument(skip_all)]
     async fn get_validator_updates(&self) -> Result<ValidatorSet> {
-        let Some(bytes) = self
-            .nonverifiable_get_raw(VALIDATOR_UPDATES_KEY)
+        Ok(self
+            .nonverifiable_get(VALIDATOR_UPDATES_KEY)
             .await
             .context("failed reading raw validator updates from state")?
-        else {
-            // return empty set because validator updates are optional
-            return Ok(ValidatorSet(BTreeMap::new()));
-        };
-
-        let validator_updates: ValidatorSet =
-            serde_json::from_slice(&bytes).context("invalid validator updates bytes")?;
-        Ok(validator_updates)
+            .unwrap_or_default()) // Return empty set because validator updates are optional.
     }
 }
 
@@ -82,38 +58,23 @@ impl<T: StateRead> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
-    fn put_sudo_address<T: AddressBytes>(&mut self, address: T) -> Result<()> {
-        self.put_raw(
-            SUDO_STORAGE_KEY.to_string(),
-            borsh::to_vec(&SudoAddress(address.address_bytes()))
-                .context("failed to convert sudo address to vec")?,
+    fn put_sudo_address<T: AddressBytes>(&self, address: T) {
+        self.put(
+            SUDO_STORAGE_KEY,
+            storage::AddressBytes(address.address_bytes()),
         );
-        Ok(())
     }
 
-    #[instrument(skip_all)]
-    fn put_validator_set(&mut self, validator_set: ValidatorSet) -> Result<()> {
-        self.put_raw(
-            VALIDATOR_SET_STORAGE_KEY.to_string(),
-            serde_json::to_vec(&validator_set).context("failed to serialize validator set")?,
-        );
-        Ok(())
+    fn put_validator_set(&self, validator_set: ValidatorSet) {
+        self.put(VALIDATOR_SET_STORAGE_KEY, validator_set);
     }
 
-    #[instrument(skip_all)]
-    fn put_validator_updates(&mut self, validator_updates: ValidatorSet) -> Result<()> {
-        self.nonverifiable_put_raw(
-            VALIDATOR_UPDATES_KEY.to_vec(),
-            serde_json::to_vec(&validator_updates)
-                .context("failed to serialize validator updates")?,
-        );
-        Ok(())
+    fn put_validator_updates(&self, validator_updates: ValidatorSet) {
+        self.nonverifiable_put(VALIDATOR_UPDATES_KEY, validator_updates);
     }
 
-    #[instrument(skip_all)]
-    fn clear_validator_updates(&mut self) {
-        self.nonverifiable_delete(VALIDATOR_UPDATES_KEY.to_vec());
+    fn clear_validator_updates(&self) {
+        self.nonverifiable_delete(VALIDATOR_UPDATES_KEY);
     }
 }
 
@@ -125,7 +86,6 @@ mod tests {
         primitive::v1::ADDRESS_LEN,
         protocol::transaction::v1alpha1::action::ValidatorUpdate,
     };
-    use cnidarium::StateDelta;
 
     use super::{
         StateReadExt as _,
@@ -134,6 +94,7 @@ mod tests {
     use crate::{
         address::StateWriteExt as _,
         authority::ValidatorSet,
+        storage::Storage,
         test_utils::{
             verification_key,
             ASTRIA_PREFIX,
@@ -146,9 +107,8 @@ mod tests {
 
     #[tokio::test]
     async fn sudo_address() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
@@ -160,9 +120,7 @@ mod tests {
 
         // can write new
         let mut address_expected = [42u8; ADDRESS_LEN];
-        state
-            .put_sudo_address(address_expected)
-            .expect("writing sudo address should not fail");
+        state.put_sudo_address(address_expected);
         assert_eq!(
             state
                 .get_sudo_address()
@@ -174,9 +132,7 @@ mod tests {
 
         // can rewrite with new value
         address_expected = [41u8; ADDRESS_LEN];
-        state
-            .put_sudo_address(address_expected)
-            .expect("writing sudo address should not fail");
+        state.put_sudo_address(address_expected);
         assert_eq!(
             state
                 .get_sudo_address()
@@ -189,9 +145,8 @@ mod tests {
 
     #[tokio::test]
     async fn validator_set_uninitialized_fails() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // doesn't exist at first
         state
@@ -202,9 +157,8 @@ mod tests {
 
     #[tokio::test]
     async fn put_validator_set() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         let initial = vec![ValidatorUpdate {
             power: 10,
@@ -213,9 +167,7 @@ mod tests {
         let initial_validator_set = ValidatorSet::new_from_updates(initial);
 
         // can write new
-        state
-            .put_validator_set(initial_validator_set.clone())
-            .expect("writing initial validator set should not fail");
+        state.put_validator_set(initial_validator_set.clone());
         assert_eq!(
             state
                 .get_validator_set()
@@ -231,9 +183,7 @@ mod tests {
             verification_key: verification_key(2),
         }];
         let updated_validator_set = ValidatorSet::new_from_updates(updates);
-        state
-            .put_validator_set(updated_validator_set.clone())
-            .expect("writing update validator set should not fail");
+        state.put_validator_set(updated_validator_set.clone());
         assert_eq!(
             state
                 .get_validator_set()
@@ -246,9 +196,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_validator_updates_empty() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // querying for empty validator set is ok
         assert_eq!(
@@ -263,9 +212,8 @@ mod tests {
 
     #[tokio::test]
     async fn put_validator_updates() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // create update validator set
         let mut updates = vec![
@@ -281,9 +229,7 @@ mod tests {
         let mut validator_set_updates = ValidatorSet::new_from_updates(updates);
 
         // put validator updates
-        state
-            .put_validator_updates(validator_set_updates.clone())
-            .expect("writing update validator set should not fail");
+        state.put_validator_updates(validator_set_updates.clone());
         assert_eq!(
             state
                 .get_validator_updates()
@@ -308,9 +254,7 @@ mod tests {
         validator_set_updates = ValidatorSet::new_from_updates(updates);
 
         // write different updates
-        state
-            .put_validator_updates(validator_set_updates.clone())
-            .expect("writing update validator set should not fail");
+        state.put_validator_updates(validator_set_updates.clone());
         assert_eq!(
             state
                 .get_validator_updates()
@@ -323,9 +267,8 @@ mod tests {
 
     #[tokio::test]
     async fn clear_validator_updates() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // create update validator set
         let updates = vec![ValidatorUpdate {
@@ -335,9 +278,7 @@ mod tests {
         let validator_set_updates = ValidatorSet::new_from_updates(updates);
 
         // put validator updates
-        state
-            .put_validator_updates(validator_set_updates.clone())
-            .expect("writing update validator set should not fail");
+        state.put_validator_updates(validator_set_updates.clone());
         assert_eq!(
             state
                 .get_validator_updates()
@@ -363,9 +304,8 @@ mod tests {
 
     #[tokio::test]
     async fn clear_validator_updates_empty_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         // able to clear non-existent updates with no error
         state.clear_validator_updates();

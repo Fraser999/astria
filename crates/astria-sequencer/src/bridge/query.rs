@@ -6,7 +6,6 @@ use astria_core::{
         bridge::v1alpha1::BridgeAccountInfo,
     },
 };
-use cnidarium::Storage;
 use prost::Message as _;
 use tendermint::abci::{
     request,
@@ -15,10 +14,14 @@ use tendermint::abci::{
 };
 
 use crate::{
-    address::StateReadExt,
+    address::StateReadExt as _,
     assets::StateReadExt as _,
     bridge::StateReadExt as _,
     state_ext::StateReadExt as _,
+    storage::{
+        Snapshot,
+        Storage,
+    },
 };
 
 fn error_query_response(
@@ -42,7 +45,7 @@ fn error_query_response(
 // this could be significantly shortened.
 #[allow(clippy::too_many_lines)]
 async fn get_bridge_account_info(
-    snapshot: cnidarium::Snapshot,
+    snapshot: Snapshot,
     address: Address,
 ) -> anyhow::Result<Option<BridgeAccountInfo>, response::Query> {
     let rollup_id = match snapshot.get_bridge_account_rollup_id(address).await {
@@ -294,7 +297,6 @@ mod test {
         primitive::v1::RollupId,
         protocol::bridge::v1alpha1::BridgeAccountInfoResponse,
     };
-    use cnidarium::StateDelta;
 
     use super::*;
     use crate::{
@@ -310,9 +312,8 @@ mod test {
 
     #[tokio::test]
     async fn bridge_account_info_request_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
-        let snapshot = storage.latest_snapshot();
-        let mut state = StateDelta::new(snapshot);
+        let storage = Storage::new_temp().await;
+        let state = storage.new_delta_of_latest_snapshot();
 
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
@@ -322,13 +323,9 @@ mod test {
         let sudo_address = astria_address(&[1u8; 20]);
         let withdrawer_address = astria_address(&[2u8; 20]);
         state.put_block_height(1);
-        state.put_bridge_account_rollup_id(bridge_address, &rollup_id);
-        state
-            .put_ibc_asset(asset.as_trace_prefixed().unwrap())
-            .unwrap();
-        state
-            .put_bridge_account_ibc_asset(bridge_address, &asset)
-            .unwrap();
+        state.put_bridge_account_rollup_id(bridge_address, rollup_id);
+        state.put_ibc_asset(asset.as_trace_prefixed().unwrap().clone());
+        state.put_bridge_account_ibc_asset(bridge_address, &asset);
         state.put_bridge_account_sudo_address(bridge_address, sudo_address);
         state.put_bridge_account_withdrawer_address(bridge_address, withdrawer_address);
         storage.commit(state).await.unwrap();

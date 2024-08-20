@@ -38,6 +38,7 @@ use crate::{
     mempool::Mempool,
     metrics::Metrics,
     service,
+    storage::Storage,
 };
 
 pub struct Sequencer;
@@ -71,15 +72,15 @@ impl Sequencer {
 
         let substore_prefixes = vec![penumbra_ibc::IBC_SUBSTORE_PREFIX];
 
-        let storage = cnidarium::Storage::load(
+        let storage = Storage::load(
             config.db_filepath.clone(),
             substore_prefixes
                 .into_iter()
-                .map(std::string::ToString::to_string)
+                .map(ToString::to_string)
                 .collect(),
         )
-        .await
-        .context("failed to load storage backing chain state")?;
+            .await
+            .context("failed to load storage backing chain state")?;
         let snapshot = storage.latest_snapshot();
 
         let mempool = Mempool::new();
@@ -154,7 +155,7 @@ impl Sequencer {
 }
 
 fn start_grpc_server(
-    storage: &cnidarium::Storage,
+    storage: &Storage,
     mempool: Mempool,
     grpc_addr: std::net::SocketAddr,
     shutdown_rx: oneshot::Receiver<()>,
@@ -168,7 +169,7 @@ fn start_grpc_server(
     use penumbra_tower_trace::remote_addr;
     use tower_http::cors::CorsLayer;
 
-    let ibc = penumbra_ibc::component::rpc::IbcQuery::<AstriaHost>::new(storage.clone());
+    let ibc = penumbra_ibc::component::rpc::IbcQuery::<AstriaHost>::new(storage.inner());
     let sequencer_api = SequencerServer::new(storage.clone(), mempool);
     let cors_layer: CorsLayer = CorsLayer::permissive();
 
