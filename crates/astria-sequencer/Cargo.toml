@@ -12,13 +12,13 @@ homepage = "https://astria.org"
 name = "astria-sequencer"
 
 [features]
-benchmark = ["divan"]
+benchmark = ["divan", "tempfile"]
 
 [dependencies]
 astria-core = { path = "../astria-core", features = ["server", "serde", "borsh"] }
 astria-build-info = { path = "../astria-build-info", features = ["runtime"] }
 config = { package = "astria-config", path = "../astria-config" }
-merkle = { package = "astria-merkle", path = "../astria-merkle" }
+merkle = { package = "astria-merkle", path = "../astria-merkle", features = ["borsh"] }
 telemetry = { package = "astria-telemetry", path = "../astria-telemetry", features = [
   "display",
 ] }
@@ -52,6 +52,7 @@ regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true, optional = true }
 tendermint-proto = { workspace = true }
 tendermint = { workspace = true }
 thiserror = { workspace = true }
