@@ -149,6 +149,21 @@ impl<T: StateRead> StateRead for Delta<T> {
         }
         self.parent.nonverifiable_get(key).await
     }
+
+    // fn nonverifiable_prefix<K, V>(
+    //     &self,
+    //     prefix: K,
+    // ) -> impl Stream<Item = Result<(Vec<u8>, V)>> + Send + 'static
+    // where
+    //     K: AsRef<[u8]>,
+    //     V: Storable,
+    // {
+    //     if let Some(delta) = self.delta.lock().unwrap().as_ref() {
+    //     } else {
+    //         error!("delta is already applied");
+    //         panic!();
+    //     }
+    // }
 }
 
 impl<T: StateRead> StateWrite for Delta<T> {

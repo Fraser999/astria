@@ -82,7 +82,7 @@ use crate::{
     },
     bridge::component::BridgeComponent,
     component::Component as _,
-    ibc::component::IbcComponent,
+    // ibc::component::IbcComponent,
     mempool::{
         Mempool,
         RemovalReason,
@@ -240,9 +240,9 @@ impl App {
         BridgeComponent::init_chain(&state_tx, &genesis_state)
             .await
             .context("failed to call init_chain on BridgeComponent")?;
-        IbcComponent::init_chain(&state_tx, &genesis_state)
-            .await
-            .context("failed to call init_chain on IbcComponent")?;
+        // IbcComponent::init_chain(&state_tx, &genesis_state)
+        //     .await
+        //     .context("failed to call init_chain on IbcComponent")?;
         SequenceComponent::init_chain(&state_tx, &genesis_state)
             .await
             .context("failed to call init_chain on SequenceComponent")?;
@@ -945,9 +945,9 @@ impl App {
         BridgeComponent::begin_block(&state_tx, begin_block)
             .await
             .context("failed to call begin_block on BridgeComponent")?;
-        IbcComponent::begin_block(&state_tx, begin_block)
-            .await
-            .context("failed to call begin_block on IbcComponent")?;
+        // IbcComponent::begin_block(&state_tx, begin_block)
+        //     .await
+        //     .context("failed to call begin_block on IbcComponent")?;
         SequenceComponent::begin_block(&state_tx, begin_block)
             .await
             .context("failed to call begin_block on SequenceComponent")?;
@@ -998,9 +998,9 @@ impl App {
         BridgeComponent::end_block(&state_tx, &end_block)
             .await
             .context("failed to call end_block on BridgeComponent")?;
-        IbcComponent::end_block(&state_tx, &end_block)
-            .await
-            .context("failed to call end_block on IbcComponent")?;
+        // IbcComponent::end_block(&state_tx, &end_block)
+        //     .await
+        //     .context("failed to call end_block on IbcComponent")?;
         SequenceComponent::end_block(&state_tx, &end_block)
             .await
             .context("failed to call end_block on SequenceComponent")?;

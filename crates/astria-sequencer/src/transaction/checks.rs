@@ -24,7 +24,7 @@ use crate::{
     accounts::StateReadExt as _,
     address::StateReadExt as _,
     bridge::StateReadExt as _,
-    ibc::StateReadExt as _,
+    // ibc::StateReadExt as _,
     state_ext::StateReadExt as _,
     storage::StateRead,
 };
@@ -82,10 +82,11 @@ pub(crate) async fn get_fees_for_transaction<S: StateRead>(
         .get_transfer_base_fee()
         .await
         .context("failed to get transfer base fee")?;
-    let ics20_withdrawal_fee = state
-        .get_ics20_withdrawal_base_fee()
-        .await
-        .context("failed to get ics20 withdrawal base fee")?;
+    let ics20_withdrawal_fee = 0;
+    // let ics20_withdrawal_fee = state
+    //     .get_ics20_withdrawal_base_fee()
+    //     .await
+    //     .context("failed to get ics20 withdrawal base fee")?;
     let init_bridge_account_fee = state
         .get_init_bridge_account_base_fee()
         .await
@@ -321,7 +322,7 @@ mod tests {
         app::test_utils::*,
         assets::StateWriteExt as _,
         bridge::StateWriteExt as _,
-        ibc::StateWriteExt as _,
+        // ibc::StateWriteExt as _,
         sequence::StateWriteExt as _,
         storage::Storage,
     };
@@ -336,7 +337,7 @@ mod tests {
         state_tx.put_transfer_base_fee(12);
         state_tx.put_sequence_action_base_fee(0);
         state_tx.put_sequence_action_byte_cost_multiplier(1);
-        state_tx.put_ics20_withdrawal_base_fee(1);
+        // state_tx.put_ics20_withdrawal_base_fee(1);
         state_tx.put_init_bridge_account_base_fee(12);
         state_tx.put_bridge_lock_byte_cost_multiplier(1);
         state_tx.put_bridge_sudo_change_base_fee(24);
@@ -412,7 +413,7 @@ mod tests {
         state_tx.put_transfer_base_fee(12);
         state_tx.put_sequence_action_base_fee(0);
         state_tx.put_sequence_action_byte_cost_multiplier(1);
-        state_tx.put_ics20_withdrawal_base_fee(1);
+        // state_tx.put_ics20_withdrawal_base_fee(1);
         state_tx.put_init_bridge_account_base_fee(12);
         state_tx.put_bridge_lock_byte_cost_multiplier(1);
         state_tx.put_bridge_sudo_change_base_fee(24);

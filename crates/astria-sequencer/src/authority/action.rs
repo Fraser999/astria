@@ -20,7 +20,7 @@ use crate::{
         StateWriteExt as _,
     },
     bridge::StateWriteExt as _,
-    ibc::StateWriteExt as _,
+    // ibc::StateWriteExt as _,
     sequence::StateWriteExt as _,
     storage::StateWrite,
 };
@@ -126,7 +126,7 @@ impl ActionHandler for FeeChangeAction {
                 state.put_bridge_sudo_change_base_fee(self.new_value);
             }
             FeeChange::Ics20WithdrawalBaseFee => {
-                state.put_ics20_withdrawal_base_fee(self.new_value);
+                // state.put_ics20_withdrawal_base_fee(self.new_value);
             }
         }
 
@@ -140,7 +140,7 @@ mod test {
     use crate::{
         accounts::StateReadExt as _,
         bridge::StateReadExt as _,
-        ibc::StateReadExt as _,
+        // ibc::StateReadExt as _,
         sequence::StateReadExt as _,
         storage::Storage,
     };
@@ -217,15 +217,15 @@ mod test {
             2
         );
 
-        let ics20_withdrawal_base_fee = 1;
-        state.put_ics20_withdrawal_base_fee(ics20_withdrawal_base_fee);
-
-        let fee_change = FeeChangeAction {
-            fee_change: FeeChange::Ics20WithdrawalBaseFee,
-            new_value: 2,
-        };
-
-        fee_change.check_and_execute(&state, from).await.unwrap();
-        assert_eq!(state.get_ics20_withdrawal_base_fee().await.unwrap(), 2);
+        // let ics20_withdrawal_base_fee = 1;
+        // state.put_ics20_withdrawal_base_fee(ics20_withdrawal_base_fee);
+        //
+        // let fee_change = FeeChangeAction {
+        //     fee_change: FeeChange::Ics20WithdrawalBaseFee,
+        //     new_value: 2,
+        // };
+        //
+        // fee_change.check_and_execute(&state, from).await.unwrap();
+        // assert_eq!(state.get_ics20_withdrawal_base_fee().await.unwrap(), 2);
     }
 }

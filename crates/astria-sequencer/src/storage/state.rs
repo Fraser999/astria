@@ -49,6 +49,17 @@ impl<'a, S: StateRead> StateRead for &'a S {
     {
         (**self).nonverifiable_get(key).await
     }
+
+    // fn nonverifiable_prefix<K, V>(
+    //     &self,
+    //     prefix: K,
+    // ) -> impl Stream<Item = Result<(Vec<u8>, V)>> + Send + 'static
+    // where
+    //     K: AsRef<[u8]>,
+    //     V: Storable + Send + 'static,
+    // {
+    //     (**self).nonverifiable_prefix(prefix)
+    // }
 }
 
 pub(crate) trait StateWrite: StateRead + Send + Sync {

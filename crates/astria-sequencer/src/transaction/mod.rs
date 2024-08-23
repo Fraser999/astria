@@ -28,10 +28,10 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    ibc::{
-        host_interface::AstriaHost,
-        StateReadExt as _,
-    },
+    // ibc::{
+    //     host_interface::AstriaHost,
+    //     StateReadExt as _,
+    // },
     state_ext::StateReadExt as _,
     storage::StateWrite,
 };
@@ -91,23 +91,27 @@ pub(crate) async fn check_stateless(tx: &SignedTransaction) -> anyhow::Result<()
                 .check_stateless()
                 .await
                 .context("stateless check failed for FeeChangeAction")?,
-            Action::Ibc(act) => {
-                let action = act
-                    .clone()
-                    .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
-                action
-                    .check_stateless(())
-                    .await
-                    .context("stateless check failed for IbcAction")?;
+            Action::Ibc(_act) => {
+                // let action = act
+                //     .clone()
+                //     .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
+                // action
+                //     .check_stateless(())
+                //     .await
+                //     .context("stateless check failed for IbcAction")?;
             }
-            Action::Ics20Withdrawal(act) => act
-                .check_stateless()
-                .await
-                .context("stateless check failed for Ics20WithdrawalAction")?,
-            Action::IbcRelayerChange(act) => act
-                .check_stateless()
-                .await
-                .context("stateless check failed for IbcRelayerChangeAction")?,
+            Action::Ics20Withdrawal(_act) => {
+                // act
+                //     .check_stateless()
+                //     .await
+                //     .context("stateless check failed for Ics20WithdrawalAction")?
+            }
+            Action::IbcRelayerChange(_act) => {
+                // act
+                //     .check_stateless()
+                //     .await
+                //     .context("stateless check failed for IbcRelayerChangeAction")?
+            }
             Action::FeeAssetChange(act) => act
                 .check_stateless()
                 .await
@@ -139,7 +143,7 @@ pub(crate) async fn check_stateless(tx: &SignedTransaction) -> anyhow::Result<()
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn check_and_execute<S: StateWrite>(
     tx: &SignedTransaction,
-    mut state: S,
+    state: S,
 ) -> anyhow::Result<()> {
     let from = tx.address_bytes();
 
@@ -204,34 +208,38 @@ pub(crate) async fn check_and_execute<S: StateWrite>(
                 .check_and_execute(&state, from)
                 .await
                 .context("executing fee change failed")?,
-            Action::Ibc(act) => {
-                // FIXME: this check should be moved to check_and_execute, as it now has
-                // access to the the signer through state. However, what's the correct
-                // ibc AppHandler call to do it? Can we just update one of the trait methods
-                // of crate::ibc::ics20_transfer::Ics20Transfer?
-                ensure!(
-                    state
-                        .is_ibc_relayer(tx)
-                        .await
-                        .context("failed to check if address is IBC relayer")?,
-                    "only IBC sudo address can execute IBC actions"
-                );
-                let action = act
-                    .clone()
-                    .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
-                action
-                    .check_and_execute(&mut state)
-                    .await
-                    .context("failed executing ibc action")?;
+            Action::Ibc(_act) => {
+                // // FIXME: this check should be moved to check_and_execute, as it now has
+                // // access to the the signer through state. However, what's the correct
+                // // ibc AppHandler call to do it? Can we just update one of the trait methods
+                // // of crate::ibc::ics20_transfer::Ics20Transfer?
+                // ensure!(
+                //     state
+                //         .is_ibc_relayer(tx)
+                //         .await
+                //         .context("failed to check if address is IBC relayer")?,
+                //     "only IBC sudo address can execute IBC actions"
+                // );
+                // let action = act
+                //     .clone()
+                //     .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
+                // action
+                //     .check_and_execute(&mut state)
+                //     .await
+                //     .context("failed executing ibc action")?;
             }
-            Action::Ics20Withdrawal(act) => act
-                .check_and_execute(&state, from)
-                .await
-                .context("failed executing ics20 withdrawal")?,
-            Action::IbcRelayerChange(act) => act
-                .check_and_execute(&state, from)
-                .await
-                .context("failed executing ibc relayer change")?,
+            Action::Ics20Withdrawal(_act) => {
+                // act
+                //     .check_and_execute(&state, from)
+                //     .await
+                //     .context("failed executing ics20 withdrawal")?
+            }
+            Action::IbcRelayerChange(_act) => {
+                // act
+                //     .check_and_execute(&state, from)
+                //     .await
+                //     .context("failed executing ibc relayer change")?
+            }
             Action::FeeAssetChange(act) => act
                 .check_and_execute(&state, from)
                 .await

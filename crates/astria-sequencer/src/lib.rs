@@ -10,7 +10,7 @@ pub(crate) mod component;
 pub mod config;
 pub(crate) mod fee_asset_change;
 pub(crate) mod grpc;
-pub(crate) mod ibc;
+// pub(crate) mod ibc;
 mod mempool;
 pub(crate) mod metrics;
 pub(crate) mod proposal;

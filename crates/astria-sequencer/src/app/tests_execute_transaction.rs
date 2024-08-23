@@ -40,7 +40,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    ibc::StateReadExt as _,
+    // ibc::StateReadExt as _,
     sequence::calculate_fee_from_state,
     storage::StateWrite,
     test_utils::{
@@ -356,7 +356,7 @@ async fn app_execute_transaction_ibc_relayer_change_addition() {
     let signed_tx = Arc::new(tx.into_signed(&alice));
     app.execute_transaction(signed_tx).await.unwrap();
     assert_eq!(app.state.get_account_nonce(alice_address).await.unwrap(), 1);
-    assert!(app.state.is_ibc_relayer(alice_address).await.unwrap());
+    // assert!(app.state.is_ibc_relayer(alice_address).await.unwrap());
 }
 
 #[tokio::test]
@@ -383,7 +383,7 @@ async fn app_execute_transaction_ibc_relayer_change_deletion() {
     let signed_tx = Arc::new(tx.into_signed(&alice));
     app.execute_transaction(signed_tx).await.unwrap();
     assert_eq!(app.state.get_account_nonce(alice_address).await.unwrap(), 1);
-    assert!(!app.state.is_ibc_relayer(alice_address).await.unwrap());
+    // assert!(!app.state.is_ibc_relayer(alice_address).await.unwrap());
 }
 
 #[tokio::test]

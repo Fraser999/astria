@@ -9,7 +9,7 @@ use astria_core::primitive::v1::asset::{
     TracePrefixed,
 };
 use async_trait::async_trait;
-use futures::StreamExt as _;
+// use futures::StreamExt as _;
 use tendermint::abci::{
     Event,
     EventAttributeIndexExt as _,
@@ -91,24 +91,25 @@ pub(crate) trait StateReadExt: StateRead {
 
     #[instrument(skip_all)]
     async fn get_allowed_fee_assets(&self) -> Result<Vec<IbcPrefixed>> {
-        let mut assets = Vec::new();
-
-        let mut stream = std::pin::pin!(self.nonverifiable_prefix_raw(FEE_ASSET_PREFIX.as_bytes()));
-        while let Some(Ok((key, _))) = stream.next().await {
-            // if the key isn't of the form `fee_asset/{asset_id}`, then we have a bug
-            // in `put_allowed_fee_asset`
-            let suffix = key
-                .strip_prefix(FEE_ASSET_PREFIX.as_bytes())
-                .expect("prefix must always be present");
-            let asset = std::str::from_utf8(suffix)
-                .context("key suffix was not utf8 encoded; this should not happen")?
-                .parse::<crate::storage_keys::hunks::Asset>()
-                .context("failed to parse storage key suffix as address hunk")?
-                .get();
-            assets.push(asset);
-        }
-
-        Ok(assets)
+        // let mut assets = Vec::new();
+        //
+        // let mut stream =
+        // std::pin::pin!(self.nonverifiable_prefix_raw(FEE_ASSET_PREFIX.as_bytes())); while
+        // let Some(Ok((key, _))) = stream.next().await {     // if the key isn't of the
+        // form `fee_asset/{asset_id}`, then we have a bug     // in `put_allowed_fee_asset`
+        //     let suffix = key
+        //         .strip_prefix(FEE_ASSET_PREFIX.as_bytes())
+        //         .expect("prefix must always be present");
+        //     let asset = std::str::from_utf8(suffix)
+        //         .context("key suffix was not utf8 encoded; this should not happen")?
+        //         .parse::<crate::storage_keys::hunks::Asset>()
+        //         .context("failed to parse storage key suffix as address hunk")?
+        //         .get();
+        //     assets.push(asset);
+        // }
+        //
+        // Ok(assets)
+        todo!()
     }
 }
 

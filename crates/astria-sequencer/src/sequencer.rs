@@ -34,7 +34,7 @@ use crate::{
     app::App,
     config::Config,
     grpc::sequencer::SequencerServer,
-    ibc::host_interface::AstriaHost,
+    // ibc::host_interface::AstriaHost,
     mempool::Mempool,
     metrics::Metrics,
     service,
@@ -161,15 +161,15 @@ fn start_grpc_server(
     shutdown_rx: oneshot::Receiver<()>,
 ) -> JoinHandle<Result<(), tonic::transport::Error>> {
     use futures::TryFutureExt as _;
-    use ibc_proto::ibc::core::{
-        channel::v1::query_server::QueryServer as ChannelQueryServer,
-        client::v1::query_server::QueryServer as ClientQueryServer,
-        connection::v1::query_server::QueryServer as ConnectionQueryServer,
-    };
+    // use ibc_proto::ibc::core::{
+    //     channel::v1::query_server::QueryServer as ChannelQueryServer,
+    //     client::v1::query_server::QueryServer as ClientQueryServer,
+    //     connection::v1::query_server::QueryServer as ConnectionQueryServer,
+    // };
     use penumbra_tower_trace::remote_addr;
     use tower_http::cors::CorsLayer;
 
-    let ibc = penumbra_ibc::component::rpc::IbcQuery::<AstriaHost>::new(storage.inner());
+    // let ibc = penumbra_ibc::component::rpc::IbcQuery::<AstriaHost>::new(storage.inner());
     let sequencer_api = SequencerServer::new(storage.clone(), mempool);
     let cors_layer: CorsLayer = CorsLayer::permissive();
 
@@ -191,9 +191,9 @@ fn start_grpc_server(
         // (from Penumbra) Add permissive CORS headers, so pd's gRPC services are accessible
         // from arbitrary web contexts, including from localhost.
         .layer(cors_layer)
-        .add_service(ClientQueryServer::new(ibc.clone()))
-        .add_service(ChannelQueryServer::new(ibc.clone()))
-        .add_service(ConnectionQueryServer::new(ibc.clone()))
+        // .add_service(ClientQueryServer::new(ibc.clone()))
+        // .add_service(ChannelQueryServer::new(ibc.clone()))
+        // .add_service(ConnectionQueryServer::new(ibc.clone()))
         .add_service(SequencerServiceServer::new(sequencer_api));
 
     info!(grpc_addr = grpc_addr.to_string(), "starting grpc server");
