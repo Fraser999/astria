@@ -12,6 +12,7 @@ use crate::{
     accounts::AddressBytes,
     storage::{
         self,
+        Fee,
         StateRead,
         StateWrite,
     },
@@ -75,6 +76,11 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     fn clear_validator_updates(&self) {
         self.nonverifiable_delete(VALIDATOR_UPDATES_KEY);
+    }
+
+    #[instrument(skip_all)]
+    fn put_ics20_withdrawal_base_fee(&self, fee: u128) {
+        self.put(crate::ibc::ICS20_WITHDRAWAL_BASE_FEE_STORAGE_KEY, Fee(fee));
     }
 }
 

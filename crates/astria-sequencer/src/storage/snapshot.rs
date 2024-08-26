@@ -12,6 +12,7 @@ use quick_cache::sync::Cache as QuickCache;
 use super::{
     CachedValue,
     SnapshotDelta,
+    SnapshotDeltaCompat,
     StateRead,
     Storable,
     StoredValue,
@@ -39,6 +40,10 @@ impl Snapshot {
 
     pub(crate) fn new_delta(&self) -> SnapshotDelta {
         SnapshotDelta::new(self.clone())
+    }
+
+    pub(crate) fn new_cnidarium_delta(&self) -> SnapshotDeltaCompat {
+        SnapshotDeltaCompat::new(self.inner())
     }
 
     pub(crate) async fn root_hash(&self) -> Result<RootHash> {

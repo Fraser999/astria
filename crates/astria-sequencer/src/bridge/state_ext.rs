@@ -59,7 +59,7 @@ where
     }
 }
 
-fn rollup_id_storage_key<T: AddressBytes>(address: &T) -> String {
+pub(crate) fn rollup_id_storage_key<T: AddressBytes>(address: &T) -> String {
     format!(
         "{}/rollupid",
         BridgeAccountKey {
@@ -69,7 +69,7 @@ fn rollup_id_storage_key<T: AddressBytes>(address: &T) -> String {
     )
 }
 
-fn asset_id_storage_key<T: AddressBytes>(address: &T) -> String {
+pub(crate) fn asset_id_storage_key<T: AddressBytes>(address: &T) -> String {
     format!(
         "{}/assetid",
         BridgeAccountKey {

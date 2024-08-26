@@ -1,4 +1,5 @@
 mod cache;
+mod cnidarium_compat;
 mod delta;
 mod snapshot;
 mod state;
@@ -32,7 +33,14 @@ use self::{
     delta::DeltaInner,
 };
 pub(crate) use self::{
-    delta::SnapshotDelta,
+    cnidarium_compat::{
+        DeltaDeltaCompat,
+        SnapshotDeltaCompat,
+    },
+    delta::{
+        DeltaDelta,
+        SnapshotDelta,
+    },
     snapshot::Snapshot,
     state::{
         StateRead,
@@ -124,7 +132,11 @@ impl Storage {
     /// Prepares a commit for the provided `SnapshotDelta`, returning a `StagedWriteBatch`.
     ///
     /// The batch can be committed to the database using the [`Storage::commit_batch`] method.
-    pub(crate) async fn prepare_commit(&self, delta: SnapshotDelta) -> Result<StagedWriteBatch> {
+    pub(crate) async fn prepare_commit(
+        &self,
+        delta: SnapshotDelta,
+        cnidarium_delta: SnapshotDeltaCompat,
+    ) -> Result<StagedWriteBatch> {
         let DeltaInner {
             verifiable_changes,
             nonverifiable_changes,
@@ -134,7 +146,7 @@ impl Storage {
         } = delta
             .consume()
             .context("failed to commit: already committed")?;
-        let mut cnidarium_delta = cnidarium::StateDelta::new(self.latest_snapshot().inner());
+        let mut cnidarium_delta = cnidarium_delta.take_inner().unwrap();
 
         for (key, cached_value) in verifiable_changes {
             match cached_value {
@@ -164,7 +176,9 @@ impl Storage {
     /// chain state.
     #[cfg(test)]
     pub(crate) async fn commit(&self, delta: SnapshotDelta) -> Result<RootHash> {
-        let batch = self.prepare_commit(delta).await?;
+        // TODO(Fraser) - fix
+        let cnidarium_delta = SnapshotDeltaCompat::new(self.latest_snapshot().inner());
+        let batch = self.prepare_commit(delta, cnidarium_delta).await?;
         self.commit_batch(batch)
     }
 
@@ -184,9 +198,9 @@ impl Debug for Storage {
 }
 
 /// Gets a value from the verifiable key-value store.
-async fn get<S, K>(state: &S, key: K) -> Result<Option<StoredValue>>
+pub(crate) async fn get<S, K>(state: &S, key: K) -> Result<Option<StoredValue>>
 where
-    S: cnidarium::StateRead,
+    S: cnidarium::StateRead + ?Sized,
     K: AsRef<str>,
 {
     let key = key.as_ref();
@@ -238,9 +252,9 @@ where
 }
 
 /// Puts the given value into the verifiable key-value store under the given key.
-fn put<S, K>(state: &mut S, key: K, value: &StoredValue) -> Result<()>
+pub(crate) fn put<S, K>(state: &mut S, key: K, value: &StoredValue) -> Result<()>
 where
-    S: cnidarium::StateWrite,
+    S: cnidarium::StateWrite + ?Sized,
     K: Into<String>,
 {
     let key = key.into();
@@ -251,9 +265,9 @@ where
 }
 
 /// Deletes the key-value from the verifiable key-value store under the given key.
-fn delete<S, K>(state: &mut S, key: K)
+pub(crate) fn delete<S, K>(state: &mut S, key: K)
 where
-    S: cnidarium::StateWrite,
+    S: cnidarium::StateWrite + ?Sized,
     K: Into<String>,
 {
     state.delete(key.into());

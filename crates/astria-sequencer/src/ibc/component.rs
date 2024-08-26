@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use anyhow::Result;
+use astria_core::sequencer::GenesisState;
 use penumbra_ibc::{
     component::Ibc,
     genesis::Content,
@@ -15,54 +18,54 @@ use crate::{
         host_interface::AstriaHost,
         state_ext::StateWriteExt,
     },
+    storage::{
+        DeltaDelta,
+        DeltaDeltaCompat,
+    },
 };
 
 #[derive(Default)]
 pub(crate) struct IbcComponent;
 
-#[async_trait::async_trait]
-impl Component for IbcComponent {
-    type AppState = astria_core::sequencer::GenesisState;
-
+impl IbcComponent {
     #[instrument(name = "IbcComponent::init_chain", skip_all)]
-    async fn init_chain<S: StateWriteExt>(mut state: S, app_state: &Self::AppState) -> Result<()> {
-        Ibc::init_chain(
-            &mut state,
-            Some(&Content {
-                ibc_params: app_state.ibc_params().clone(),
-            }),
-        )
-        .await;
-
-        state
-            .put_ibc_sudo_address(*app_state.ibc_sudo_address())
-            .context("failed to set IBC sudo key")?;
+    pub(crate) async fn init_chain(
+        state: &mut DeltaDeltaCompat,
+        app_state: &GenesisState,
+    ) -> Result<()> {
+        state.put_ibc_sudo_address(*app_state.ibc_sudo_address());
 
         for address in app_state.ibc_relayer_addresses() {
             state.put_ibc_relayer_address(address);
         }
 
-        state
-            .put_ics20_withdrawal_base_fee(app_state.fees().ics20_withdrawal_base_fee)
-            .context("failed to put ics20 withdrawal base fee")?;
+        state.put_ics20_withdrawal_base_fee(app_state.fees().ics20_withdrawal_base_fee);
+
+        Ibc::init_chain(
+            state,
+            Some(&Content {
+                ibc_params: app_state.ibc_params().clone(),
+            }),
+        )
+        .await;
         Ok(())
     }
 
     #[instrument(name = "IbcComponent::begin_block", skip_all)]
-    async fn begin_block<S: StateWriteExt + 'static>(
-        state: &S,
+    pub(crate) async fn begin_block(
+        state: &mut Arc<DeltaDeltaCompat>,
         begin_block: &BeginBlock,
     ) -> Result<()> {
-        Ibc::begin_block::<AstriaHost, S>(state, begin_block).await;
+        Ibc::begin_block::<AstriaHost, _>(state, begin_block).await;
         Ok(())
     }
 
     #[instrument(name = "IbcComponent::end_block", skip_all)]
-    async fn end_block<S: StateWriteExt + 'static>(
-        _state: &S,
-        _end_block: &EndBlock,
+    pub(crate) async fn end_block(
+        state: &mut Arc<DeltaDeltaCompat>,
+        end_block: &EndBlock,
     ) -> Result<()> {
-        // Ibc::end_block(state, end_block).await;
+        Ibc::end_block(state, end_block).await;
         Ok(())
     }
 }

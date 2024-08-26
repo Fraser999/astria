@@ -19,7 +19,7 @@ use crate::{
         StateWriteExt,
     },
     sequence,
-    storage::StateWrite,
+    storage::DeltaDelta,
 };
 
 #[async_trait::async_trait]
@@ -34,7 +34,7 @@ impl ActionHandler for SequenceAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         ensure!(
             state
                 .is_allowed_fee_asset(&self.fee_asset)

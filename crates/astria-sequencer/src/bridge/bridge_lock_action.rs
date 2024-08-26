@@ -23,7 +23,10 @@ use crate::{
     address::StateReadExt as _,
     app::ActionHandler,
     bridge::StateReadExt as _,
-    storage::StateWrite,
+    storage::{
+        DeltaDelta,
+        StateWrite,
+    },
 };
 
 #[async_trait::async_trait]
@@ -32,7 +35,7 @@ impl ActionHandler for BridgeLockAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.to)
             .await
@@ -162,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn execute_fee_calc() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
         let transfer_fee = 12;
 
         let from_address = astria_address(&[2; 20]);

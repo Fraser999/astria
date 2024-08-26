@@ -8,4 +8,5 @@ mod state_ext;
 pub(crate) use state_ext::{
     StateReadExt,
     StateWriteExt,
+    ICS20_WITHDRAWAL_BASE_FEE_STORAGE_KEY,
 };

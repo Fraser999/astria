@@ -6,7 +6,10 @@ use tendermint::abci::request::{
 use tracing::instrument;
 
 use super::state_ext::StateWriteExt;
-use crate::component::Component;
+use crate::{
+    component::Component,
+    storage::DeltaDelta,
+};
 
 #[derive(Default)]
 pub(crate) struct BridgeComponent;
@@ -16,7 +19,7 @@ impl Component for BridgeComponent {
     type AppState = astria_core::sequencer::GenesisState;
 
     #[instrument(name = "BridgeComponent::init_chain", skip_all)]
-    async fn init_chain<S: StateWriteExt>(state: S, app_state: &Self::AppState) -> Result<()> {
+    async fn init_chain(state: &DeltaDelta, app_state: &Self::AppState) -> Result<()> {
         state.put_init_bridge_account_base_fee(app_state.fees().init_bridge_account_base_fee);
         state.put_bridge_lock_byte_cost_multiplier(
             app_state.fees().bridge_lock_byte_cost_multiplier,
@@ -26,18 +29,12 @@ impl Component for BridgeComponent {
     }
 
     #[instrument(name = "BridgeComponent::begin_block", skip_all)]
-    async fn begin_block<S: StateWriteExt + 'static>(
-        _state: &S,
-        _begin_block: &BeginBlock,
-    ) -> Result<()> {
+    async fn begin_block(_state: &DeltaDelta, _begin_block: &BeginBlock) -> Result<()> {
         Ok(())
     }
 
     #[instrument(name = "BridgeComponent::end_block", skip_all)]
-    async fn end_block<S: StateWriteExt + 'static>(
-        _state: &S,
-        _end_block: &EndBlock,
-    ) -> Result<()> {
+    async fn end_block(_state: &DeltaDelta, _end_block: &EndBlock) -> Result<()> {
         Ok(())
     }
 }

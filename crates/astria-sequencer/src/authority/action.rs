@@ -20,9 +20,12 @@ use crate::{
         StateWriteExt as _,
     },
     bridge::StateWriteExt as _,
-    // ibc::StateWriteExt as _,
+    ibc::StateWriteExt as _,
     sequence::StateWriteExt as _,
-    storage::StateWrite,
+    storage::{
+        DeltaDelta,
+        StateWrite,
+    },
 };
 
 #[async_trait::async_trait]
@@ -31,7 +34,7 @@ impl ActionHandler for ValidatorUpdate {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         // ensure signer is the valid `sudo` key in state
         let sudo_address = state
             .get_sudo_address()
@@ -76,7 +79,7 @@ impl ActionHandler for SudoAddressChangeAction {
 
     /// check that the signer of the transaction is the current sudo address,
     /// as only that address can change the sudo address
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.new_address)
             .await
@@ -100,7 +103,7 @@ impl ActionHandler for FeeChangeAction {
 
     /// check that the signer of the transaction is the current sudo address,
     /// as only that address can change the fee
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         // ensure signer is the valid `sudo` key in state
         let sudo_address = state
             .get_sudo_address()
@@ -126,7 +129,7 @@ impl ActionHandler for FeeChangeAction {
                 state.put_bridge_sudo_change_base_fee(self.new_value);
             }
             FeeChange::Ics20WithdrawalBaseFee => {
-                // state.put_ics20_withdrawal_base_fee(self.new_value);
+                state.put_ics20_withdrawal_base_fee(self.new_value);
             }
         }
 
@@ -148,7 +151,7 @@ mod test {
     #[tokio::test]
     async fn fee_change_action_executes() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
         let transfer_fee = 12;
 
         let from = [1; 20];

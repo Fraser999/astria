@@ -35,8 +35,8 @@ use crate::{
         StateWriteExt as _,
     },
     storage::{
+        DeltaDelta,
         StateRead,
-        StateWrite,
     },
 };
 
@@ -109,7 +109,7 @@ impl ActionHandler for action::Ics20Withdrawal {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.return_address)
             .await
@@ -125,50 +125,51 @@ impl ActionHandler for action::Ics20Withdrawal {
             .await
             .context("failed establishing which account to withdraw funds from")?;
 
-        let fee = state
-            .get_ics20_withdrawal_base_fee()
-            .await
-            .context("failed to get ics20 withdrawal base fee")?;
-
-        let packet = {
-            let packet = withdrawal_to_unchecked_ibc_packet(self);
-            state
-                .send_packet_check(packet)
-                .await
-                .context("packet failed send check")?
-        };
-
-        state
-            .decrease_balance(withdrawal_target, self.denom(), self.amount())
-            .await
-            .context("failed to decrease sender or bridge balance")?;
-
-        state
-            .decrease_balance(from, self.fee_asset(), fee)
-            .await
-            .context("failed to subtract fee from sender balance")?;
-
-        // if we're the source, move tokens to the escrow account,
-        // otherwise the tokens are just burned
-        if is_source(packet.source_port(), packet.source_channel(), self.denom()) {
-            let channel_balance = state
-                .get_ibc_channel_balance(self.source_channel(), self.denom())
-                .await
-                .context("failed to get channel balance")?;
-
-            state
-                .put_ibc_channel_balance(
-                    self.source_channel(),
-                    self.denom(),
-                    channel_balance
-                        .checked_add(self.amount())
-                        .context("overflow when adding to channel balance")?,
-                )
-                .context("failed to update channel balance")?;
-        }
-
-        state.send_packet_execute(packet).await;
-        Ok(())
+        // let fee = state
+        //     .get_ics20_withdrawal_base_fee()
+        //     .await
+        //     .context("failed to get ics20 withdrawal base fee")?;
+        //
+        // let packet = {
+        //     let packet = withdrawal_to_unchecked_ibc_packet(self);
+        //     state
+        //         .send_packet_check(packet)
+        //         .await
+        //         .context("packet failed send check")?
+        // };
+        //
+        // state
+        //     .decrease_balance(withdrawal_target, self.denom(), self.amount())
+        //     .await
+        //     .context("failed to decrease sender or bridge balance")?;
+        //
+        // state
+        //     .decrease_balance(from, self.fee_asset(), fee)
+        //     .await
+        //     .context("failed to subtract fee from sender balance")?;
+        //
+        // // if we're the source, move tokens to the escrow account,
+        // // otherwise the tokens are just burned
+        // if is_source(packet.source_port(), packet.source_channel(), self.denom()) {
+        //     let channel_balance = state
+        //         .get_ibc_channel_balance(self.source_channel(), self.denom())
+        //         .await
+        //         .context("failed to get channel balance")?;
+        //
+        //     state
+        //         .put_ibc_channel_balance(
+        //             self.source_channel(),
+        //             self.denom(),
+        //             channel_balance
+        //                 .checked_add(self.amount())
+        //                 .context("overflow when adding to channel balance")?,
+        //         )
+        //         .context("failed to update channel balance")?;
+        // }
+        //
+        // state.send_packet_execute(packet).await;
+        // Ok(())
+        todo!()
     }
 }
 
@@ -290,15 +291,14 @@ mod tests {
 
         async fn run_test(action: action::Ics20Withdrawal) {
             let storage = Storage::new_temp().await;
-            let snapshot = storage.latest_snapshot();
-            let mut state = StateDelta::new(snapshot);
+            let state = storage.new_delta_of_latest_snapshot().new_delta();
 
             state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
             // withdraw is *not* the bridge address, Ics20Withdrawal must be sent by the withdrawer
             state.put_bridge_account_rollup_id(
                 bridge_address(),
-                &RollupId::from_unhashed_bytes("testrollupid"),
+                RollupId::from_unhashed_bytes("testrollupid"),
             );
             state.put_bridge_account_withdrawer_address(
                 bridge_address(),

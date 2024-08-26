@@ -14,10 +14,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    storage::{
-        StateRead,
-        StateWrite,
-    },
+    storage::DeltaDelta,
 };
 
 #[async_trait::async_trait]
@@ -26,11 +23,7 @@ impl ActionHandler for BridgeSudoChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateRead + StateWrite>(
-        &self,
-        state: &S,
-        from: [u8; 20],
-    ) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.bridge_address)
             .await
@@ -116,7 +109,7 @@ mod tests {
     #[tokio::test]
     async fn fails_with_unauthorized_if_signer_is_not_sudo_address() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
 
         let from = [1; 20];
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
@@ -148,7 +141,7 @@ mod tests {
     #[tokio::test]
     async fn executes() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
 
         let sudo_address = astria_address(&[98; 20]);
 

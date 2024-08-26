@@ -21,7 +21,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    storage::StateWrite,
+    storage::DeltaDelta,
 };
 
 #[async_trait::async_trait]
@@ -30,7 +30,7 @@ impl ActionHandler for InitBridgeAccountAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         if let Some(withdrawer_address) = &self.withdrawer_address {
             state
                 .ensure_base_prefix(withdrawer_address)

@@ -84,7 +84,7 @@ use crate::{
     },
     bridge::component::BridgeComponent,
     component::Component as _,
-    // ibc::component::IbcComponent,
+    ibc::component::IbcComponent,
     mempool::{
         Mempool,
         RemovalReason,
@@ -103,8 +103,10 @@ use crate::{
         StateWriteExt as _,
     },
     storage::{
+        DeltaDeltaCompat,
         Snapshot,
         SnapshotDelta,
+        SnapshotDeltaCompat,
         StateWrite as _,
         Storage,
     },
@@ -125,6 +127,8 @@ use crate::{
 pub(crate) struct App {
     /// The inter-block state being written to by the application.
     state: SnapshotDelta,
+
+    cnidarium_state: SnapshotDeltaCompat,
 
     // The mempool of the application.
     //
@@ -188,9 +192,11 @@ impl App {
             .expect("root hash conversion must succeed; should be 32 bytes");
 
         let state = snapshot.new_delta();
+        let cnidarium_state = snapshot.new_cnidarium_delta();
 
         Ok(Self {
             state,
+            cnidarium_state,
             mempool,
             validator_address: None,
             executed_proposal_hash: Hash::default(),
@@ -237,18 +243,22 @@ impl App {
                 genesis_validators,
             },
         )
-        .await
-        .context("failed to call init_chain on AuthorityComponent")?;
+            .await
+            .context("failed to call init_chain on AuthorityComponent")?;
         BridgeComponent::init_chain(&state_tx, &genesis_state)
             .await
             .context("failed to call init_chain on BridgeComponent")?;
-        // IbcComponent::init_chain(&state_tx, &genesis_state)
-        //     .await
-        //     .context("failed to call init_chain on IbcComponent")?;
+
+        let mut cnidarium_state_tx = DeltaDeltaCompat::new(self.cnidarium_state.clone());
+        IbcComponent::init_chain(&mut cnidarium_state_tx, &genesis_state)
+            .await
+            .context("failed to call init_chain on IbcComponent")?;
+        let cache = cnidarium_state_tx.flatten();
+        cache.apply_to(self.cnidarium_state.inner_mut().unwrap());
+
         SequenceComponent::init_chain(&state_tx, &genesis_state)
             .await
             .context("failed to call init_chain on SequenceComponent")?;
-
         state_tx.apply();
 
         let app_hash = self
@@ -292,7 +302,7 @@ impl App {
             usize::try_from(prepare_proposal.max_tx_bytes)
                 .context("failed to convert max_tx_bytes to usize")?,
         )
-        .context("failed to create block size constraints")?;
+            .context("failed to create block size constraints")?;
 
         let block_data = BlockData {
             misbehavior: prepare_proposal.misbehavior,
@@ -860,7 +870,7 @@ impl App {
                 .collect(),
             deposits,
         )
-        .context("failed to convert block info and data to SequencerBlock")?;
+            .context("failed to convert block info and data to SequencerBlock")?;
         let state_tx = self.state.new_delta();
         state_tx
             .put_sequencer_block(sequencer_block)
@@ -911,8 +921,12 @@ impl App {
             "stored storage version for height"
         );
 
+        // TODO(Fraser) - make less crappy?
+        let dummy_state = storage.latest_snapshot().new_cnidarium_delta();
+        let cnidarium_state = std::mem::replace(&mut self.cnidarium_state, dummy_state);
+
         let write_batch = storage
-            .prepare_commit(self.state.clone())
+            .prepare_commit(self.state.clone(), cnidarium_state)
             .await
             .context("failed to prepare commit")?;
         let app_hash: AppHash = write_batch
@@ -947,9 +961,16 @@ impl App {
         BridgeComponent::begin_block(&state_tx, begin_block)
             .await
             .context("failed to call begin_block on BridgeComponent")?;
-        // IbcComponent::begin_block(&state_tx, begin_block)
-        //     .await
-        //     .context("failed to call begin_block on IbcComponent")?;
+
+        let mut cnidarium_state_tx = Arc::new(DeltaDeltaCompat::new(self.cnidarium_state.clone()));
+        IbcComponent::begin_block(&mut cnidarium_state_tx, begin_block)
+            .await
+            .context("failed to call begin_block on IbcComponent")?;
+        let cache = Arc::try_unwrap(cnidarium_state_tx)
+            .unwrap_or_else(|_| unreachable!())
+            .flatten();
+        cache.apply_to(self.cnidarium_state.inner_mut().unwrap());
+
         SequenceComponent::begin_block(&state_tx, begin_block)
             .await
             .context("failed to call begin_block on SequenceComponent")?;
@@ -969,7 +990,7 @@ impl App {
 
         let state_tx = self.state.new_delta();
 
-        transaction::check_and_execute(&signed_tx, &state_tx)
+        transaction::check_and_execute(&signed_tx, &state_tx, &mut self.cnidarium_state)
             .await
             .context("failed executing transaction")?;
 
@@ -1000,9 +1021,16 @@ impl App {
         BridgeComponent::end_block(&state_tx, &end_block)
             .await
             .context("failed to call end_block on BridgeComponent")?;
-        // IbcComponent::end_block(&state_tx, &end_block)
-        //     .await
-        //     .context("failed to call end_block on IbcComponent")?;
+
+        let mut cnidarium_state_tx = Arc::new(DeltaDeltaCompat::new(self.cnidarium_state.clone()));
+        IbcComponent::end_block(&mut cnidarium_state_tx, &end_block)
+            .await
+            .context("failed to call end_block on IbcComponent")?;
+        let cache = Arc::try_unwrap(cnidarium_state_tx)
+            .unwrap_or_else(|_| unreachable!())
+            .flatten();
+        cache.apply_to(self.cnidarium_state.inner_mut().unwrap());
+
         SequenceComponent::end_block(&state_tx, &end_block)
             .await
             .context("failed to call end_block on SequenceComponent")?;
@@ -1045,7 +1073,7 @@ impl App {
                 "write batch must be set, as `finalize_block` is always called before `commit`",
             ))
             .expect("must be able to successfully commit to storage");
-        tracing::debug!(
+        debug!(
             app_hash = %telemetry::display::hex(&app_hash),
             "finished committing state",
         );
@@ -1057,6 +1085,7 @@ impl App {
 
         // Get the latest version of the state, now that we've committed it.
         self.state = storage.new_delta_of_latest_snapshot();
+        self.cnidarium_state = storage.latest_snapshot().new_cnidarium_delta();
     }
 }
 

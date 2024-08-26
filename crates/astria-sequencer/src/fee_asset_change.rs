@@ -14,7 +14,7 @@ use crate::{
         StateWriteExt as _,
     },
     authority::StateReadExt as _,
-    storage::StateWrite,
+    storage::DeltaDelta,
 };
 
 #[async_trait]
@@ -23,7 +23,7 @@ impl ActionHandler for FeeAssetChangeAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         let authority_sudo_address = state
             .get_sudo_address()
             .await

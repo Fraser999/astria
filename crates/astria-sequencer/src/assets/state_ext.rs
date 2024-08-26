@@ -24,11 +24,11 @@ use crate::storage::{
 const FEE_ASSET_PREFIX: &str = "fee_asset/";
 const NATIVE_ASSET_KEY: &[u8] = b"nativeasset";
 
-fn asset_storage_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
+pub(crate) fn asset_storage_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
     format!("asset/{}", crate::storage_keys::hunks::Asset::from(asset))
 }
 
-fn fee_asset_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
+pub(crate) fn fee_asset_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
     format!(
         "{FEE_ASSET_PREFIX}{}",
         crate::storage_keys::hunks::Asset::from(asset)
@@ -109,7 +109,8 @@ pub(crate) trait StateReadExt: StateRead {
         // }
         //
         // Ok(assets)
-        todo!()
+        // todo!()
+        Ok(vec![])
     }
 }
 
@@ -139,7 +140,11 @@ pub(crate) trait StateWriteExt: StateWrite {
     }
 
     fn put_allowed_fee_asset<TAsset: Into<IbcPrefixed>>(&self, asset: TAsset) {
-        self.nonverifiable_put(fee_asset_key(asset).as_bytes(), ());
+        let key = fee_asset_key(asset);
+        println!("PUTTING fee asset {key}");
+        // PUTTING fee asset
+        // fee_asset/704031c868fd3d3c84a1cfa8cb45deba4ea746b44697f7f4a6ed1b8f6c239b82
+        self.nonverifiable_put(key.as_bytes(), ());
     }
 
     fn delete_allowed_fee_asset<TAsset: Into<IbcPrefixed>>(&self, asset: TAsset) {

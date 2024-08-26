@@ -103,7 +103,7 @@ async fn app_execute_transaction_transfer() {
                 asset: crate::test_utils::nria().into(),
                 fee_asset: crate::test_utils::nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -158,7 +158,7 @@ async fn app_execute_transaction_transfer_not_native_token() {
                 asset: test_asset(),
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -223,7 +223,7 @@ async fn app_execute_transaction_transfer_balance_too_low_for_fee() {
                 asset: nria().into(),
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -263,7 +263,7 @@ async fn app_execute_transaction_sequence() {
                 data,
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -298,7 +298,7 @@ async fn app_execute_transaction_invalid_fee_asset() {
                 data,
                 fee_asset: test_asset(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -368,8 +368,8 @@ async fn app_execute_transaction_ibc_relayer_change_deletion() {
         ibc_relayer_addresses: vec![alice_address],
         ..unchecked_genesis_state()
     }
-        .try_into()
-        .unwrap();
+    .try_into()
+    .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -395,8 +395,8 @@ async fn app_execute_transaction_ibc_relayer_change_invalid() {
         ibc_relayer_addresses: vec![alice_address],
         ..unchecked_genesis_state()
     }
-        .try_into()
-        .unwrap();
+    .try_into()
+    .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -449,8 +449,8 @@ async fn app_execute_transaction_sudo_address_change_error() {
         ibc_sudo_address: astria_address(&[0u8; 20]),
         ..unchecked_genesis_state()
     }
-        .try_into()
-        .unwrap();
+    .try_into()
+    .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -510,8 +510,8 @@ async fn app_execute_transaction_fee_asset_change_removal() {
         allowed_fee_assets: vec![nria().into(), test_asset()],
         ..unchecked_genesis_state()
     }
-        .try_into()
-        .unwrap();
+    .try_into()
+    .unwrap();
     let mut app = initialize_app(Some(genesis_state), vec![]).await;
 
     let tx = UnsignedTransaction {
@@ -723,11 +723,11 @@ async fn app_execute_transaction_bridge_lock_action_ok() {
 
     let fee = transfer_fee
         + app
-        .state
-        .get_bridge_lock_byte_cost_multiplier()
-        .await
-        .unwrap()
-        * crate::bridge::get_deposit_byte_len(&expected_deposit);
+            .state
+            .get_bridge_lock_byte_cost_multiplier()
+            .await
+            .unwrap()
+            * crate::bridge::get_deposit_byte_len(&expected_deposit);
     assert_eq!(
         app.state
             .get_account_balance(alice_address, nria())
@@ -799,7 +799,7 @@ async fn app_execute_transaction_invalid_nonce() {
                 data,
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -846,7 +846,7 @@ async fn app_execute_transaction_invalid_chain_id() {
                 data,
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 
@@ -904,10 +904,10 @@ async fn app_stateful_check_fails_insufficient_total_balance() {
                 asset: nria().into(),
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     }
-        .into_signed(&alice);
+    .into_signed(&alice);
 
     // make transfer
     app.execute_transaction(Arc::new(signed_tx)).await.unwrap();
@@ -924,23 +924,27 @@ async fn app_stateful_check_fails_insufficient_total_balance() {
                 data: data.clone(),
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
             SequenceAction {
                 rollup_id: RollupId::from_unhashed_bytes(b"testchainid"),
                 data: data.clone(),
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     }
-        .into_signed(&keypair);
+    .into_signed(&keypair);
 
     // try double, see fails stateful check
-    let res = transaction::check_and_execute(&signed_tx_fail, &app.state)
-        .await
-        .unwrap_err()
-        .root_cause()
-        .to_string();
+    let res = transaction::check_and_execute(
+        &signed_tx_fail,
+        &app.state.new_delta(),
+        &mut app.cnidarium_state,
+    )
+    .await
+    .unwrap_err()
+    .root_cause()
+    .to_string();
     assert!(res.contains("insufficient funds for asset"));
 
     // build single transfer to see passes
@@ -955,14 +959,18 @@ async fn app_stateful_check_fails_insufficient_total_balance() {
                 data,
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     }
-        .into_signed(&keypair);
+    .into_signed(&keypair);
 
-    transaction::check_and_execute(&signed_tx_pass, &app.state)
-        .await
-        .expect("stateful check should pass since we transferred enough to cover fee");
+    transaction::check_and_execute(
+        &signed_tx_pass,
+        &app.state.new_delta(),
+        &mut app.cnidarium_state,
+    )
+    .await
+    .expect("stateful check should pass since we transferred enough to cover fee");
 }
 
 #[tokio::test]
@@ -1062,7 +1070,7 @@ async fn transaction_execution_records_fee_event() {
                 asset: nria().into(),
                 fee_asset: nria().into(),
             }
-                .into(),
+            .into(),
         ],
     };
 

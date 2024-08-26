@@ -17,7 +17,7 @@ use crate::{
     address::StateReadExt as _,
     app::ActionHandler,
     bridge::StateReadExt as _,
-    storage::StateWrite,
+    storage::DeltaDelta,
 };
 
 #[async_trait::async_trait]
@@ -26,7 +26,7 @@ impl ActionHandler for BridgeUnlockAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         state
             .ensure_base_prefix(&self.to)
             .await
@@ -100,7 +100,7 @@ mod tests {
     #[tokio::test]
     async fn fails_if_bridge_account_has_no_withdrawer_address() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
 
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
@@ -133,7 +133,7 @@ mod tests {
     #[tokio::test]
     async fn fails_if_withdrawer_is_not_signer() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
 
         state.put_base_prefix(ASTRIA_PREFIX).unwrap();
 
@@ -168,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn execute_with_bridge_address_unset() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
 
         let bridge_address = astria_address(&[1; 20]);
         let from = bridge_address.bytes();
@@ -214,7 +214,7 @@ mod tests {
     #[tokio::test]
     async fn execute_with_bridge_address_set() {
         let storage = Storage::new_temp().await;
-        let state = storage.new_delta_of_latest_snapshot();
+        let state = storage.new_delta_of_latest_snapshot().new_delta();
 
         let bridge_address = astria_address(&[1; 20]);
         let from = bridge_address.bytes();

@@ -22,6 +22,7 @@ use crate::{
     },
     bridge::StateReadExt as _,
     storage::{
+        DeltaDelta,
         StateRead,
         StateWrite,
     },
@@ -33,7 +34,7 @@ impl ActionHandler for TransferAction {
         Ok(())
     }
 
-    async fn check_and_execute<S: StateWrite>(&self, state: &S, from: [u8; 20]) -> Result<()> {
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> Result<()> {
         tokio::try_join!(
             async {
                 ensure!(

@@ -7,9 +7,12 @@ use anyhow::{
     ensure,
     Context as _,
 };
-use astria_core::protocol::transaction::v1alpha1::{
-    action::Action,
-    SignedTransaction,
+use astria_core::{
+    protocol::transaction::v1alpha1::{
+        action::Action,
+        SignedTransaction,
+    },
+    sequencerblock::v1alpha1::block::Deposit,
 };
 pub(crate) use checks::{
     check_balance_for_total_fees_and_transfers,
@@ -28,12 +31,17 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    // ibc::{
-    //     host_interface::AstriaHost,
-    //     StateReadExt as _,
-    // },
+    ibc::{
+        host_interface::AstriaHost,
+        StateReadExt as _,
+    },
     state_ext::StateReadExt as _,
-    storage::StateWrite,
+    storage::{
+        DeltaDelta,
+        DeltaDeltaCompat,
+        SnapshotDeltaCompat,
+        StateWrite,
+    },
 };
 
 #[derive(Debug)]
@@ -91,27 +99,23 @@ pub(crate) async fn check_stateless(tx: &SignedTransaction) -> anyhow::Result<()
                 .check_stateless()
                 .await
                 .context("stateless check failed for FeeChangeAction")?,
-            Action::Ibc(_act) => {
-                // let action = act
-                //     .clone()
-                //     .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
-                // action
-                //     .check_stateless(())
-                //     .await
-                //     .context("stateless check failed for IbcAction")?;
+            Action::Ibc(act) => {
+                let action = act
+                    .clone()
+                    .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
+                action
+                    .check_stateless(())
+                    .await
+                    .context("stateless check failed for IbcAction")?;
             }
-            Action::Ics20Withdrawal(_act) => {
-                // act
-                //     .check_stateless()
-                //     .await
-                //     .context("stateless check failed for Ics20WithdrawalAction")?
-            }
-            Action::IbcRelayerChange(_act) => {
-                // act
-                //     .check_stateless()
-                //     .await
-                //     .context("stateless check failed for IbcRelayerChangeAction")?
-            }
+            Action::Ics20Withdrawal(act) => act
+                .check_stateless()
+                .await
+                .context("stateless check failed for Ics20WithdrawalAction")?,
+            Action::IbcRelayerChange(act) => act
+                .check_stateless()
+                .await
+                .context("stateless check failed for IbcRelayerChangeAction")?,
             Action::FeeAssetChange(act) => act
                 .check_stateless()
                 .await
@@ -141,10 +145,12 @@ pub(crate) async fn check_stateless(tx: &SignedTransaction) -> anyhow::Result<()
 // individual actions. This could be tidied up by implementing `ActionHandler for Action`
 // and letting it delegate.
 #[allow(clippy::too_many_lines)]
-pub(crate) async fn check_and_execute<S: StateWrite>(
+pub(crate) async fn check_and_execute(
     tx: &SignedTransaction,
-    state: S,
+    state: &DeltaDelta,
+    cnidarium_state: &mut SnapshotDeltaCompat,
 ) -> anyhow::Result<()> {
+    use cnidarium::StateRead as _;
     let from = tx.address_bytes();
 
     // Transactions must match the chain id of the node.
@@ -208,38 +214,43 @@ pub(crate) async fn check_and_execute<S: StateWrite>(
                 .check_and_execute(&state, from)
                 .await
                 .context("executing fee change failed")?,
-            Action::Ibc(_act) => {
-                // // FIXME: this check should be moved to check_and_execute, as it now has
-                // // access to the the signer through state. However, what's the correct
-                // // ibc AppHandler call to do it? Can we just update one of the trait methods
-                // // of crate::ibc::ics20_transfer::Ics20Transfer?
-                // ensure!(
-                //     state
-                //         .is_ibc_relayer(tx)
-                //         .await
-                //         .context("failed to check if address is IBC relayer")?,
-                //     "only IBC sudo address can execute IBC actions"
-                // );
-                // let action = act
-                //     .clone()
-                //     .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
-                // action
-                //     .check_and_execute(&mut state)
-                //     .await
-                //     .context("failed executing ibc action")?;
+            Action::Ibc(act) => {
+                // FIXME: this check should be moved to check_and_execute, as it now has
+                // access to the the signer through state. However, what's the correct
+                // ibc AppHandler call to do it? Can we just update one of the trait methods
+                // of crate::ibc::ics20_transfer::Ics20Transfer?
+                let mut cnidarium_state_tx = DeltaDeltaCompat::new(cnidarium_state.clone());
+                ensure!(
+                    cnidarium_state_tx
+                        .is_ibc_relayer(tx)
+                        .await
+                        .context("failed to check if address is IBC relayer")?,
+                    "only IBC sudo address can execute IBC actions"
+                );
+                let action = act
+                    .clone()
+                    .with_handler::<crate::ibc::ics20_transfer::Ics20Transfer, AstriaHost>();
+                action
+                    .check_and_execute(&mut cnidarium_state_tx)
+                    .await
+                    .context("failed executing ibc action")?;
+                if let Some(deposits) = cnidarium_state_tx.object_get::<Vec<Deposit>>("deposits") {
+                    deposits
+                        .into_iter()
+                        .for_each(|deposit| state.put_bridge_deposit(deposit))
+                }
+
+                let cache = cnidarium_state_tx.flatten();
+                cache.apply_to(cnidarium_state.inner_mut().unwrap());
             }
-            Action::Ics20Withdrawal(_act) => {
-                // act
-                //     .check_and_execute(&state, from)
-                //     .await
-                //     .context("failed executing ics20 withdrawal")?
-            }
-            Action::IbcRelayerChange(_act) => {
-                // act
-                //     .check_and_execute(&state, from)
-                //     .await
-                //     .context("failed executing ibc relayer change")?
-            }
+            Action::Ics20Withdrawal(act) => act
+                .check_and_execute(&state, from)
+                .await
+                .context("failed executing ics20 withdrawal")?,
+            Action::IbcRelayerChange(act) => act
+                .check_and_execute(&state, from)
+                .await
+                .context("failed executing ibc relayer change")?,
             Action::FeeAssetChange(act) => act
                 .check_and_execute(&state, from)
                 .await

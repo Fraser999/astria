@@ -1,4 +1,4 @@
-use crate::storage::StateWrite;
+use crate::storage::DeltaDelta;
 
 /// This trait is a verbatim copy of `cnidarium_component::ActionHandler`.
 ///
@@ -21,9 +21,5 @@ pub(crate) trait ActionHandler {
 
     async fn check_stateless(&self) -> anyhow::Result<()>;
 
-    async fn check_and_execute<S: StateWrite>(
-        &self,
-        state: &S,
-        from: [u8; 20],
-    ) -> anyhow::Result<()>;
+    async fn check_and_execute(&self, state: &DeltaDelta, from: [u8; 20]) -> anyhow::Result<()>;
 }

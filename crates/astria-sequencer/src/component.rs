@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tendermint::abci;
 
-use crate::storage::StateWrite;
+use crate::storage::DeltaDelta;
 
 /// A component of the Sequencer application.
 /// Based off Penumbra's [`Component`], but with modifications.
@@ -17,7 +17,7 @@ pub(crate) trait Component {
     /// This method is called once per chain, and should only perform
     /// writes, since the backing tree for the [`State`] will
     /// be empty.
-    async fn init_chain<S: StateWrite>(state: S, app_state: &Self::AppState) -> Result<()>;
+    async fn init_chain(state: &DeltaDelta, app_state: &Self::AppState) -> Result<()>;
 
     /// Begins a new block, optionally inspecting the ABCI
     /// [`BeginBlock`](abci::request::BeginBlock) request.
@@ -29,10 +29,8 @@ pub(crate) trait Component {
     /// called, `state.get_mut().is_some()`, i.e., the `Arc` is not shared.  The
     /// implementor MUST ensure that any clones of the `Arc` are dropped before
     /// it returns, so that `state.get_mut().is_some()` on completion.
-    async fn begin_block<S: StateWrite + 'static>(
-        state: &S,
-        begin_block: &abci::request::BeginBlock,
-    ) -> Result<()>;
+    async fn begin_block(state: &DeltaDelta, begin_block: &abci::request::BeginBlock)
+    -> Result<()>;
 
     /// Ends the block, optionally inspecting the ABCI
     /// [`EndBlock`](abci::request::EndBlock) request, and performing any batch
@@ -48,8 +46,5 @@ pub(crate) trait Component {
     /// called, `state.get_mut().is_some()`, i.e., the `Arc` is not shared.  The
     /// implementor MUST ensure that any clones of the `Arc` are dropped before
     /// it returns, so that `state.get_mut().is_some()` on completion.
-    async fn end_block<S: StateWrite + 'static>(
-        state: &S,
-        end_block: &abci::request::EndBlock,
-    ) -> Result<()>;
+    async fn end_block(state: &DeltaDelta, end_block: &abci::request::EndBlock) -> Result<()>;
 }

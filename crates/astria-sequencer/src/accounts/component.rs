@@ -9,9 +9,10 @@ use tendermint::abci::request::{
 use tracing::instrument;
 
 use crate::{
-    accounts,
-    assets,
+    accounts::StateWriteExt as _,
+    assets::StateReadExt as _,
     component::Component,
+    storage::DeltaDelta,
 };
 
 #[derive(Default)]
@@ -22,10 +23,7 @@ impl Component for AccountsComponent {
     type AppState = astria_core::sequencer::GenesisState;
 
     #[instrument(name = "AccountsComponent::init_chain", skip_all)]
-    async fn init_chain<S>(state: S, app_state: &Self::AppState) -> Result<()>
-    where
-        S: accounts::StateWriteExt + assets::StateReadExt,
-    {
+    async fn init_chain(state: &DeltaDelta, app_state: &Self::AppState) -> Result<()> {
         let native_asset = state
             .get_native_asset()
             .await
@@ -39,18 +37,12 @@ impl Component for AccountsComponent {
     }
 
     #[instrument(name = "AccountsComponent::begin_block", skip_all)]
-    async fn begin_block<S: accounts::StateWriteExt + 'static>(
-        _state: &S,
-        _begin_block: &BeginBlock,
-    ) -> Result<()> {
+    async fn begin_block(_state: &DeltaDelta, _begin_block: &BeginBlock) -> Result<()> {
         Ok(())
     }
 
     #[instrument(name = "AccountsComponent::end_block", skip_all)]
-    async fn end_block<S: accounts::StateWriteExt + 'static>(
-        _state: &S,
-        _end_block: &EndBlock,
-    ) -> Result<()> {
+    async fn end_block(_state: &DeltaDelta, _end_block: &EndBlock) -> Result<()> {
         Ok(())
     }
 }
