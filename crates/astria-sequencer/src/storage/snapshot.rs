@@ -20,8 +20,11 @@ use super::{
 
 #[derive(Clone)]
 pub(crate) struct Snapshot {
+    /// The underlying snapshot of the DB.
     inner: cnidarium::Snapshot,
+    /// An in-memory cache of objects which belong in the verifiable store.
     verifiable_cache: Arc<QuickCache<String, CachedValue>>,
+    /// An in-memory cache of objects which belong in the non-verifiable store.
     nonverifiable_cache: Arc<QuickCache<Vec<u8>, CachedValue>>,
 }
 

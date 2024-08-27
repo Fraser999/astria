@@ -24,9 +24,12 @@ use crate::{
     accounts::StateReadExt as _,
     address::StateReadExt as _,
     bridge::StateReadExt as _,
-    // ibc::StateReadExt as _,
+    ibc::StateReadExt as _,
     state_ext::StateReadExt as _,
-    storage::StateRead,
+    storage::{
+        DeltaDelta,
+        StateRead,
+    },
 };
 
 #[instrument(skip_all)]
@@ -74,19 +77,18 @@ pub(crate) async fn check_balance_mempool<S: StateRead>(
 }
 
 #[instrument(skip_all)]
-pub(crate) async fn get_fees_for_transaction<S: StateRead>(
+pub(crate) async fn get_fees_for_transaction(
     tx: &UnsignedTransaction,
-    state: &S,
+    state: &DeltaDelta,
 ) -> anyhow::Result<HashMap<asset::IbcPrefixed, u128>> {
     let transfer_fee = state
         .get_transfer_base_fee()
         .await
         .context("failed to get transfer base fee")?;
-    let ics20_withdrawal_fee = 0;
-    // let ics20_withdrawal_fee = state
-    //     .get_ics20_withdrawal_base_fee()
-    //     .await
-    //     .context("failed to get ics20 withdrawal base fee")?;
+    let ics20_withdrawal_fee = state
+        .get_ics20_withdrawal_base_fee()
+        .await
+        .context("failed to get ics20 withdrawal base fee")?;
     let init_bridge_account_fee = state
         .get_init_bridge_account_base_fee()
         .await
@@ -151,9 +153,9 @@ pub(crate) async fn get_fees_for_transaction<S: StateRead>(
 // Checks that the account has enough balance to cover the total fees and transferred values
 // for all actions in the transaction.
 #[instrument(skip_all)]
-pub(crate) async fn check_balance_for_total_fees_and_transfers<S: StateRead>(
+pub(crate) async fn check_balance_for_total_fees_and_transfers(
     tx: &SignedTransaction,
-    state: &S,
+    state: &DeltaDelta,
 ) -> anyhow::Result<()> {
     let mut cost_by_asset = get_fees_for_transaction(tx.unsigned_transaction(), state)
         .await
@@ -274,7 +276,7 @@ fn bridge_lock_update_fees(
             act.asset.clone(),
             act.destination_chain_address.clone(),
         ))
-        .saturating_mul(bridge_lock_byte_cost_multiplier),
+            .saturating_mul(bridge_lock_byte_cost_multiplier),
     );
 
     fees_by_asset
@@ -357,8 +359,8 @@ mod tests {
                 crate::test_utils::nria(),
                 transfer_fee
                     + crate::sequence::calculate_fee_from_state(&data, &state_tx)
-                        .await
-                        .unwrap(),
+                    .await
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -433,8 +435,8 @@ mod tests {
                 crate::test_utils::nria(),
                 transfer_fee
                     + crate::sequence::calculate_fee_from_state(&data, &state_tx)
-                        .await
-                        .unwrap(),
+                    .await
+                    .unwrap(),
             )
             .await
             .unwrap();

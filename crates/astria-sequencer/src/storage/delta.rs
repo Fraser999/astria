@@ -37,10 +37,17 @@ pub(crate) type DeltaDelta = Delta<SnapshotDelta>;
 
 #[derive(Default)]
 pub(super) struct DeltaInner {
+    /// Changes pending on the verifiable store.  `CachedValue::Absent` represents a pending
+    /// deletion.
     pub(super) verifiable_changes: HashMap<String, CachedValue>,
+    /// Changes pending on the non-verifiable store.  `CachedValue::Absent` represents a pending
+    /// deletion.
     pub(super) nonverifiable_changes: HashMap<Vec<u8>, CachedValue>,
+    /// The collection of block fees relevant to the current delta.
     pub(super) block_fees: BTreeMap<asset::IbcPrefixed, u128>,
+    /// The collection of bridge deposits relevant to the current delta.
     pub(super) bridge_deposits: HashMap<RollupId, Vec<Deposit>>,
+    /// The collection of ABCI events relevant to the current delta.
     pub(super) events: Vec<abci::Event>,
 }
 

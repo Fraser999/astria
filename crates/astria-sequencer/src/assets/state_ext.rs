@@ -24,11 +24,11 @@ use crate::storage::{
 const FEE_ASSET_PREFIX: &str = "fee_asset/";
 const NATIVE_ASSET_KEY: &[u8] = b"nativeasset";
 
-pub(crate) fn asset_storage_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
+fn asset_storage_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
     format!("asset/{}", crate::storage_keys::hunks::Asset::from(asset))
 }
 
-pub(crate) fn fee_asset_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
+fn fee_asset_key<TAsset: Into<IbcPrefixed>>(asset: TAsset) -> String {
     format!(
         "{FEE_ASSET_PREFIX}{}",
         crate::storage_keys::hunks::Asset::from(asset)

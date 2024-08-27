@@ -43,7 +43,7 @@ impl<'a, T: AddressBytes> std::fmt::Display for StorageKey<'a, T> {
     }
 }
 
-pub(crate) fn balance_storage_key<TAddress: AddressBytes, TAsset: Into<asset::IbcPrefixed>>(
+fn balance_storage_key<TAddress: AddressBytes, TAsset: Into<asset::IbcPrefixed>>(
     address: TAddress,
     asset: TAsset,
 ) -> String {

@@ -107,6 +107,7 @@ use crate::{
         Snapshot,
         SnapshotDelta,
         SnapshotDeltaCompat,
+        StateRead,
         StateWrite as _,
         Storage,
     },
@@ -249,7 +250,8 @@ impl App {
             .await
             .context("failed to call init_chain on BridgeComponent")?;
 
-        let mut cnidarium_state_tx = DeltaDeltaCompat::new(self.cnidarium_state.clone());
+        let mut cnidarium_state_tx =
+            DeltaDeltaCompat::new(state_tx.clone(), self.cnidarium_state.clone());
         IbcComponent::init_chain(&mut cnidarium_state_tx, &genesis_state)
             .await
             .context("failed to call init_chain on IbcComponent")?;
@@ -962,7 +964,10 @@ impl App {
             .await
             .context("failed to call begin_block on BridgeComponent")?;
 
-        let mut cnidarium_state_tx = Arc::new(DeltaDeltaCompat::new(self.cnidarium_state.clone()));
+        let mut cnidarium_state_tx = Arc::new(DeltaDeltaCompat::new(
+            state_tx.clone(),
+            self.cnidarium_state.clone(),
+        ));
         IbcComponent::begin_block(&mut cnidarium_state_tx, begin_block)
             .await
             .context("failed to call begin_block on IbcComponent")?;
@@ -1022,7 +1027,10 @@ impl App {
             .await
             .context("failed to call end_block on BridgeComponent")?;
 
-        let mut cnidarium_state_tx = Arc::new(DeltaDeltaCompat::new(self.cnidarium_state.clone()));
+        let mut cnidarium_state_tx = Arc::new(DeltaDeltaCompat::new(
+            state_tx.clone(),
+            self.cnidarium_state.clone(),
+        ));
         IbcComponent::end_block(&mut cnidarium_state_tx, &end_block)
             .await
             .context("failed to call end_block on IbcComponent")?;

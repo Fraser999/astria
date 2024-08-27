@@ -36,6 +36,7 @@ pub(crate) use self::{
     cnidarium_compat::{
         DeltaDeltaCompat,
         SnapshotDeltaCompat,
+        DELTA_DELTA_KEY,
     },
     delta::{
         DeltaDelta,

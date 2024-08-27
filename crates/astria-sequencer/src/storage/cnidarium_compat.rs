@@ -20,6 +20,7 @@ use tendermint::abci::Event;
 
 use crate::storage::Storable;
 
+pub(crate) const DELTA_DELTA_KEY: &str = "delta_delta";
 type DeltaDeltaInner = cnidarium::StateDelta<Arc<cnidarium::StateDelta<cnidarium::Snapshot>>>;
 
 #[derive(Clone)]
@@ -48,26 +49,18 @@ pub(crate) struct DeltaDeltaCompat {
 }
 
 impl DeltaDeltaCompat {
-    pub(crate) fn new(cnidarium: SnapshotDeltaCompat) -> Self {
+    pub(crate) fn new(astria: super::DeltaDelta, cnidarium: SnapshotDeltaCompat) -> Self {
+        use cnidarium::StateWrite as _;
+        let mut cnidarium = cnidarium::StateDelta::new(cnidarium.inner);
+        cnidarium.object_put(DELTA_DELTA_KEY, astria);
         Self {
-            cnidarium: cnidarium::StateDelta::new(cnidarium.inner),
+            cnidarium,
         }
     }
 
     pub(crate) fn flatten(self) -> cnidarium::Cache {
         self.cnidarium.flatten().1
     }
-    // pub(crate) fn apply(self) -> Vec<Event> {
-    //     let (state2, mut cache) = self.cnidarium.flatten();
-    //     drop(state2);
-    //     // Now there is only one reference to the inter-block state `App::cnidarium_state`.
-    //     let events = cache.take_events();
-    //     cache.apply_to(
-    //         Arc::get_mut(&mut self.state).expect("no other references to inter-block state"),
-    //     );
-    //
-    //     events
-    // }
 }
 
 impl cnidarium::StateRead for DeltaDeltaCompat {
@@ -111,7 +104,7 @@ impl cnidarium::StateRead for DeltaDeltaCompat {
         &self,
         prefix: Option<&[u8]>,
         range: impl std::ops::RangeBounds<Vec<u8>>,
-    ) -> anyhow::Result<Self::NonconsensusRangeRawStream> {
+    ) -> Result<Self::NonconsensusRangeRawStream> {
         self.cnidarium.nonverifiable_range_raw(prefix, range)
     }
 }

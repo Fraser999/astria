@@ -19,21 +19,23 @@ use ibc_types::core::channel::ChannelId;
 use tendermint::Time;
 use tracing::instrument;
 
-use crate::storage::{
-    BlockHeight,
-    BlockTimestamp,
-    ChainId,
-    RevisionNumber,
-    StoredValue,
-};
 use crate::{
-    accounts::AddressBytes,
+    accounts::{
+        AddressBytes,
+        StateWriteExt as _,
+    },
+    assets::{
+        StateReadExt as _,
+        StateWriteExt as _,
+    },
+    bridge::StateReadExt as _,
+    state_ext::StateReadExt as _,
     storage::{
         self,
         Balance,
         Fee,
-        // StateRead,
-        // StateWrite,
+        StateWrite as _,
+        StoredValue,
     },
 };
 
@@ -127,19 +129,14 @@ pub(crate) trait StateReadExt: cnidarium::StateRead {
         &self,
         asset: IbcPrefixed,
     ) -> Result<Option<TracePrefixed>> {
-        storage::get(self, &crate::assets::asset_storage_key(asset))
-            .await
-            .context("failed reading asset from state")?
-            .map(TracePrefixed::try_from)
-            .transpose()
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.map_ibc_to_trace_prefixed_asset(asset).await
     }
 
     #[instrument(skip_all)]
     async fn has_ibc_asset<TAsset: Into<IbcPrefixed> + Send>(&self, asset: TAsset) -> Result<bool> {
-        Ok(storage::get(self, &crate::assets::asset_storage_key(asset))
-            .await
-            .context("failed reading asset from state")?
-            .is_some())
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.has_ibc_asset(asset).await
     }
 
     #[instrument(skip_all)]
@@ -147,11 +144,8 @@ pub(crate) trait StateReadExt: cnidarium::StateRead {
         &self,
         address: T,
     ) -> Result<Option<RollupId>> {
-        storage::get(self, &crate::bridge::rollup_id_storage_key(&address))
-            .await
-            .context("failed reading bridge account rollup ID from state")?
-            .map(RollupId::try_from)
-            .transpose()
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.get_bridge_account_rollup_id(address).await
     }
 
     #[instrument(skip_all)]
@@ -159,63 +153,32 @@ pub(crate) trait StateReadExt: cnidarium::StateRead {
         &self,
         address: T,
     ) -> Result<IbcPrefixed> {
-        IbcPrefixed::try_from(
-            storage::get(self, &crate::bridge::asset_id_storage_key(&address))
-                .await
-                .context("failed reading asset ID from state")?
-                .context("asset ID not found")?,
-        )
-        .context("failed parsing asset ID from state")
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.get_bridge_account_ibc_asset(address).await
     }
 
     #[instrument(skip_all)]
     async fn get_chain_id(&self) -> Result<tendermint::chain::Id> {
-        tendermint::chain::Id::try_from(
-            ChainId::try_from(
-                storage::get(self, crate::state_ext::CHAIN_ID_KEY)
-                    .await
-                    .context("failed to read chain_id from state")?
-                    .context("chain id not found in state")?,
-            )?
-            .0,
-        )
-        .context("invalid chain id from state")
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.get_chain_id().await
     }
 
     #[instrument(skip_all)]
     async fn get_revision_number(&self) -> Result<u64> {
-        Ok(RevisionNumber::try_from(
-            storage::get(self, crate::state_ext::REVISION_NUMBER_KEY)
-                .await
-                .context("failed to read revision number from state")?
-                .context("revision number not found in state")?,
-        )
-        .context("failed to parse revision number from state")?
-        .0)
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.get_revision_number().await
     }
 
     #[instrument(skip_all)]
     async fn get_block_height(&self) -> Result<u64> {
-        Ok(BlockHeight::try_from(
-            storage::get(self, crate::state_ext::BLOCK_HEIGHT_KEY)
-                .await
-                .context("failed to read block_height from state")?
-                .context("block height not found in state")?,
-        )
-        .context("failed to parse block_height from state")?
-        .0)
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.get_block_height().await
     }
 
     #[instrument(skip_all)]
     async fn get_block_timestamp(&self) -> Result<Time> {
-        Ok(BlockTimestamp::try_from(
-            storage::get(self, crate::state_ext::BLOCK_TIMESTAMP_KEY)
-                .await
-                .context("failed to read block_timestamp from state")?
-                .context("block timestamp not found")?,
-        )
-        .context("failed to parse block_timestamp from state")?
-        .0)
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.get_block_timestamp().await
     }
 }
 
@@ -231,7 +194,7 @@ pub(crate) trait StateWriteExt: cnidarium::StateWrite {
         balance: u128,
     ) -> Result<()>
     where
-        TAsset: Into<asset::IbcPrefixed> + Send,
+        TAsset: Into<IbcPrefixed> + Send,
     {
         storage::put(
             self,
@@ -270,12 +233,9 @@ pub(crate) trait StateWriteExt: cnidarium::StateWrite {
 
     // =============================================================================================
 
-    fn put_ibc_asset(&mut self, asset: TracePrefixed) -> Result<()> {
-        storage::put(
-            self,
-            crate::assets::asset_storage_key(&asset),
-            &StoredValue::TracePrefixedDenom(asset),
-        )
+    fn put_ibc_asset(&mut self, asset: TracePrefixed) {
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.put_ibc_asset(asset)
     }
 
     #[instrument(skip_all)]
@@ -287,36 +247,16 @@ pub(crate) trait StateWriteExt: cnidarium::StateWrite {
     ) -> Result<()>
     where
         TAddress: AddressBytes,
-        TAsset: Into<asset::IbcPrefixed> + std::fmt::Display + Send,
+        TAsset: Into<IbcPrefixed> + std::fmt::Display + Send,
     {
-        let asset = asset.into();
-        let storage_key = crate::accounts::balance_storage_key(address, asset);
-        let current_balance = storage::get(self, &storage_key)
-            .await
-            .context("failed reading account balance from state")?
-            .map(Balance::try_from)
-            .transpose()
-            .context("failed parsing account balance from state")?
-            .unwrap_or_default()
-            .0;
-
-        let new_balance = current_balance
-            .checked_add(amount)
-            .context("failed to update account balance due to overflow")?;
-
-        storage::put(
-            self,
-            storage_key,
-            &StoredValue::Balance(Balance(new_balance)),
-        )
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.increase_balance(address, asset, amount).await
     }
 
     #[instrument(skip_all)]
-    async fn put_bridge_deposit(&mut self, deposit: Deposit) -> Result<()> {
-        let mut deposits: Vec<Deposit> = self.object_get("deposits").unwrap_or_default();
-        deposits.push(deposit);
-        self.object_put("deposits", deposits);
-        Ok(())
+    fn put_bridge_deposit(&mut self, deposit: Deposit) {
+        let astria: storage::DeltaDelta = self.object_get(storage::DELTA_DELTA_KEY).unwrap();
+        astria.put_bridge_deposit(deposit);
     }
 }
 

@@ -8,8 +8,6 @@ mod state_ext;
 
 pub(crate) use bridge_lock_action::get_deposit_byte_len;
 pub(crate) use state_ext::{
-    asset_id_storage_key,
-    rollup_id_storage_key,
     StateReadExt,
     StateWriteExt,
 };

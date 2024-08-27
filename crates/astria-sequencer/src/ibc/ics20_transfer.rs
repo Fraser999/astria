@@ -502,9 +502,7 @@ async fn execute_ics20_transfer<S: ibc::StateWriteExt>(
             .await
             .context("failed to check if ibc asset exists in state")?
         {
-            state
-                .put_ibc_asset(trace_with_dest.clone().into_owned())
-                .context("failed to put IBC asset in storage")?;
+            state.put_ibc_asset(trace_with_dest.clone().into_owned());
         }
 
         state

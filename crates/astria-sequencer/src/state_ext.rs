@@ -16,10 +16,10 @@ use crate::storage::{
     StorageVersion,
 };
 
-pub(crate) const CHAIN_ID_KEY: &str = "chain_id";
-pub(crate) const REVISION_NUMBER_KEY: &str = "revision_number";
-pub(crate) const BLOCK_HEIGHT_KEY: &str = "block_height";
-pub(crate) const BLOCK_TIMESTAMP_KEY: &str = "block_timestamp";
+const CHAIN_ID_KEY: &str = "chain_id";
+const REVISION_NUMBER_KEY: &str = "revision_number";
+const BLOCK_HEIGHT_KEY: &str = "block_height";
+const BLOCK_TIMESTAMP_KEY: &str = "block_timestamp";
 
 fn storage_version_by_height_key(height: u64) -> Vec<u8> {
     format!("storage_version/{height}").into()

@@ -219,7 +219,8 @@ pub(crate) async fn check_and_execute(
                 // access to the the signer through state. However, what's the correct
                 // ibc AppHandler call to do it? Can we just update one of the trait methods
                 // of crate::ibc::ics20_transfer::Ics20Transfer?
-                let mut cnidarium_state_tx = DeltaDeltaCompat::new(cnidarium_state.clone());
+                let mut cnidarium_state_tx =
+                    DeltaDeltaCompat::new(state.clone(), cnidarium_state.clone());
                 ensure!(
                     cnidarium_state_tx
                         .is_ibc_relayer(tx)
@@ -234,12 +235,6 @@ pub(crate) async fn check_and_execute(
                     .check_and_execute(&mut cnidarium_state_tx)
                     .await
                     .context("failed executing ibc action")?;
-                if let Some(deposits) = cnidarium_state_tx.object_get::<Vec<Deposit>>("deposits") {
-                    deposits
-                        .into_iter()
-                        .for_each(|deposit| state.put_bridge_deposit(deposit))
-                }
-
                 let cache = cnidarium_state_tx.flatten();
                 cache.apply_to(cnidarium_state.inner_mut().unwrap());
             }

@@ -24,7 +24,7 @@ use crate::{
     sequence::StateWriteExt as _,
     storage::{
         DeltaDelta,
-        StateWrite,
+        StateWrite as _,
     },
 };
 
