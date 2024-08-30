@@ -132,6 +132,16 @@ pub(crate) struct Mempool {
 }
 
 impl Mempool {
+    pub(crate) async fn deep_clone(&self) -> Self {
+        Mempool {
+            pending: Arc::new(RwLock::new(self.pending.read().await.clone())),
+            parked: Arc::new(RwLock::new(self.parked.read().await.clone())),
+            comet_bft_removal_cache: Arc::new(RwLock::new(
+                self.comet_bft_removal_cache.read().await.clone(),
+            )),
+        }
+    }
+
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {

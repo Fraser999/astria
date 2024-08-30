@@ -25,7 +25,6 @@ use crate::{
         SIGNER_COUNT,
     },
     proposal::block_size_constraints::BlockSizeConstraints,
-    test_utils::astria_address,
 };
 
 /// The max time for any benchmark.
@@ -49,7 +48,7 @@ impl Fixture {
             .enumerate()
             .take(usize::from(SIGNER_COUNT))
             .map(|(index, signing_key)| Account {
-                address: astria_address(&signing_key.address_bytes()),
+                address: crate::test_utils::astria_address(&signing_key.address_bytes()),
                 balance: 10u128
                     .pow(19)
                     .saturating_add(u128::try_from(index).unwrap()),
@@ -62,7 +61,7 @@ impl Fixture {
                 accounts,
                 authority_sudo_address: first_address.clone(),
                 ibc_sudo_address: first_address.clone(),
-                ..crate::app::test_utils::proto_genesis_state()
+                ..test_utils::proto_genesis_state()
             },
         )
         .unwrap();
@@ -70,8 +69,14 @@ impl Fixture {
         let (app, storage) =
             test_utils::initialize_app_with_storage(Some(genesis_state), vec![]).await;
 
+        let mock_balances = test_utils::mock_balances(0, 0);
+        let mock_tx_cost = test_utils::mock_tx_cost(0, 0, 0);
+
         for tx in benchmark_utils::transactions(TxTypes::AllTransfers) {
-            app.mempool.insert(tx.clone(), 0).await.unwrap();
+            app.mempool
+                .insert(tx.clone(), 0, mock_balances.clone(), mock_tx_cost.clone())
+                .await
+                .unwrap();
         }
         Fixture {
             app,
