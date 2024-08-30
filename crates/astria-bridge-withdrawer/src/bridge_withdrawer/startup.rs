@@ -284,16 +284,16 @@ impl Startup {
         );
 
         let proto_tx =
-            astria_core::generated::protocol::transaction::v1alpha1::SignedTransaction::decode(
+            astria_core::generated::protocol::transactions::v1alpha1::SignedTransaction::decode(
                 &*last_transaction.tx,
             )
             .wrap_err_with(|| format!(
-                            "failed to decode data in Sequencer CometBFT transaction as `{}`",
-                            astria_core::generated::protocol::transaction::v1alpha1::SignedTransaction::full_name(),
+                "failed to decode data in Sequencer CometBFT transaction as `{}`",
+                astria_core::generated::protocol::transactions::v1alpha1::SignedTransaction::full_name(),
                         ))?;
 
         let tx = SignedTransaction::try_from_raw(proto_tx)
-            .wrap_err_with(|| format!("failed to verify {}", astria_core::generated::protocol::transaction::v1alpha1::SignedTransaction::full_name()))?;
+            .wrap_err_with(|| format!("failed to verify {}", astria_core::generated::protocol::transactions::v1alpha1::SignedTransaction::full_name()))?;
 
         info!(
             last_bridge_account_tx.hash = %telemetry::display::hex(&tx_hash),
@@ -461,11 +461,7 @@ fn rollup_height_from_signed_transaction(
         .ok_or_eyre("last transaction by the bridge account did not contain a withdrawal action")?;
 
     let last_batch_rollup_height = match withdrawal_action {
-        Action::BridgeUnlock(action) => {
-            let memo: memos::v1alpha1::BridgeUnlock = serde_json::from_str(&action.memo)
-                .wrap_err("failed to parse memo from last transaction by the bridge account")?;
-            Some(memo.rollup_block_number)
-        }
+        Action::BridgeUnlock(action) => Some(action.rollup_block_number),
         Action::Ics20Withdrawal(action) => {
             let memo: memos::v1alpha1::Ics20WithdrawalFromRollup =
                 serde_json::from_str(&action.memo)
