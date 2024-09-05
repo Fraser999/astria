@@ -89,25 +89,42 @@ fn transactions() -> &'static Vec<Arc<SignedTransaction>> {
 /// Returns a new `Mempool` initialized with the number of transactions specified by `T::size()`
 /// taken from the static `transactions()`, and with a full `comet_bft_removal_cache`.
 fn init_mempool<T: MempoolSize>() -> Mempool {
+    static CELL_100: std::sync::OnceLock<Mempool> = std::sync::OnceLock::new();
+    static CELL_1_000: std::sync::OnceLock<Mempool> = std::sync::OnceLock::new();
+    static CELL_10_000: std::sync::OnceLock<Mempool> = std::sync::OnceLock::new();
+    static CELL_100_000: std::sync::OnceLock<Mempool> = std::sync::OnceLock::new();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
-    let mempool = Mempool::new();
-    runtime.block_on(async {
-        for tx in transactions().iter().take(T::checked_size()) {
-            mempool.insert(tx.clone(), 0).await.unwrap();
-        }
-        for i in 0..super::REMOVAL_CACHE_SIZE {
-            let hash = Sha256::digest(i.to_le_bytes()).into();
-            mempool
-                .comet_bft_removal_cache
-                .write()
-                .await
-                .add(hash, RemovalReason::Expired);
-        }
-    });
-    mempool
+    let init = || {
+        let mempool = Mempool::new();
+        runtime.block_on(async {
+            for tx in transactions().iter().take(T::checked_size()) {
+                mempool
+                    .insert(tx.clone(), 0)
+                    .await
+                    .unwrap();
+            }
+            for i in 0..super::REMOVAL_CACHE_SIZE {
+                let hash = Sha256::digest(i.to_le_bytes()).into();
+                mempool
+                    .comet_bft_removal_cache
+                    .write()
+                    .await
+                    .add(hash, RemovalReason::Expired);
+            }
+        });
+        mempool
+    };
+    let mempool = match T::checked_size() {
+        100 => CELL_100.get_or_init(init),
+        1_000 => CELL_1_000.get_or_init(init),
+        10_000 => CELL_10_000.get_or_init(init),
+        100_000 => CELL_100_000.get_or_init(init),
+        _ => unreachable!(),
+    };
+    runtime.block_on(async { mempool.deep_clone().await })
 }
 
 /// Returns the first transaction from the static `transactions()` not included in the initialized
