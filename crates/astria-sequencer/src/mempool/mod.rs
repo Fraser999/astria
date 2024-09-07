@@ -232,7 +232,7 @@ impl Mempool {
         reason: RemovalReason,
     ) {
         let tx_hash = signed_tx.sha256_of_proto_encoding();
-        let address = signed_tx.verification_key().address_bytes();
+        let address = *signed_tx.verification_key().address_bytes();
 
         // Try to remove from pending.
         let removed_txs = match self.pending.write().await.remove(signed_tx) {
@@ -309,7 +309,7 @@ impl Mempool {
     /// pending queue for an account has nonces [0,1] and the parked queue has [3], [1] will be
     /// returned.
     #[instrument(skip_all)]
-    pub(crate) async fn pending_nonce(&self, address: [u8; 20]) -> Option<u32> {
+    pub(crate) async fn pending_nonce(&self, address: &[u8; 20]) -> Option<u32> {
         self.pending.read().await.pending_nonce(address)
     }
 
@@ -381,7 +381,7 @@ mod test {
 
         let mempool = Mempool::new();
         let signing_key = SigningKey::from([1; 32]);
-        let signing_address = signing_key.verification_key().address_bytes();
+        let signing_address = *signing_key.verification_key().address_bytes();
 
         // add nonces in odd order to trigger insertion promotion logic
         // sign and insert nonce 1
@@ -561,9 +561,9 @@ mod test {
         let signing_key_0 = SigningKey::from([1; 32]);
         let signing_key_1 = SigningKey::from([2; 32]);
         let signing_key_2 = SigningKey::from([3; 32]);
-        let signing_address_0 = signing_key_0.verification_key().address_bytes();
-        let signing_address_1 = signing_key_1.verification_key().address_bytes();
-        let signing_address_2 = signing_key_2.verification_key().address_bytes();
+        let signing_address_0 = *signing_key_0.verification_key().address_bytes();
+        let signing_address_1 = *signing_key_1.verification_key().address_bytes();
+        let signing_address_2 = *signing_key_2.verification_key().address_bytes();
 
         // sign and insert nonces 0,1
         let tx0 = mock_tx(0, &signing_key_0, "test");
@@ -592,11 +592,14 @@ mod test {
         assert_eq!(mempool.len().await, 4);
 
         // Check the pending nonces
-        assert_eq!(mempool.pending_nonce(signing_address_0).await.unwrap(), 1);
-        assert_eq!(mempool.pending_nonce(signing_address_1).await.unwrap(), 101);
+        assert_eq!(mempool.pending_nonce(&signing_address_0).await.unwrap(), 1);
+        assert_eq!(
+            mempool.pending_nonce(&signing_address_1).await.unwrap(),
+            101
+        );
 
         // Check the pending nonce for an address with no txs is `None`.
-        assert!(mempool.pending_nonce(signing_address_2).await.is_none());
+        assert!(mempool.pending_nonce(&signing_address_2).await.is_none());
     }
 
     #[tokio::test]

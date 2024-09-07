@@ -39,7 +39,7 @@ impl TimemarkedTransaction {
     pub(super) fn new(signed_tx: Arc<SignedTransaction>) -> Self {
         Self {
             tx_hash: signed_tx.sha256_of_proto_encoding(),
-            address: signed_tx.verification_key().address_bytes(),
+            address: *signed_tx.verification_key().address_bytes(),
             signed_tx,
             time_first_seen: Instant::now(),
         }
@@ -406,7 +406,7 @@ impl<T: TransactionsForAccount> TransactionsContainer<T> {
         let address = signed_tx.verification_key().address_bytes();
 
         // Take the collection for this account out of `self` temporarily.
-        let Some(mut account_txs) = self.txs.remove(&address) else {
+        let Some(mut account_txs) = self.txs.remove(address) else {
             return Err(signed_tx);
         };
 
@@ -414,7 +414,7 @@ impl<T: TransactionsForAccount> TransactionsContainer<T> {
 
         // Re-add the collection to `self` if it's not empty.
         if !account_txs.txs().is_empty() {
-            let _ = self.txs.insert(address, account_txs);
+            let _ = self.txs.insert(*address, account_txs);
         }
 
         if removed.is_empty() {
@@ -515,9 +515,9 @@ impl<T: TransactionsForAccount> TransactionsContainer<T> {
 
 impl TransactionsContainer<PendingTransactionsForAccount> {
     /// Returns the highest nonce for an account.
-    pub(super) fn pending_nonce(&self, address: [u8; 20]) -> Option<u32> {
+    pub(super) fn pending_nonce(&self, address: &[u8; 20]) -> Option<u32> {
         self.txs
-            .get(&address)
+            .get(address)
             .and_then(PendingTransactionsForAccount::highest_nonce)
     }
 
@@ -1404,13 +1404,13 @@ mod test {
 
         // empty account returns zero
         assert!(
-            pending_txs.pending_nonce(signing_address_1).is_none(),
+            pending_txs.pending_nonce(&signing_address_1).is_none(),
             "empty account should return None"
         );
 
         // non empty account returns highest nonce
         assert_eq!(
-            pending_txs.pending_nonce(signing_address_0),
+            pending_txs.pending_nonce(&signing_address_0),
             Some(1),
             "should return highest nonce"
         );

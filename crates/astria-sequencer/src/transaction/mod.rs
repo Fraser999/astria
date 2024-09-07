@@ -164,7 +164,7 @@ impl ActionHandler for SignedTransaction {
         // Nonce should be equal to the number of executed transactions before this tx.
         // First tx has nonce 0.
         let curr_nonce = state
-            .get_account_nonce(self.address_bytes())
+            .get_account_nonce(*self.address_bytes())
             .await
             .context("failed to get nonce for transaction signer")?;
         ensure!(curr_nonce == self.nonce(), InvalidNonce(self.nonce()));
@@ -175,15 +175,16 @@ impl ActionHandler for SignedTransaction {
             .context("failed to check balance for total fees and transfers")?;
 
         if state
-            .get_bridge_account_rollup_id(self)
+            .get_bridge_account_rollup_id(&self)
             .await
             .context("failed to check account rollup id")?
             .is_some()
         {
+            // No need to add context as this method already reports sufficient context on error.
             state.put_last_transaction_hash_for_bridge_account(
-                self,
-                &self.sha256_of_proto_encoding(),
-            );
+                &self,
+                self.sha256_of_proto_encoding(),
+            )?;
         }
 
         let from_nonce = state
@@ -194,7 +195,7 @@ impl ActionHandler for SignedTransaction {
             .checked_add(1)
             .context("overflow occurred incrementing stored nonce")?;
         state
-            .put_account_nonce(self, next_nonce)
+            .put_account_nonce(&self, next_nonce)
             .context("failed updating `from` nonce")?;
 
         // FIXME: this should create one span per `check_and_execute`

@@ -293,7 +293,7 @@ async fn handle_check_tx<S: accounts::StateReadExt + address::StateReadExt + 'st
 
     // tx is valid, push to mempool
     let current_account_nonce = match state
-        .try_base_prefixed(&signed_tx.verification_key().address_bytes())
+        .try_base_prefixed(signed_tx.verification_key().address_bytes())
         .and_then(|address| state.get_account_nonce(address))
         .await
         .context("failed fetching nonce for account")

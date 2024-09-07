@@ -35,7 +35,7 @@ pub(crate) async fn check_nonce_mempool<S: StateRead>(
     state: &S,
 ) -> anyhow::Result<()> {
     let signer_address = state
-        .try_base_prefixed(&tx.verification_key().address_bytes())
+        .try_base_prefixed(tx.verification_key().address_bytes())
         .await
         .context(
             "failed constructing the signer address from signed transaction verification and \
@@ -181,7 +181,7 @@ pub(crate) async fn check_balance_for_total_fees_and_transfers<S: StateRead>(
             }
             Action::BridgeUnlock(act) => {
                 let asset = state
-                    .get_bridge_account_ibc_asset(tx)
+                    .get_bridge_account_ibc_asset(&tx)
                     .await
                     .context("failed to get bridge account asset id")?;
                 cost_by_asset
@@ -205,7 +205,7 @@ pub(crate) async fn check_balance_for_total_fees_and_transfers<S: StateRead>(
 
     for (asset, total_fee) in cost_by_asset {
         let balance = state
-            .get_account_balance(tx, asset)
+            .get_account_balance(&tx, &asset)
             .await
             .context("failed to get account balance")?;
         ensure!(
@@ -333,15 +333,19 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot);
 
-        state_tx.put_base_prefix("astria");
-        state_tx.put_native_asset(&crate::test_utils::nria());
+        state_tx.put_base_prefix("astria".to_string()).unwrap();
+        state_tx
+            .put_native_asset(crate::test_utils::nria())
+            .unwrap();
         state_tx.put_transfer_base_fee(12).unwrap();
-        state_tx.put_sequence_action_base_fee(0);
-        state_tx.put_sequence_action_byte_cost_multiplier(1);
+        state_tx.put_sequence_action_base_fee(0).unwrap();
+        state_tx
+            .put_sequence_action_byte_cost_multiplier(1)
+            .unwrap();
         state_tx.put_ics20_withdrawal_base_fee(1).unwrap();
-        state_tx.put_init_bridge_account_base_fee(12);
-        state_tx.put_bridge_lock_byte_cost_multiplier(1);
-        state_tx.put_bridge_sudo_change_base_fee(24);
+        state_tx.put_init_bridge_account_base_fee(12).unwrap();
+        state_tx.put_bridge_lock_byte_cost_multiplier(1).unwrap();
+        state_tx.put_bridge_sudo_change_base_fee(24).unwrap();
 
         let other_asset = "other".parse::<Denom>().unwrap();
 
@@ -351,11 +355,11 @@ mod tests {
         let transfer_fee = state_tx.get_transfer_base_fee().await.unwrap();
         state_tx
             .increase_balance(
-                state_tx
+                &state_tx
                     .try_base_prefixed(&alice.address_bytes())
                     .await
                     .unwrap(),
-                crate::test_utils::nria(),
+                &crate::test_utils::nria(),
                 transfer_fee
                     + crate::sequence::calculate_fee_from_state(&data, &state_tx)
                         .await
@@ -365,7 +369,7 @@ mod tests {
             .unwrap();
         state_tx
             .increase_balance(
-                state_tx
+                &state_tx
                     .try_base_prefixed(&alice.address_bytes())
                     .await
                     .unwrap(),
@@ -410,15 +414,19 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot);
 
-        state_tx.put_base_prefix(ASTRIA_PREFIX);
-        state_tx.put_native_asset(&crate::test_utils::nria());
+        state_tx.put_base_prefix(ASTRIA_PREFIX.to_string()).unwrap();
+        state_tx
+            .put_native_asset(crate::test_utils::nria())
+            .unwrap();
         state_tx.put_transfer_base_fee(12).unwrap();
-        state_tx.put_sequence_action_base_fee(0);
-        state_tx.put_sequence_action_byte_cost_multiplier(1);
+        state_tx.put_sequence_action_base_fee(0).unwrap();
+        state_tx
+            .put_sequence_action_byte_cost_multiplier(1)
+            .unwrap();
         state_tx.put_ics20_withdrawal_base_fee(1).unwrap();
-        state_tx.put_init_bridge_account_base_fee(12);
-        state_tx.put_bridge_lock_byte_cost_multiplier(1);
-        state_tx.put_bridge_sudo_change_base_fee(24);
+        state_tx.put_init_bridge_account_base_fee(12).unwrap();
+        state_tx.put_bridge_lock_byte_cost_multiplier(1).unwrap();
+        state_tx.put_bridge_sudo_change_base_fee(24).unwrap();
 
         let other_asset = "other".parse::<Denom>().unwrap();
 
@@ -428,11 +436,11 @@ mod tests {
         let transfer_fee = state_tx.get_transfer_base_fee().await.unwrap();
         state_tx
             .increase_balance(
-                state_tx
+                &state_tx
                     .try_base_prefixed(&alice.address_bytes())
                     .await
                     .unwrap(),
-                crate::test_utils::nria(),
+                &crate::test_utils::nria(),
                 transfer_fee
                     + crate::sequence::calculate_fee_from_state(&data, &state_tx)
                         .await
