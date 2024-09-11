@@ -13,6 +13,7 @@ mod tests_execute_transaction;
 
 mod action_handler;
 use std::{
+    any::Any,
     collections::VecDeque,
     sync::Arc,
 };
@@ -119,6 +120,32 @@ use crate::{
 /// The inter-block state being written to by the application.
 type InterBlockState = Arc<StateDelta<Snapshot>>;
 
+#[derive(Clone, Debug)]
+pub(super) enum CachedValue {
+    /// Was either not in the on-disk storage, or is due to be deleted from there.
+    Absent,
+    /// Is either present in the on-disk storage, or is due to be added there.
+    Stored(Arc<dyn Any + Send + Sync>),
+}
+
+impl From<Option<Arc<dyn Any + Send + Sync>>> for CachedValue {
+    fn from(value: Option<Arc<dyn Any + Send + Sync>>) -> Self {
+        match value {
+            None => CachedValue::Absent,
+            Some(stored) => CachedValue::Stored(stored),
+        }
+    }
+}
+
+impl From<CachedValue> for Option<Arc<dyn Any + Send + Sync>> {
+    fn from(value: CachedValue) -> Self {
+        match value {
+            CachedValue::Absent => None,
+            CachedValue::Stored(stored) => Some(stored),
+        }
+    }
+}
+
 /// The Sequencer application, written as a bundle of [`Component`]s.
 ///
 /// Note: this is called `App` because this is a Tendermint ABCI application,
@@ -172,6 +199,8 @@ pub(crate) struct App {
     app_hash: AppHash,
 
     metrics: &'static Metrics,
+
+    verifiable_cache: Arc<quick_cache::sync::Cache<String, CachedValue>>,
 }
 
 impl App {

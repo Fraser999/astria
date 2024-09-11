@@ -12,7 +12,7 @@ homepage = "https://astria.org"
 name = "astria-sequencer"
 
 [features]
-benchmark = ["divan"]
+benchmark = ["divan", "tempfile"]
 
 [dependencies]
 astria-core = { path = "../astria-core", features = ["server", "serde"] }
@@ -30,6 +30,7 @@ cnidarium = { git = "https://github.com/penumbra-zone/penumbra.git", rev = "87ad
 ] }
 ibc-proto = { version = "0.41.0", features = ["server"] }
 matchit = "0.7.2"
+quick_cache = "0.6.6"
 tower = "0.4"
 tower-abci = "0.12.0"
 tower-actor = "0.1.0"
@@ -45,12 +46,14 @@ itertools = { workspace = true }
 penumbra-ibc = { workspace = true, features = ["component", "rpc"] }
 penumbra-proto = { workspace = true }
 penumbra-tower-trace = { workspace = true }
+pin-project-lite = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true, optional = true }
 tendermint-proto = { workspace = true }
 tendermint = { workspace = true }
 thiserror = { workspace = true }
@@ -69,6 +72,7 @@ config = { package = "astria-config", path = "../astria-config", features = [
 ] }
 insta = { workspace = true, features = ["json"] }
 rand_chacha = "0.3.1"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
