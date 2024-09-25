@@ -724,7 +724,7 @@ async fn emit_deposit<S: StateWrite>(
 
     let transaction_context = state
         .get_transaction_context()
-        .ok_or_eyre("transaction source should be present in state when executing an action")?;
+        .ok_or_eyre("transaction context should be present in state when executing an action")?;
     let source_transaction_id = transaction_context.transaction_id;
     let source_action_index = transaction_context.source_action_index;
 
@@ -739,8 +739,10 @@ async fn emit_deposit<S: StateWrite>(
     };
     let deposit_abci_event = create_deposit_event(&deposit);
     state.record(deposit_abci_event);
-    state.cache_deposit_event(deposit);
-    Ok(())
+    state
+        .put_deposit(&transaction_context.block_hash, deposit)
+        .await
+        .wrap_err("failed to put deposit")
 }
 
 #[cfg(test)]

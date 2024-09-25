@@ -58,10 +58,20 @@ struct AssetId([u8; 32]);
 #[derive(BorshSerialize, BorshDeserialize, Debug)]
 struct Fee(u128);
 
+/// An unholy abomination to temporarily support storing a `Vec<Deposit>`.
+///
+/// We don't currently have Borsh-encoding for `Deposit` and we also don't have a standalone
+/// protobuf type representing a collection of `Deposit`s.
+///
+/// Ultimately this will be replaced by a proper storage type able to be wholly Borsh-encoded. Until
+/// then, we'll protobuf-encode the individual deposits and this is a collection of those encoded
+/// values.
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
+struct Deposits(Vec<Vec<u8>>);
+
 const BRIDGE_ACCOUNT_PREFIX: &str = "bridgeacc";
 const BRIDGE_ACCOUNT_SUDO_PREFIX: &str = "bsudo";
 const BRIDGE_ACCOUNT_WITHDRAWER_PREFIX: &str = "bwithdrawer";
-const DEPOSITS_EPHEMERAL_KEY: &str = "deposits";
 const DEPOSIT_PREFIX: &[u8] = b"deposit/";
 const INIT_BRIDGE_ACCOUNT_BASE_FEE_STORAGE_KEY: &str = "initbridgeaccfee";
 const BRIDGE_LOCK_BYTE_COST_MULTIPLIER_STORAGE_KEY: &str = "bridgelockmultiplier";
@@ -106,14 +116,8 @@ fn asset_id_storage_key<T: AddressBytes>(address: &T) -> String {
     )
 }
 
-// allow: this is only used in `StateReadExt::get_deposits` which is currently unused.
-#[allow(dead_code)]
-fn deposit_storage_key_prefix(rollup_id: &RollupId) -> Vec<u8> {
-    [DEPOSIT_PREFIX, rollup_id.as_ref()].concat()
-}
-
-fn deposit_storage_key(rollup_id: &RollupId, nonce: u32) -> Vec<u8> {
-    [DEPOSIT_PREFIX, rollup_id.as_ref(), &nonce.to_le_bytes()].concat()
+fn deposit_storage_key(block_hash: &[u8; 32], rollup_id: &RollupId) -> Vec<u8> {
+    [DEPOSIT_PREFIX, block_hash, rollup_id.as_ref()].concat()
 }
 
 fn bridge_account_sudo_address_storage_key<T: AddressBytes>(address: &T) -> String {
@@ -261,17 +265,26 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
     }
 
     #[instrument(skip_all)]
-    fn get_cached_block_deposits(&self) -> HashMap<RollupId, Vec<Deposit>> {
-        self.object_get(DEPOSITS_EPHEMERAL_KEY).unwrap_or_default()
-    }
+    async fn get_deposits(
+        &self,
+        block_hash: &[u8; 32],
+        rollup_id: &RollupId,
+    ) -> Result<Vec<Deposit>> {
+        let Some(bytes) = self
+            .nonverifiable_get_raw(&deposit_storage_key(block_hash, rollup_id))
+            .await
+            .map_err(anyhow_to_eyre)
+            .wrap_err("failed reading raw deposits from state")?
+        else {
+            Ok(vec![])
+        };
 
-    #[instrument(skip_all)]
-    async fn get_deposits(&self, rollup_id: &RollupId) -> Result<Vec<Deposit>> {
-        let mut stream =
-            std::pin::pin!(self.nonverifiable_prefix_raw(&deposit_storage_key_prefix(rollup_id)));
-        let mut deposits = Vec::new();
-        while let Some(Ok((_, value))) = stream.next().await {
-            let raw = RawDeposit::decode(value.as_ref()).wrap_err("invalid deposit bytes")?;
+        let pb_deposits = borsh::from_slice::<Deposits>(&bytes)
+            .wrap_err("failed to reconstruct protobuf deposits from storage")?;
+
+        let mut deposits = Vec::with_capacity(pb_deposits.0.len());
+        for pb_deposit in pb_deposits.0 {
+            let raw = RawDeposit::decode(pb_deposit.as_ref()).wrap_err("invalid deposit bytes")?;
             let deposit = Deposit::try_from_raw(raw).wrap_err("invalid deposit raw proto")?;
             deposits.push(deposit);
         }
@@ -428,31 +441,27 @@ pub(crate) trait StateWriteExt: StateWrite {
     /// Push the deposit onto the end of a Vec of deposits for this rollup ID.  These are held in
     /// state's ephemeral store, pending being written to permanent storage during `finalize_block`.
     #[instrument(skip_all)]
-    fn cache_deposit_event(&mut self, deposit: Deposit) {
-        let mut cached_deposits = self.get_cached_block_deposits();
-        cached_deposits
-            .entry(deposit.rollup_id)
-            .or_default()
-            .push(deposit);
-        self.object_put(DEPOSITS_EPHEMERAL_KEY, cached_deposits);
-    }
-
-    #[instrument(skip_all)]
-    fn put_deposits(&mut self, all_deposits: HashMap<RollupId, Vec<Deposit>>) {
-        for (rollup_id, deposits) in all_deposits {
-            deposits
-                .into_iter()
-                .enumerate()
-                .for_each(|(index, deposit)| {
-                    let Ok(nonce) = u32::try_from(index) else {
-                        // Safe to assume no single rollup will be able to create > 2^32 deposits in
-                        // a single block.
-                        panic!("nonce overflowed when putting deposits for {rollup_id}")
-                    };
-                    let key = deposit_storage_key(&rollup_id, nonce);
-                    self.nonverifiable_put_raw(key, deposit.into_raw().encode_to_vec());
-                });
-        }
+    async fn put_deposit(&mut self, block_hash: &[u8; 32], deposit: Deposit) -> Result<()> {
+        let mut current_deposits = self
+            .get_deposits(block_hash, &deposit.rollup_id)
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "failed to get current deposits for rollup {} in block {}",
+                    deposit.rollup_id,
+                    telemetry::display::base64(block_hash)
+                )
+            })?;
+        let key = deposit_storage_key(block_hash, &deposit.rollup_id);
+        current_deposits.push(deposit);
+        let deposits = current_deposits
+            .into_iter()
+            .map(|deposit| deposit.into_raw().encode_to_vec())
+            .collect();
+        let value =
+            borsh::to_vec(&Deposits(deposits)).wrap_err_with(|| "failed to serialize deposits")?;
+        self.nonverifiable_put_raw(key, value);
+        Ok(())
     }
 
     #[instrument(skip_all)]

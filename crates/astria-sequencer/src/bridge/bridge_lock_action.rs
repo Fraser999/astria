@@ -41,10 +41,10 @@ impl ActionHandler for BridgeLockAction {
     }
 
     async fn check_and_execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let from = state
-            .get_transaction_context()
-            .expect("transaction source must be present in state when executing an action")
-            .address_bytes();
+        let transaction_context = state.get_transaction_context().ok_or_eyre(
+            "transaction context should be present in state when executing an action",
+        )?;
+        let from = transaction_context.address_bytes;
         state
             .ensure_base_prefix(&self.to)
             .await
@@ -74,23 +74,14 @@ impl ActionHandler for BridgeLockAction {
             .await
             .context("failed to get transfer base fee")?;
 
-        let source_transaction_id = state
-            .get_transaction_context()
-            .expect("current source should be set before executing action")
-            .transaction_id;
-        let source_action_index = state
-            .get_transaction_context()
-            .expect("current source should be set before executing action")
-            .source_action_index;
-
         let deposit = Deposit {
             bridge_address: self.to,
             rollup_id,
             amount: self.amount,
             asset: self.asset.clone(),
             destination_chain_address: self.destination_chain_address.clone(),
-            source_transaction_id,
-            source_action_index,
+            source_transaction_id: transaction_context.transaction_id,
+            source_action_index: transaction_context.source_action_index,
         };
         let deposit_abci_event = create_deposit_event(&deposit);
 
@@ -137,8 +128,10 @@ impl ActionHandler for BridgeLockAction {
             .wrap_err("failed to deduct fee from account balance")?;
 
         state.record(deposit_abci_event);
-        state.cache_deposit_event(deposit);
-        Ok(())
+        state
+            .put_deposit(&transaction_context.block_hash, deposit)
+            .await
+            .wrap_err("failed to put deposit")
     }
 }
 

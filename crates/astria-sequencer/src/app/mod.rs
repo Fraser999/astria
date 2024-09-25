@@ -335,7 +335,7 @@ impl App {
         self.metrics
             .record_proposal_transactions(signed_txs_included.len());
 
-        let deposits = self.state.get_cached_block_deposits();
+        let deposits = self.state.get_deposits(prepare_proposal.);
         self.metrics.record_proposal_deposits(deposits.len());
 
         // generate commitment to sequence::Actions and deposits and commitment to the rollup IDs

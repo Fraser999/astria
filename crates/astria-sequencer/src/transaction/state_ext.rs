@@ -16,33 +16,24 @@ fn transaction_context() -> &'static str {
 
 #[derive(Clone, Copy)]
 pub(crate) struct TransactionContext {
+    pub(crate) block_hash: [u8; 32],
     pub(crate) address_bytes: [u8; ADDRESS_LEN],
     pub(crate) transaction_id: TransactionId,
     pub(crate) source_action_index: u64,
 }
 
-impl TransactionContext {
-    pub(crate) fn address_bytes(&self) -> [u8; ADDRESS_LEN] {
-        self.address_bytes
-    }
-}
-
-impl From<&SignedTransaction> for TransactionContext {
-    fn from(value: &SignedTransaction) -> Self {
-        Self {
-            address_bytes: value.address_bytes(),
-            transaction_id: value.id(),
-            source_action_index: 0,
-        }
-    }
-}
-
 pub(crate) trait StateWriteExt: StateWrite {
     fn put_transaction_context(
         &mut self,
-        transaction: impl Into<TransactionContext>,
+        block_hash: [u8; 32],
+        signed_tx: &SignedTransaction,
     ) -> TransactionContext {
-        let context: TransactionContext = transaction.into();
+        let context = TransactionContext {
+            block_hash,
+            address_bytes: signed_tx.address_bytes(),
+            transaction_id: signed_tx.id(),
+            source_action_index: 0,
+        };
         self.object_put(transaction_context(), context);
         context
     }
