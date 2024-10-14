@@ -17,7 +17,10 @@ use crate::{
     },
     protocol::transaction::v1alpha1::UnsignedTransaction,
     sequencerblock::v1alpha1::{
-        block::Deposit,
+        block::{
+            Deposit,
+            SequencerBlockHash,
+        },
         SequencerBlock,
     },
 };
@@ -79,7 +82,7 @@ impl ConfigureSequencerBlock {
             deposits,
         } = self;
 
-        let block_hash = block_hash.unwrap_or_default();
+        let block_hash = SequencerBlockHash::new(block_hash.unwrap_or_default());
         let chain_id = chain_id.unwrap_or_else(|| "test".to_string());
 
         let signing_key = signing_key.unwrap_or_else(|| SigningKey::new(rand::rngs::OsRng));

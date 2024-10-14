@@ -1,6 +1,6 @@
 ---
 source: crates/astria-sequencer/src/grpc/storage/keys.rs
-assertion_line: 49
-expression: rollup_ids_by_hash(&HASH)
+assertion_line: 48
+expression: rollup_ids_by_hash(&BLOCK_HASH)
 ---
-grpc/rollup_ids/AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+grpc/rollup_ids/0101010101010101010101010101010101010101010101010101010101010101

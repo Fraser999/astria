@@ -4,7 +4,6 @@ use serde::ser::{
     SerializeSeq,
     SerializeStruct,
 };
-use telemetry::display::base64;
 
 use super::{
     ReconstructedBlock,
@@ -53,7 +52,7 @@ impl<'a> Serialize for ReportReconstructedBlock<'a> {
         ];
         let mut state = serializer.serialize_struct("ReconstructedBlockInfo", FIELDS.len())?;
         state.serialize_field(FIELDS[0], &self.0.celestia_height)?;
-        state.serialize_field(FIELDS[1], &base64(&self.0.block_hash))?;
+        state.serialize_field(FIELDS[1], &self.0.block_hash.to_string())?;
         state.serialize_field(FIELDS[2], &self.0.transactions.len())?;
         state.serialize_field(FIELDS[3], &self.0.celestia_height)?;
         state.end()

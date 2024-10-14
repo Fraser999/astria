@@ -1,5 +1,10 @@
 use std::{
     collections::HashMap,
+    fmt::{
+        self,
+        Display,
+        Formatter,
+    },
     vec::IntoIter,
 };
 
@@ -39,6 +44,8 @@ use crate::{
     },
     Protobuf as _,
 };
+
+pub const SEQUENCER_BLOCK_HASH_LEN: usize = 32;
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
@@ -197,8 +204,8 @@ impl RollupTransactions {
 pub struct SequencerBlockError(SequencerBlockErrorKind);
 
 impl SequencerBlockError {
-    fn invalid_block_hash(length: usize) -> Self {
-        Self(SequencerBlockErrorKind::InvalidBlockHash(length))
+    fn block_hash(source: SequencerBlockHashError) -> Self {
+        Self(SequencerBlockErrorKind::BlockHash(source))
     }
 
     fn field_not_set(field: &'static str) -> Self {
@@ -276,8 +283,8 @@ impl SequencerBlockError {
 
 #[derive(Debug, thiserror::Error)]
 enum SequencerBlockErrorKind {
-    #[error("the block hash was expected to be 32 bytes long, but was actually `{0}`")]
-    InvalidBlockHash(usize),
+    #[error(transparent)]
+    BlockHash(SequencerBlockHashError),
     #[error("the expected field in the raw source type was not set: `{0}`")]
     FieldNotSet(&'static str),
     #[error("failed constructing a sequencer block header from the raw protobuf header")]
@@ -579,12 +586,81 @@ enum SequencerBlockHeaderErrorKind {
     ProposerAddress(#[source] tendermint::Error),
 }
 
+/// The SHA256 digest of the CometBFT header of a given block, used to uniquely identify the
+/// corresponding `SequencerBlock`.
+#[expect(
+    clippy::doc_markdown,
+    reason = "false positive (don't want CometBFT in backticks)"
+)]
+#[derive(Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
+pub struct SequencerBlockHash([u8; SEQUENCER_BLOCK_HASH_LEN]);
+
+impl SequencerBlockHash {
+    #[must_use]
+    pub const fn new(inner: [u8; SEQUENCER_BLOCK_HASH_LEN]) -> Self {
+        Self(inner)
+    }
+
+    #[must_use]
+    pub const fn inner(self) -> [u8; SEQUENCER_BLOCK_HASH_LEN] {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; SEQUENCER_BLOCK_HASH_LEN] {
+        &self.0
+    }
+}
+
+impl<'a> From<&'a SequencerBlockHash> for Bytes {
+    fn from(block_hash: &'a SequencerBlockHash) -> Bytes {
+        Bytes::copy_from_slice(&block_hash.0)
+    }
+}
+
+impl TryFrom<Bytes> for SequencerBlockHash {
+    type Error = SequencerBlockHashError;
+
+    fn try_from(block_hash: Bytes) -> Result<Self, Self::Error> {
+        let raw_hash = block_hash
+            .as_ref()
+            .try_into()
+            .map_err(|_| SequencerBlockHashError::wrong_length(block_hash.len()))?;
+        Ok(Self(raw_hash))
+    }
+}
+
+impl Display for SequencerBlockHash {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&hex::encode(self.0))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SequencerBlockHashError(SequencerBlockHashErrorKind);
+
+impl SequencerBlockHashError {
+    fn wrong_length(length: usize) -> Self {
+        Self(SequencerBlockHashErrorKind::WrongLength(length))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SequencerBlockHashErrorKind {
+    #[error(
+        "the block hash was expected to be {SEQUENCER_BLOCK_HASH_LEN} bytes long, but was \
+         actually {0} bytes"
+    )]
+    WrongLength(usize),
+}
+
 /// The individual parts that make up a [`SequencerBlock`].
 ///
 /// Exists to provide convenient access to fields of a [`SequencerBlock`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct SequencerBlockParts {
-    pub block_hash: [u8; 32],
+    pub block_hash: SequencerBlockHash,
     pub header: SequencerBlockHeader,
     pub rollup_transactions: IndexMap<RollupId, RollupTransactions>,
     pub rollup_transactions_proof: merkle::Proof,
@@ -601,7 +677,7 @@ pub struct SequencerBlockParts {
 pub struct SequencerBlock {
     /// The result of hashing the cometbft header. Guaranteed to not be `None` as compared to
     /// the cometbft/tendermint-rs return type.
-    block_hash: [u8; 32],
+    block_hash: SequencerBlockHash,
     /// the block header, which contains the cometbft header and additional sequencer-specific
     /// commitments.
     header: SequencerBlockHeader,
@@ -626,7 +702,7 @@ impl SequencerBlock {
     ///
     /// This is done by hashing the `CometBFT` header stored in this block.
     #[must_use]
-    pub fn block_hash(&self) -> &[u8; 32] {
+    pub fn block_hash(&self) -> &SequencerBlockHash {
         &self.block_hash
     }
 
@@ -691,7 +767,7 @@ impl SequencerBlock {
             rollup_ids_proof,
         } = self;
         raw::SequencerBlock {
-            block_hash: Bytes::copy_from_slice(&block_hash),
+            block_hash: Bytes::from(&block_hash),
             header: Some(header.into_raw()),
             rollup_transactions: rollup_transactions
                 .into_values()
@@ -769,7 +845,7 @@ impl SequencerBlock {
     ///
     /// - if a rollup data merkle proof cannot be constructed.
     pub fn try_from_block_info_and_data(
-        block_hash: [u8; 32],
+        block_hash: SequencerBlockHash,
         chain_id: tendermint::chain::Id,
         height: tendermint::block::Height,
         time: Time,
@@ -907,9 +983,8 @@ impl SequencerBlock {
         } = raw;
 
         let block_hash = block_hash
-            .as_ref()
             .try_into()
-            .map_err(|_| SequencerBlockError::invalid_block_hash(block_hash.len()))?;
+            .map_err(SequencerBlockError::block_hash)?;
 
         let rollup_transactions_proof = 'proof: {
             let Some(rollup_transactions_proof) = rollup_transactions_proof else {
@@ -1038,7 +1113,7 @@ where
 /// Exists to provide convenient access to fields of a [`FilteredSequencerBlock`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilteredSequencerBlockParts {
-    pub block_hash: [u8; 32],
+    pub block_hash: SequencerBlockHash,
     pub header: SequencerBlockHeader,
     // filtered set of rollup transactions
     pub rollup_transactions: IndexMap<RollupId, RollupTransactions>,
@@ -1056,7 +1131,7 @@ pub struct FilteredSequencerBlockParts {
     reason = "we want consistent and specific naming"
 )]
 pub struct FilteredSequencerBlock {
-    block_hash: [u8; 32],
+    block_hash: SequencerBlockHash,
     header: SequencerBlockHeader,
     // filtered set of rollup transactions
     rollup_transactions: IndexMap<RollupId, RollupTransactions>,
@@ -1070,7 +1145,7 @@ pub struct FilteredSequencerBlock {
 
 impl FilteredSequencerBlock {
     #[must_use]
-    pub fn block_hash(&self) -> &[u8; 32] {
+    pub fn block_hash(&self) -> &SequencerBlockHash {
         &self.block_hash
     }
 
@@ -1120,7 +1195,7 @@ impl FilteredSequencerBlock {
             ..
         } = self;
         raw::FilteredSequencerBlock {
-            block_hash: Bytes::copy_from_slice(&block_hash),
+            block_hash: Bytes::from(&block_hash),
             header: Some(header.into_raw()),
             rollup_transactions: rollup_transactions
                 .into_values()
@@ -1176,9 +1251,8 @@ impl FilteredSequencerBlock {
         } = raw;
 
         let block_hash = block_hash
-            .as_ref()
             .try_into()
-            .map_err(|_| FilteredSequencerBlockError::invalid_block_hash(block_hash.len()))?;
+            .map_err(FilteredSequencerBlockError::block_hash)?;
 
         let rollup_transactions_proof = {
             let Some(rollup_transactions_proof) = rollup_transactions_proof else {
@@ -1286,11 +1360,8 @@ pub struct FilteredSequencerBlockError(FilteredSequencerBlockErrorKind);
 
 #[derive(Debug, thiserror::Error)]
 enum FilteredSequencerBlockErrorKind {
-    #[error(
-        "the block hash in the raw protobuf filtered sequencer block was expected to be 32 bytes \
-         long, but was actually `{0}`"
-    )]
-    InvalidBlockHash(usize),
+    #[error(transparent)]
+    BlockHash(SequencerBlockHashError),
     #[error("failed to create a sequencer block header from the raw protobuf header")]
     InvalidHeader(SequencerBlockHeaderError),
     #[error("the rollup ID in the raw protobuf rollup transaction was not 32 bytes long")]
@@ -1317,8 +1388,8 @@ enum FilteredSequencerBlockErrorKind {
 }
 
 impl FilteredSequencerBlockError {
-    fn invalid_block_hash(len: usize) -> Self {
-        Self(FilteredSequencerBlockErrorKind::InvalidBlockHash(len))
+    fn block_hash(source: SequencerBlockHashError) -> Self {
+        Self(FilteredSequencerBlockErrorKind::BlockHash(source))
     }
 
     fn invalid_header(source: SequencerBlockHeaderError) -> Self {

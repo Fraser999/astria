@@ -35,7 +35,10 @@ use astria_core::{
             SignedTransaction,
         },
     },
-    sequencerblock::v1alpha1::block::SequencerBlock,
+    sequencerblock::v1alpha1::block::{
+        SequencerBlock,
+        SequencerBlockHash,
+    },
 };
 use astria_eyre::{
     anyhow_to_eyre,
@@ -858,8 +861,9 @@ impl App {
         txs: Vec<bytes::Bytes>,
         tx_results: Vec<ExecTxResult>,
     ) -> Result<()> {
-        let Hash::Sha256(block_hash) = block_hash else {
-            bail!("block hash is empty; this should not occur")
+        let block_hash = match block_hash {
+            Hash::Sha256(hash) => SequencerBlockHash::new(hash),
+            Hash::None => bail!("block hash is empty; this should not occur"),
         };
 
         let chain_id = self

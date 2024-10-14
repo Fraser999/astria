@@ -7,12 +7,15 @@ use std::{
     },
 };
 
+use astria_core::sequencerblock::v1alpha1::block::{
+    SequencerBlockHash,
+    SEQUENCER_BLOCK_HASH_LEN,
+};
 use astria_eyre::eyre::bail;
 use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
-use telemetry::display::base64;
 
 use super::{
     Value,
@@ -20,23 +23,23 @@ use super::{
 };
 
 #[derive(BorshSerialize, BorshDeserialize)]
-pub(in crate::grpc) struct BlockHash<'a>(Cow<'a, [u8; 32]>);
+pub(in crate::grpc) struct BlockHash<'a>(Cow<'a, [u8; SEQUENCER_BLOCK_HASH_LEN]>);
 
 impl<'a> Debug for BlockHash<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", base64(self.0.as_slice()))
+        f.write_str(&hex::encode(self.0.as_slice()))
     }
 }
 
-impl<'a> From<&'a [u8; 32]> for BlockHash<'a> {
-    fn from(block_hash: &'a [u8; 32]) -> Self {
-        BlockHash(Cow::Borrowed(block_hash))
+impl<'a> From<&'a SequencerBlockHash> for BlockHash<'a> {
+    fn from(block_hash: &'a SequencerBlockHash) -> Self {
+        BlockHash(Cow::Borrowed(block_hash.as_bytes()))
     }
 }
 
-impl<'a> From<BlockHash<'a>> for [u8; 32] {
+impl<'a> From<BlockHash<'a>> for SequencerBlockHash {
     fn from(block_hash: BlockHash<'a>) -> Self {
-        block_hash.0.into_owned()
+        SequencerBlockHash::new(block_hash.0.into_owned())
     }
 }
 

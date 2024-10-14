@@ -320,7 +320,7 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     };
     state_tx
         .put_deposits(
-            &[32u8; 32],
+            &SequencerBlockHash::new([32u8; 32]),
             HashMap::from_iter([(rollup_id, vec![old_deposit])]),
         )
         .unwrap();

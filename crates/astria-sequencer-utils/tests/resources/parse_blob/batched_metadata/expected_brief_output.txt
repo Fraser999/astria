@@ -1,6 +1,6 @@
 
 sequencer metadata 0:
-    sequencer block hash: ut2Jx/f+bQ/FPewe/x+tfSa+x+MWYlbLaJ0ORiTmh+k=
+    sequencer block hash: badd89c7f7fe6d0fc53dec1eff1fad7d26bec7e3166256cb689d0e4624e687e9
     sequencer block header:
         chain id: astria-dusk-5
         height: 597420
@@ -10,7 +10,7 @@ sequencer metadata 0:
         proposer address: /duvLvsXbdJaPt3pEG540ymjhWI=
     rollup ids:
 sequencer metadata 1:
-    sequencer block hash: rAd06TkUxxpquuV7O6lMPzduVhKW42yfewonPRVy7Xs=
+    sequencer block hash: ac0774e93914c71a6abae57b3ba94c3f376e561296e36c9f7b0a273d1572ed7b
     sequencer block header:
         chain id: astria-dusk-5
         height: 597421
@@ -20,7 +20,7 @@ sequencer metadata 1:
         proposer address: Dcm68suU9Il/Klae8qM+4dTntQs=
     rollup ids:
 sequencer metadata 2:
-    sequencer block hash: T5H2//J9AYnOzctl4roaWsqpnz9OxNFjfzk6D8knm/k=
+    sequencer block hash: 4f91f6fff27d0189cecdcb65e2ba1a5acaa99f3f4ec4d1637f393a0fc9279bf9
     sequencer block header:
         chain id: astria-dusk-5
         height: 597422
@@ -30,7 +30,7 @@ sequencer metadata 2:
         proposer address: L1ruUJdfVvWcTFJIJ3yx5KgyBZM=
     rollup ids:
 sequencer metadata 3:
-    sequencer block hash: sItn6yhLeZyCWFshed+U7f2IgD0kjHkb/iybj2cHmZ8=
+    sequencer block hash: b08b67eb284b799c82585b2179df94edfd88803d248c791bfe2c9b8f6707999f
     sequencer block header:
         chain id: astria-dusk-5
         height: 597423
@@ -40,7 +40,7 @@ sequencer metadata 3:
         proposer address: yPrVsmT31bVEaXjpauw1SeQfE1M=
     rollup ids:
 sequencer metadata 4:
-    sequencer block hash: 9guERGaeMF8ST/8YDAdA9kuOG+VCxIG7xswH/5bz4uo=
+    sequencer block hash: f60b8444669e305f124fff180c0740f64b8e1be542c481bbc6cc07ff96f3e2ea
     sequencer block header:
         chain id: astria-dusk-5
         height: 597424

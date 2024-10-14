@@ -224,7 +224,10 @@ mod tests {
         generated::sequencerblock::v1alpha1::SequencerBlockHeader as RawSequencerBlockHeader,
         primitive::v1::RollupId,
         sequencerblock::v1alpha1::{
-            block::SequencerBlockHeader,
+            block::{
+                SequencerBlockHash,
+                SequencerBlockHeader,
+            },
             celestia::UncheckedSubmittedMetadata,
         },
     };
@@ -345,7 +348,7 @@ mod tests {
         let header = SequencerBlockHeader::try_from_raw(header).unwrap();
 
         let sequencer_blob = UncheckedSubmittedMetadata {
-            block_hash: [0u8; 32],
+            block_hash: SequencerBlockHash::new([0u8; 32]),
             header,
             rollup_ids: vec![],
             rollup_transactions_proof,
@@ -390,7 +393,7 @@ mod tests {
         let header = SequencerBlockHeader::try_from_raw(header).unwrap();
 
         let sequencer_blob = UncheckedSubmittedMetadata {
-            block_hash: [0u8; 32],
+            block_hash: SequencerBlockHash::new([0u8; 32]),
             header,
             rollup_ids: vec![rollup_id],
             rollup_transactions_proof,

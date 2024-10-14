@@ -1,4 +1,7 @@
-use astria_core::primitive::v1::RollupId;
+use astria_core::{
+    primitive::v1::RollupId,
+    sequencerblock::v1alpha1::block::SequencerBlockHash,
+};
 use base64::{
     display::Base64Display,
     engine::general_purpose::URL_SAFE,
@@ -64,11 +67,8 @@ pub(in crate::bridge) fn bridge_account_withdrawal_event<T: AddressBytes>(
     )
 }
 
-pub(in crate::bridge) fn deposit(block_hash: &[u8; 32], rollup_id: &RollupId) -> String {
-    format!(
-        "{DEPOSIT_PREFIX}{}/{rollup_id}",
-        Base64Display::new(block_hash, &URL_SAFE),
-    )
+pub(in crate::bridge) fn deposit(block_hash: &SequencerBlockHash, rollup_id: &RollupId) -> String {
+    format!("{DEPOSIT_PREFIX}{block_hash}/{rollup_id}")
 }
 
 pub(in crate::bridge) fn last_transaction_id_for_bridge_account<T: AddressBytes>(
@@ -105,7 +105,10 @@ mod tests {
         insta::assert_snapshot!(bridge_account_sudo_address(&address()));
         insta::assert_snapshot!(bridge_account_withdrawer_address(&address()));
         insta::assert_snapshot!(bridge_account_withdrawal_event(&address(), "the-event"));
-        insta::assert_snapshot!(deposit(&[1; 32], &RollupId::new([2; 32])));
+        insta::assert_snapshot!(deposit(
+            &SequencerBlockHash::new([1; 32]),
+            &RollupId::new([2; 32])
+        ));
         insta::assert_snapshot!(last_transaction_id_for_bridge_account(&address()));
     }
 
@@ -122,7 +125,10 @@ mod tests {
         assert!(
             bridge_account_withdrawal_event(&address(), "the-event").starts_with(COMPONENT_PREFIX)
         );
-        assert!(deposit(&[1; 32], &RollupId::new([2; 32])).starts_with(COMPONENT_PREFIX));
+        assert!(
+            deposit(&SequencerBlockHash::new([1; 32]), &RollupId::new([2; 32]))
+                .starts_with(COMPONENT_PREFIX)
+        );
         assert!(last_transaction_id_for_bridge_account(&address()).starts_with(COMPONENT_PREFIX));
     }
 

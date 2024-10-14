@@ -7,7 +7,10 @@ use astria_core::{
         TransactionId,
         ADDRESS_LEN,
     },
-    sequencerblock::v1alpha1::block::Deposit,
+    sequencerblock::v1alpha1::block::{
+        Deposit,
+        SequencerBlockHash,
+    },
 };
 use astria_eyre::{
     anyhow_to_eyre,
@@ -141,7 +144,7 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
     #[instrument(skip_all)]
     async fn get_deposits(
         &self,
-        block_hash: &[u8; 32],
+        block_hash: &SequencerBlockHash,
         rollup_id: &RollupId,
     ) -> Result<Vec<Deposit>> {
         let Some(bytes) = self
@@ -335,7 +338,7 @@ pub(crate) trait StateWriteExt: StateWrite {
     #[instrument(skip_all, err)]
     fn put_deposits(
         &mut self,
-        block_hash: &[u8; 32],
+        block_hash: &SequencerBlockHash,
         all_deposits: HashMap<RollupId, Vec<Deposit>>,
     ) -> Result<()> {
         for (rollup_id, deposits) in all_deposits {
@@ -611,7 +614,7 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
-        let block_hash = [32; 32];
+        let block_hash = SequencerBlockHash::new([32; 32]);
         let rollup_id = RollupId::new([2u8; 32]);
 
         // no events ok
@@ -631,7 +634,7 @@ mod tests {
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
-        let block_hash = [32; 32];
+        let block_hash = SequencerBlockHash::new([32; 32]);
         let rollup_id_1 = RollupId::new([1u8; 32]);
         let bridge_address = astria_address(&[42u8; 20]);
         let amount = 10u128;

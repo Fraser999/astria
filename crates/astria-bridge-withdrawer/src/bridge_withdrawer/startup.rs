@@ -260,12 +260,10 @@ impl Startup {
         .await
         .wrap_err("failed to fetch last transaction hash by the bridge account")?;
 
-        let Some(tx_hash) = last_transaction_hash_resp.tx_hash else {
-            return Ok(None);
+        let tx_hash = match last_transaction_hash_resp.tx_hash {
+            Some(tx_hash) => tendermint::Hash::Sha256(tx_hash),
+            None => return Ok(None),
         };
-
-        let tx_hash = tendermint::Hash::try_from(tx_hash.to_vec())
-            .wrap_err("failed to convert last transaction hash to tendermint hash")?;
 
         // get the corresponding transaction
         let last_transaction = get_sequencer_transaction_at_hash(

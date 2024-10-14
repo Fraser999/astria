@@ -163,7 +163,7 @@ impl SequencerService for SequencerServer {
             .collect();
 
         let block = RawFilteredSequencerBlock {
-            block_hash: Bytes::copy_from_slice(&block_hash),
+            block_hash: Bytes::from(&block_hash),
             header: Some(header.into_raw()),
             rollup_transactions,
             rollup_transactions_proof: Some(rollup_transactions_proof.into_raw()),
