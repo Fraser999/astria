@@ -536,7 +536,7 @@ impl Executor {
         block.hash = %block.hash,
         block.height = block.height.value(),
         block.num_of_transactions = block.transactions.len(),
-        rollup.parent_hash = %telemetry::display::base64(&parent_hash),
+        rollup.parent_hash = %telemetry::display::hex(&parent_hash),
         err
     ))]
     async fn execute_block(
@@ -562,7 +562,7 @@ impl Executor {
             .record_transactions_per_executed_block(n_transactions);
 
         info!(
-            executed_block.hash = %telemetry::display::base64(&executed_block.hash()),
+            executed_block.hash = %telemetry::display::hex(&executed_block.hash()),
             executed_block.number = executed_block.number(),
             "executed block",
         );
@@ -636,9 +636,9 @@ impl Executor {
             .wrap_err("failed updating remote commitment state")?;
         info!(
             soft.number = new_state.soft().number(),
-            soft.hash = %telemetry::display::base64(&new_state.soft().hash()),
+            soft.hash = %telemetry::display::hex(&new_state.soft().hash()),
             firm.number = new_state.firm().number(),
-            firm.hash = %telemetry::display::base64(&new_state.firm().hash()),
+            firm.hash = %telemetry::display::hex(&new_state.firm().hash()),
             "updated commitment state",
         );
         self.state
