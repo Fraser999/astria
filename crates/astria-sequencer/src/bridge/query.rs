@@ -239,13 +239,9 @@ pub(crate) async fn bridge_account_last_tx_hash_request(
         .get_last_transaction_id_for_bridge_account(&address)
         .await
     {
-        Ok(Some(tx_id)) => BridgeAccountLastTxHashResponse {
+        Ok(tx_hash) => BridgeAccountLastTxHashResponse {
             height,
-            tx_hash: Some(tx_id.get()),
-        },
-        Ok(None) => BridgeAccountLastTxHashResponse {
-            height,
-            tx_hash: None,
+            tx_hash,
         },
         Err(err) => {
             return error_query_response(

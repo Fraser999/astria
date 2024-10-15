@@ -11,7 +11,10 @@ use std::{
 
 use astria_core::{
     generated::protocol::transactions::v1alpha1 as raw,
-    primitive::v1::asset::IbcPrefixed,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        TransactionId,
+    },
     protocol::{
         abci::AbciErrorCode,
         transaction::v1alpha1::SignedTransaction,
@@ -228,15 +231,15 @@ async fn handle_check_tx<S: StateRead>(
         tx, ..
     } = req;
 
-    let tx_hash = sha2::Sha256::digest(&tx).into();
+    let tx_hash = TransactionId::new(sha2::Sha256::digest(&tx).into());
 
     // check if the transaction has been removed from the appside mempool
-    if let Err(rsp) = check_removed_comet_bft(tx_hash, mempool, metrics).await {
+    if let Err(rsp) = check_removed_comet_bft(&tx_hash, mempool, metrics).await {
         return rsp;
     }
 
     // check if the transaction is already in the mempool
-    if is_tracked(tx_hash, mempool, metrics).await {
+    if is_tracked(&tx_hash, mempool, metrics).await {
         return response::CheckTx::default();
     }
 
@@ -258,7 +261,7 @@ async fn handle_check_tx<S: StateRead>(
 }
 
 /// Checks if the transaction is already in the mempool.
-async fn is_tracked(tx_hash: [u8; 32], mempool: &AppMempool, metrics: &Metrics) -> bool {
+async fn is_tracked(tx_hash: &TransactionId, mempool: &AppMempool, metrics: &Metrics) -> bool {
     let start_tracked_check = Instant::now();
 
     let result = mempool.is_tracked(tx_hash).await;
@@ -273,7 +276,7 @@ async fn is_tracked(tx_hash: [u8; 32], mempool: &AppMempool, metrics: &Metrics) 
 /// Returns an `Err(response::CheckTx)` with an error code and message if the transaction has been
 /// removed from the appside mempool.
 async fn check_removed_comet_bft(
-    tx_hash: [u8; 32],
+    tx_hash: &TransactionId,
     mempool: &AppMempool,
     metrics: &Metrics,
 ) -> Result<(), response::CheckTx> {

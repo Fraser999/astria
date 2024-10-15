@@ -261,7 +261,7 @@ impl Startup {
         .wrap_err("failed to fetch last transaction hash by the bridge account")?;
 
         let tx_hash = match last_transaction_hash_resp.tx_hash {
-            Some(tx_hash) => tendermint::Hash::Sha256(tx_hash),
+            Some(tx_hash) => tendermint::Hash::Sha256(tx_hash.get()),
             None => return Ok(None),
         };
 

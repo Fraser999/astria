@@ -11,7 +11,10 @@ use std::{
 };
 
 use astria_core::{
-    primitive::v1::asset::IbcPrefixed,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        TransactionId,
+    },
     protocol::transaction::v1alpha1::{
         action::group::Group,
         SignedTransaction,
@@ -39,7 +42,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(super) struct TimemarkedTransaction {
     signed_tx: Arc<SignedTransaction>,
-    tx_hash: [u8; 32],
+    tx_hash: TransactionId,
     time_first_seen: Instant,
     address: [u8; 20],
     cost: HashMap<IbcPrefixed, u128>,
@@ -48,7 +51,7 @@ pub(super) struct TimemarkedTransaction {
 impl TimemarkedTransaction {
     pub(super) fn new(signed_tx: Arc<SignedTransaction>, cost: HashMap<IbcPrefixed, u128>) -> Self {
         Self {
-            tx_hash: signed_tx.id().get(),
+            tx_hash: signed_tx.id(),
             address: *signed_tx.verification_key().address_bytes(),
             signed_tx,
             time_first_seen: Instant::now(),
@@ -110,8 +113,8 @@ impl TimemarkedTransaction {
         &self.cost
     }
 
-    pub(super) fn id(&self) -> [u8; 32] {
-        self.tx_hash
+    pub(super) fn id(&self) -> &TransactionId {
+        &self.tx_hash
     }
 }
 
@@ -120,7 +123,7 @@ impl fmt::Display for TimemarkedTransaction {
         write!(
             f,
             "tx_hash: {}, address: {}, signer: {}, nonce: {}, chain ID: {}, group: {}",
-            telemetry::display::base64(&self.tx_hash),
+            self.tx_hash,
             telemetry::display::base64(&self.address),
             self.signed_tx.verification_key(),
             self.signed_tx.nonce(),
@@ -470,7 +473,7 @@ pub(super) trait TransactionsForAccount: Default {
     /// transactions are removed.
     ///
     /// Returns the hashes of the removed transactions.
-    fn remove(&mut self, nonce: u32) -> Vec<[u8; 32]> {
+    fn remove(&mut self, nonce: u32) -> Vec<TransactionId> {
         if !self.txs().contains_key(&nonce) {
             error!(nonce, "transaction with given nonce not found");
             return Vec::new();
@@ -478,13 +481,13 @@ pub(super) trait TransactionsForAccount: Default {
 
         self.txs_mut()
             .split_off(&nonce)
-            .values()
+            .into_values()
             .map(|ttx| ttx.tx_hash)
             .collect()
     }
 
     #[cfg(test)]
-    fn contains_tx(&self, tx_hash: &[u8; 32]) -> bool {
+    fn contains_tx(&self, tx_hash: &TransactionId) -> bool {
         self.txs().values().any(|ttx| ttx.tx_hash == *tx_hash)
     }
 }
@@ -632,7 +635,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     fn remove(
         &mut self,
         signed_tx: Arc<SignedTransaction>,
-    ) -> Result<Vec<[u8; 32]>, Arc<SignedTransaction>> {
+    ) -> Result<Vec<TransactionId>, Arc<SignedTransaction>> {
         let address = signed_tx.verification_key().address_bytes();
 
         // Take the collection for this account out of `self` temporarily.
@@ -656,7 +659,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
 
     /// Removes all of the transactions for the given account and returns the hashes of the removed
     /// transactions.
-    fn clear_account(&mut self, address: &[u8; 20]) -> Vec<[u8; 32]> {
+    fn clear_account(&mut self, address: &[u8; 20]) -> Vec<TransactionId> {
         self.txs_mut()
             .remove(address)
             .map(|account_txs| account_txs.txs().values().map(|ttx| ttx.tx_hash).collect())
@@ -668,7 +671,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
         &mut self,
         address: &[u8; 20],
         current_account_nonce: u32,
-    ) -> Vec<([u8; 32], RemovalReason)> {
+    ) -> Vec<(TransactionId, RemovalReason)> {
         // Take the collection for this account out of `self` temporarily if it exists.
         let Some(mut account_txs) = self.txs_mut().remove(address) else {
             return Vec::new();
@@ -677,7 +680,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
         // clear out stale nonces
         let mut split_off = account_txs.txs_mut().split_off(&current_account_nonce);
         mem::swap(&mut split_off, account_txs.txs_mut());
-        let mut removed_txs: Vec<([u8; 32], RemovalReason)> = split_off
+        let mut removed_txs: Vec<(TransactionId, RemovalReason)> = split_off
             .into_values()
             .map(|ttx| (ttx.tx_hash, RemovalReason::NonceStale))
             .collect();
@@ -714,7 +717,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     }
 
     #[cfg(test)]
-    fn contains_tx(&self, tx_hash: &[u8; 32]) -> bool {
+    fn contains_tx(&self, tx_hash: &TransactionId) -> bool {
         self.txs()
             .values()
             .any(|account_txs| account_txs.contains_tx(tx_hash))
@@ -776,11 +779,11 @@ impl PendingTransactions {
     pub(super) async fn builder_queue<S: accounts::StateReadExt>(
         &self,
         state: &S,
-    ) -> Result<Vec<([u8; 32], Arc<SignedTransaction>)>> {
+    ) -> Result<Vec<(TransactionId, Arc<SignedTransaction>)>> {
         // Used to hold the values in Vec for sorting.
         struct QueueEntry {
             tx: Arc<SignedTransaction>,
-            tx_hash: [u8; 32],
+            tx_hash: TransactionId,
             priority: TransactionPriority,
         }
 
@@ -797,7 +800,7 @@ impl PendingTransactions {
                     Err(error) => {
                         // mempool could be off due to node connectivity issues
                         error!(
-                            tx_hash = %telemetry::display::base64(&ttx.tx_hash),
+                            tx_hash = %ttx.tx_hash,
                             "failed to add pending tx to builder queue: {error:#}"
                         );
                         continue;

@@ -14,7 +14,10 @@ use std::{
 };
 
 use astria_core::{
-    primitive::v1::asset::IbcPrefixed,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        TransactionId,
+    },
     protocol::transaction::v1alpha1::SignedTransaction,
 };
 use astria_eyre::eyre::Result;
@@ -66,8 +69,8 @@ const REMOVAL_CACHE_SIZE: usize = 4096;
 /// a transaction is invalidated due to mempool removal policies.
 #[derive(Clone)]
 pub(crate) struct RemovalCache {
-    cache: HashMap<[u8; 32], RemovalReason>,
-    remove_queue: VecDeque<[u8; 32]>,
+    cache: HashMap<TransactionId, RemovalReason>,
+    remove_queue: VecDeque<TransactionId>,
     max_size: NonZeroUsize,
 }
 
@@ -82,14 +85,14 @@ impl RemovalCache {
 
     /// Returns Some(RemovalReason) if the transaction is cached and
     /// removes the entry from the cache if present.
-    fn remove(&mut self, tx_hash: [u8; 32]) -> Option<RemovalReason> {
-        self.cache.remove(&tx_hash)
+    fn remove(&mut self, tx_hash: &TransactionId) -> Option<RemovalReason> {
+        self.cache.remove(tx_hash)
     }
 
     /// Adds the transaction to the cache, will preserve the original
     /// `RemovalReason` if already in the cache.
-    fn add(&mut self, tx_hash: [u8; 32], reason: RemovalReason) {
-        if self.cache.contains_key(&tx_hash) {
+    fn add(&mut self, tx_hash: &TransactionId, reason: RemovalReason) {
+        if self.cache.contains_key(tx_hash) {
             return;
         };
 
@@ -102,33 +105,33 @@ impl RemovalCache {
             // remove transaction from cache if it is present
             self.cache.remove(&removed_tx);
         }
-        self.remove_queue.push_back(tx_hash);
-        self.cache.insert(tx_hash, reason);
+        self.remove_queue.push_back(*tx_hash);
+        self.cache.insert(*tx_hash, reason);
     }
 }
 
 struct ContainedTxLock<'a> {
     mempool: &'a Mempool,
-    txs: RwLockWriteGuard<'a, HashSet<[u8; 32]>>,
+    txs: RwLockWriteGuard<'a, HashSet<TransactionId>>,
 }
 
 impl<'a> ContainedTxLock<'a> {
-    fn add(&mut self, id: [u8; 32]) {
+    fn add(&mut self, id: TransactionId) {
         if !self.txs.insert(id) {
             self.mempool.metrics.increment_internal_logic_error();
             error!(
-                tx_hash = %telemetry::display::hex(&id),
+                tx_hash = %id,
                 "attempted to add transaction already tracked in mempool's tracked container, is logic \
                 error"
             );
         }
     }
 
-    fn remove(&mut self, id: [u8; 32]) {
-        if !self.txs.remove(&id) {
+    fn remove(&mut self, id: &TransactionId) {
+        if !self.txs.remove(id) {
             self.mempool.metrics.increment_internal_logic_error();
             error!(
-                tx_hash = %telemetry::display::hex(&id),
+                tx_hash = %id,
                 "attempted to remove transaction absent from mempool's tracked container, is logic \
                 error"
             );
@@ -165,7 +168,7 @@ pub(crate) struct Mempool {
     pending: Arc<RwLock<PendingTransactions>>,
     parked: Arc<RwLock<ParkedTransactions<MAX_PARKED_TXS_PER_ACCOUNT>>>,
     comet_bft_removal_cache: Arc<RwLock<RemovalCache>>,
-    contained_txs: Arc<RwLock<HashSet<[u8; 32]>>>,
+    contained_txs: Arc<RwLock<HashSet<TransactionId>>>,
     metrics: &'static Metrics,
 }
 
@@ -212,7 +215,7 @@ impl Mempool {
         transaction_cost: HashMap<IbcPrefixed, u128>,
     ) -> Result<(), InsertionError> {
         let timemarked_tx = TimemarkedTransaction::new(tx, transaction_cost);
-        let id = timemarked_tx.id();
+        let id = *timemarked_tx.id();
         let (mut pending, mut parked) = self.acquire_both_locks().await;
 
         // try insert into pending
@@ -264,7 +267,7 @@ impl Mempool {
                 );
                 // promote the transactions
                 for ttx in to_promote {
-                    let tx_id = ttx.id();
+                    let tx_id = *ttx.id();
                     if let Err(error) =
                         pending.add(ttx, current_account_nonce, &current_account_balances)
                     {
@@ -273,7 +276,7 @@ impl Mempool {
                         self.lock_contained_txs().await.remove(timemarked_tx.id());
                         error!(
                             current_account_nonce,
-                            tx_hash = %telemetry::display::hex(&tx_id),
+                            tx_hash = %tx_id,
                             %error,
                             "failed to promote transaction during insertion"
                         );
@@ -281,7 +284,7 @@ impl Mempool {
                 }
 
                 // track in contained txs
-                self.lock_contained_txs().await.add(timemarked_tx.id());
+                self.lock_contained_txs().await.add(*timemarked_tx.id());
 
                 Ok(())
             }
@@ -294,7 +297,7 @@ impl Mempool {
     pub(crate) async fn builder_queue<S: accounts::StateReadExt>(
         &self,
         state: &S,
-    ) -> Result<Vec<([u8; 32], Arc<SignedTransaction>)>> {
+    ) -> Result<Vec<(TransactionId, Arc<SignedTransaction>)>> {
         self.pending.read().await.builder_queue(state).await
     }
 
@@ -308,7 +311,7 @@ impl Mempool {
         signed_tx: Arc<SignedTransaction>,
         reason: RemovalReason,
     ) {
-        let tx_hash = signed_tx.id().get();
+        let tx_hash = signed_tx.id();
         let address = *signed_tx.verification_key().address_bytes();
 
         // Try to remove from pending.
@@ -332,25 +335,28 @@ impl Mempool {
 
         // Add the original tx first to preserve its reason for removal. The second
         // attempt to add it inside the loop below will be a no-op.
-        removal_cache.add(tx_hash, reason);
+        removal_cache.add(&tx_hash, reason);
         let mut contained_lock = self.lock_contained_txs().await;
         for removed_tx in removed_txs {
-            contained_lock.remove(removed_tx);
-            removal_cache.add(removed_tx, RemovalReason::LowerNonceInvalidated);
+            contained_lock.remove(&removed_tx);
+            removal_cache.add(&removed_tx, RemovalReason::LowerNonceInvalidated);
         }
     }
 
     /// Checks if a transaction was flagged to be removed from the `CometBFT` mempool. Will
     /// remove the transaction from the cache if it is present.
     #[instrument(skip_all)]
-    pub(crate) async fn check_removed_comet_bft(&self, tx_hash: [u8; 32]) -> Option<RemovalReason> {
+    pub(crate) async fn check_removed_comet_bft(
+        &self,
+        tx_hash: &TransactionId,
+    ) -> Option<RemovalReason> {
         self.comet_bft_removal_cache.write().await.remove(tx_hash)
     }
 
     /// Returns true if the transaction is tracked as inserted.
     #[instrument(skip_all)]
-    pub(crate) async fn is_tracked(&self, tx_hash: [u8; 32]) -> bool {
-        self.contained_txs.read().await.contains(&tx_hash)
+    pub(crate) async fn is_tracked(&self, tx_hash: &TransactionId) -> bool {
+        self.contained_txs.read().await.contains(tx_hash)
     }
 
     /// Updates stored transactions to reflect current blockchain state. Will remove transactions
@@ -362,7 +368,7 @@ impl Mempool {
     #[instrument(skip_all)]
     pub(crate) async fn run_maintenance<S: accounts::StateReadExt>(&self, state: &S, recost: bool) {
         let (mut pending, mut parked) = self.acquire_both_locks().await;
-        let mut removed_txs = Vec::<([u8; 32], RemovalReason)>::new();
+        let mut removed_txs = Vec::new();
 
         // To clean we need to:
         // 1.) remove stale and expired transactions
@@ -428,17 +434,17 @@ impl Mempool {
                     parked.find_promotables(address, highest_pending_nonce, &remaining_balances);
 
                 for tx in promtion_txs {
-                    let tx_id = tx.id();
+                    let tx_id = *tx.id();
                     if let Err(error) = pending.add(tx, current_nonce, &current_balances) {
                         // NOTE: this shouldn't happen. Promotions should never fail. This also
                         // means grabbing the lock inside the loop is more
                         // performant.
-                        self.lock_contained_txs().await.remove(tx_id);
+                        self.lock_contained_txs().await.remove(&tx_id);
                         self.metrics.increment_internal_logic_error();
                         error!(
                             address = %telemetry::display::base64(&address),
                             current_nonce,
-                            tx_hash = %telemetry::display::hex(&tx_id),
+                            tx_hash = %tx_id,
                             %error,
                             "failed to promote transaction during maintenance"
                         );
@@ -447,17 +453,17 @@ impl Mempool {
             } else {
                 // add demoted transactions to parked
                 for tx in demotion_txs {
-                    let tx_id = tx.id();
+                    let tx_id = *tx.id();
                     if let Err(error) = parked.add(tx, current_nonce, &current_balances) {
                         // NOTE: this shouldn't happen normally but could on the edge case of
                         // the parked queue being full for the account or globally.
                         // Grabbing the lock inside the loop should be more performant.
-                        self.lock_contained_txs().await.remove(tx_id);
+                        self.lock_contained_txs().await.remove(&tx_id);
                         self.metrics.increment_internal_logic_error();
                         error!(
                             address = %telemetry::display::base64(&address),
                             current_nonce,
-                            tx_hash = %telemetry::display::hex(&tx_id),
+                            tx_hash = %tx_id,
                             %error,
                             "failed to demote transaction during maintenance"
                         );
@@ -473,8 +479,8 @@ impl Mempool {
         let mut removal_cache = self.comet_bft_removal_cache.write().await;
         let mut contained_lock = self.lock_contained_txs().await;
         for (tx_hash, reason) in removed_txs {
-            removal_cache.add(tx_hash, reason);
-            contained_lock.remove(tx_hash);
+            removal_cache.add(&tx_hash, reason);
+            contained_lock.remove(&tx_hash);
         }
     }
 
@@ -936,23 +942,23 @@ mod tests {
         // assert that all were added to the cometbft removal cache
         // and the expected reasons were tracked
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx0.id().get()).await,
+            mempool.check_removed_comet_bft(&tx0.id()).await,
             Some(RemovalReason::FailedPrepareProposal(_))
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx1.id().get()).await,
+            mempool.check_removed_comet_bft(&tx1.id()).await,
             Some(RemovalReason::FailedPrepareProposal(_))
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx3.id().get()).await,
+            mempool.check_removed_comet_bft(&tx3.id()).await,
             Some(RemovalReason::LowerNonceInvalidated)
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx4.id().get()).await,
+            mempool.check_removed_comet_bft(&tx4.id()).await,
             Some(RemovalReason::FailedPrepareProposal(_))
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx5.id().get()).await,
+            mempool.check_removed_comet_bft(&tx5.id()).await,
             Some(RemovalReason::LowerNonceInvalidated)
         ));
     }
@@ -1048,39 +1054,39 @@ mod tests {
     async fn tx_removal_cache() {
         let mut tx_cache = RemovalCache::new(NonZeroUsize::try_from(2).unwrap());
 
-        let tx_0 = [0u8; 32];
-        let tx_1 = [1u8; 32];
-        let tx_2 = [2u8; 32];
+        let tx_0 = TransactionId::new([0u8; 32]);
+        let tx_1 = TransactionId::new([1u8; 32]);
+        let tx_2 = TransactionId::new([2u8; 32]);
 
         assert!(
-            tx_cache.remove(tx_0).is_none(),
+            tx_cache.remove(&tx_0).is_none(),
             "no transaction should be cached at first"
         );
 
-        tx_cache.add(tx_0, RemovalReason::Expired);
+        tx_cache.add(&tx_0, RemovalReason::Expired);
         assert!(
-            tx_cache.remove(tx_0).is_some(),
+            tx_cache.remove(&tx_0).is_some(),
             "transaction was added, should be cached"
         );
 
         assert!(
-            tx_cache.remove(tx_0).is_none(),
+            tx_cache.remove(&tx_0).is_none(),
             "transaction is cleared after reading"
         );
 
-        tx_cache.add(tx_0, RemovalReason::Expired);
-        tx_cache.add(tx_1, RemovalReason::Expired);
-        tx_cache.add(tx_2, RemovalReason::Expired);
+        tx_cache.add(&tx_0, RemovalReason::Expired);
+        tx_cache.add(&tx_1, RemovalReason::Expired);
+        tx_cache.add(&tx_2, RemovalReason::Expired);
         assert!(
-            tx_cache.remove(tx_1).is_some(),
+            tx_cache.remove(&tx_1).is_some(),
             "second transaction was added, should be cached"
         );
         assert!(
-            tx_cache.remove(tx_2).is_some(),
+            tx_cache.remove(&tx_2).is_some(),
             "third transaction was added, should be cached"
         );
         assert!(
-            tx_cache.remove(tx_0).is_none(),
+            tx_cache.remove(&tx_0).is_none(),
             "first transaction should not be cached"
         );
     }
@@ -1089,13 +1095,13 @@ mod tests {
     async fn tx_removal_cache_preserves_first_reason() {
         let mut tx_cache = RemovalCache::new(NonZeroUsize::try_from(2).unwrap());
 
-        let tx_0 = [0u8; 32];
+        let tx_0 = TransactionId::new([0u8; 32]);
 
-        tx_cache.add(tx_0, RemovalReason::Expired);
-        tx_cache.add(tx_0, RemovalReason::LowerNonceInvalidated);
+        tx_cache.add(&tx_0, RemovalReason::Expired);
+        tx_cache.add(&tx_0, RemovalReason::LowerNonceInvalidated);
 
         assert!(
-            matches!(tx_cache.remove(tx_0), Some(RemovalReason::Expired)),
+            matches!(tx_cache.remove(&tx_0), Some(RemovalReason::Expired)),
             "first removal reason should be presenved"
         );
     }
@@ -1115,14 +1121,14 @@ mod tests {
             .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
             .await
             .unwrap();
-        assert!(mempool.is_tracked(tx1.id().get()).await);
+        assert!(mempool.is_tracked(&tx1.id()).await);
 
         // check that the pending transaction is in the tracked set
         mempool
             .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
             .await
             .unwrap();
-        assert!(mempool.is_tracked(tx0.id().get()).await);
+        assert!(mempool.is_tracked(&tx0.id()).await);
 
         // remove the transactions from the mempool, should remove both
         mempool
@@ -1130,8 +1136,8 @@ mod tests {
             .await;
 
         // check that the transactions are not in the tracked set
-        assert!(!mempool.is_tracked(tx0.id().get()).await);
-        assert!(!mempool.is_tracked(tx1.id().get()).await);
+        assert!(!mempool.is_tracked(&tx0.id()).await);
+        assert!(!mempool.is_tracked(&tx1.id()).await);
     }
 
     #[tokio::test]
@@ -1163,8 +1169,8 @@ mod tests {
         mempool.run_maintenance(&mock_state, false).await;
 
         // check that the transactions are not in the tracked set
-        assert!(!mempool.is_tracked(tx0.id().get()).await);
-        assert!(!mempool.is_tracked(tx1.id().get()).await);
+        assert!(!mempool.is_tracked(&tx0.id()).await);
+        assert!(!mempool.is_tracked(&tx1.id()).await);
     }
 
     #[tokio::test]
@@ -1192,8 +1198,8 @@ mod tests {
             .remove_tx_invalid(tx0.clone(), RemovalReason::Expired)
             .await;
 
-        assert!(!mempool.is_tracked(tx0.id().get()).await);
-        assert!(!mempool.is_tracked(tx1.id().get()).await);
+        assert!(!mempool.is_tracked(&tx0.id()).await);
+        assert!(!mempool.is_tracked(&tx1.id()).await);
 
         // re-insert the transactions into the mempool
         mempool
@@ -1206,8 +1212,8 @@ mod tests {
             .unwrap();
 
         // check that the transactions are in the tracked set on re-insertion
-        assert!(mempool.is_tracked(tx0.id().get()).await);
-        assert!(mempool.is_tracked(tx1.id().get()).await);
+        assert!(mempool.is_tracked(&tx0.id()).await);
+        assert!(mempool.is_tracked(&tx1.id()).await);
     }
 
     #[tokio::test]

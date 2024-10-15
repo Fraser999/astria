@@ -684,6 +684,7 @@ where
     tree
 }
 
+/// The SHA256 digest of a given transaction, used to uniquely identify it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -738,11 +739,8 @@ impl TransactionId {
     pub fn try_from_raw_ref(raw: &raw::TransactionId) -> Result<Self, TransactionIdError> {
         use hex::FromHex as _;
 
-        let inner = <[u8; TRANSACTION_ID_LEN]>::from_hex(&raw.inner).map_err(|err| {
-            TransactionIdError(TransactionIdErrorKind::HexDecode {
-                source: err,
-            })
-        })?;
+        let inner = <[u8; TRANSACTION_ID_LEN]>::from_hex(&raw.inner)
+            .map_err(TransactionIdError::hex_decode)?;
         Ok(Self {
             inner,
         })
@@ -763,6 +761,26 @@ impl TryFrom<raw::TransactionId> for TransactionId {
     }
 }
 
+impl TryFrom<Bytes> for TransactionId {
+    type Error = TransactionIdError;
+
+    fn try_from(tx_hash: Bytes) -> Result<Self, Self::Error> {
+        let inner = tx_hash
+            .as_ref()
+            .try_into()
+            .map_err(|_| TransactionIdError::wrong_length(tx_hash.len()))?;
+        Ok(Self {
+            inner,
+        })
+    }
+}
+
+impl<'a> From<&'a TransactionId> for Bytes {
+    fn from(tx_hash: &'a TransactionId) -> Bytes {
+        Bytes::copy_from_slice(&tx_hash.inner)
+    }
+}
+
 impl std::fmt::Display for TransactionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in self.inner {
@@ -776,10 +794,28 @@ impl std::fmt::Display for TransactionId {
 #[error(transparent)]
 pub struct TransactionIdError(TransactionIdErrorKind);
 
+impl TransactionIdError {
+    fn hex_decode(source: hex::FromHexError) -> Self {
+        Self(TransactionIdErrorKind::HexDecode {
+            source,
+        })
+    }
+
+    fn wrong_length(length: usize) -> Self {
+        Self(TransactionIdErrorKind::WrongLength(length))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum TransactionIdErrorKind {
-    #[error("error decoding hex string `inner` to bytes")]
+    #[error("error decoding transaction id input string as hex")]
     HexDecode { source: hex::FromHexError },
+
+    #[error(
+        "the transaction id was expected to be {TRANSACTION_ID_LEN} bytes long, but was actually \
+         {0} bytes"
+    )]
+    WrongLength(usize),
 }
 
 #[cfg(test)]

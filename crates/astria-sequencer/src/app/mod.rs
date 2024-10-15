@@ -563,17 +563,16 @@ impl App {
         let mut unused_count = pending_txs.len();
         for (tx_hash, tx) in pending_txs {
             unused_count = unused_count.saturating_sub(1);
-            let tx_hash_base64 = telemetry::display::base64(&tx_hash).to_string();
             let bytes = tx.to_raw().encode_to_vec();
             let tx_len = bytes.len();
-            info!(transaction_hash = %tx_hash_base64, "executing transaction");
+            info!(transaction_hash = %tx_hash, "executing transaction");
 
             // don't include tx if it would make the cometBFT block too large
             if !block_size_constraints.cometbft_has_space(tx_len) {
                 self.metrics
                     .increment_prepare_proposal_excluded_transactions_cometbft_space();
                 debug!(
-                    transaction_hash = %tx_hash_base64,
+                    transaction_hash = %tx_hash,
                     block_size_constraints = %json(&block_size_constraints),
                     tx_data_bytes = tx_len,
                     "excluding remaining transactions: max cometBFT data limit reached"
@@ -596,7 +595,7 @@ impl App {
                 self.metrics
                     .increment_prepare_proposal_excluded_transactions_sequencer_space();
                 debug!(
-                    transaction_hash = %tx_hash_base64,
+                    transaction_hash = %tx_hash,
                     block_size_constraints = %json(&block_size_constraints),
                     tx_data_bytes = tx_sequence_data_bytes,
                     "excluding transaction: max block sequenced data limit reached"
@@ -611,7 +610,7 @@ impl App {
             let tx_group = tx.group();
             if tx_group > current_tx_group {
                 debug!(
-                    transaction_hash = %tx_hash_base64,
+                    transaction_hash = %tx_hash,
                     block_size_constraints = %json(&block_size_constraints),
                     "excluding transaction: group is higher priority than previously included transactions"
                 );
@@ -641,7 +640,7 @@ impl App {
                     self.metrics
                         .increment_prepare_proposal_excluded_transactions_failed_execution();
                     debug!(
-                        transaction_hash = %tx_hash_base64,
+                        transaction_hash = %tx_hash,
                         error = AsRef::<dyn std::error::Error>::as_ref(&e),
                         "failed to execute transaction, not including in block"
                     );

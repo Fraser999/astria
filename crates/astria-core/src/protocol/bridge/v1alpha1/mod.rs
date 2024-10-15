@@ -8,12 +8,14 @@ use crate::primitive::v1::{
     AddressError,
     IncorrectRollupIdLength,
     RollupId,
+    TransactionId,
+    TransactionIdError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeAccountLastTxHashResponse {
     pub height: u64,
-    pub tx_hash: Option<[u8; 32]>,
+    pub tx_hash: Option<TransactionId>,
 }
 
 impl BridgeAccountLastTxHashResponse {
@@ -25,17 +27,10 @@ impl BridgeAccountLastTxHashResponse {
     /// - if the transaction hash is not 32 bytes
     pub fn try_from_raw(
         raw: raw::BridgeAccountLastTxHashResponse,
-    ) -> Result<Self, BridgeAccountLastTxHashResponseError> {
+    ) -> Result<Self, TransactionIdError> {
         Ok(Self {
             height: raw.height,
-            tx_hash: raw
-                .tx_hash
-                .map(|bytes| {
-                    <[u8; 32]>::try_from(bytes.as_ref()).map_err(|_| {
-                        BridgeAccountLastTxHashResponseError::invalid_tx_hash(bytes.len())
-                    })
-                })
-                .transpose()?,
+            tx_hash: raw.tx_hash.map(TransactionId::try_from).transpose()?,
         })
     }
 
@@ -43,7 +38,7 @@ impl BridgeAccountLastTxHashResponse {
     pub fn into_raw(self) -> raw::BridgeAccountLastTxHashResponse {
         raw::BridgeAccountLastTxHashResponse {
             height: self.height,
-            tx_hash: self.tx_hash.map(|tx_hash| Bytes::copy_from_slice(&tx_hash)),
+            tx_hash: self.tx_hash.map(|tx_hash| Bytes::from(&tx_hash)),
         }
     }
 }
@@ -55,9 +50,7 @@ impl raw::BridgeAccountLastTxHashResponse {
     /// # Errors
     ///
     /// - if the transaction hash is not 32 bytes
-    pub fn try_into_native(
-        self,
-    ) -> Result<BridgeAccountLastTxHashResponse, BridgeAccountLastTxHashResponseError> {
+    pub fn try_into_native(self) -> Result<BridgeAccountLastTxHashResponse, TransactionIdError> {
         BridgeAccountLastTxHashResponse::try_from_raw(self)
     }
 
@@ -67,25 +60,6 @@ impl raw::BridgeAccountLastTxHashResponse {
     ) -> raw::BridgeAccountLastTxHashResponse {
         native.into_raw()
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct BridgeAccountLastTxHashResponseError(BridgeAccountLastTxHashResponseErrorKind);
-
-impl BridgeAccountLastTxHashResponseError {
-    #[must_use]
-    pub fn invalid_tx_hash(bytes: usize) -> Self {
-        Self(BridgeAccountLastTxHashResponseErrorKind::InvalidTxHash(
-            bytes,
-        ))
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum BridgeAccountLastTxHashResponseErrorKind {
-    #[error("invalid tx hash; must be 32 bytes, got {0} bytes")]
-    InvalidTxHash(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

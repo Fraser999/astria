@@ -11,6 +11,7 @@ use std::{
 
 use astria_core::{
     crypto::SigningKey,
+    primitive::v1::TransactionId,
     protocol::transaction::v1alpha1::SignedTransaction,
 };
 use sha2::{
@@ -121,12 +122,12 @@ fn init_mempool<T: MempoolSize>() -> Mempool {
                 .unwrap();
         }
         for i in 0..super::REMOVAL_CACHE_SIZE {
-            let hash = Sha256::digest(i.to_le_bytes()).into();
+            let hash = TransactionId::new(Sha256::digest(i.to_le_bytes()).into());
             mempool
                 .comet_bft_removal_cache
                 .write()
                 .await
-                .add(hash, RemovalReason::Expired);
+                .add(&hash, RemovalReason::Expired);
         }
     });
     mempool
@@ -260,12 +261,12 @@ fn check_removed_comet_bft(bencher: divan::Bencher) {
         .unwrap();
     bencher
         .with_inputs(|| {
-            let tx_hash = Sha256::digest(0_usize.to_le_bytes()).into();
+            let tx_hash = TransactionId::new(Sha256::digest(0_usize.to_le_bytes()).into());
             (init_mempool::<mempool_with_100_txs>(), tx_hash)
         })
         .bench_values(move |(mempool, tx_hash)| {
             runtime.block_on(async {
-                mempool.check_removed_comet_bft(tx_hash).await.unwrap();
+                mempool.check_removed_comet_bft(&tx_hash).await.unwrap();
             });
         });
 }
