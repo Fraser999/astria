@@ -1,4 +1,5 @@
 use astria_core::{
+    crypto::SigningKey,
     primitive::v1::asset,
     protocol::transaction::v1alpha1::{
         action::FeeAssetChangeAction,
@@ -49,7 +50,7 @@ impl Add {
             args.sequencer_url.as_str(),
             args.sequencer_chain_id.clone(),
             &args.prefix,
-            args.private_key.as_str(),
+            &args.private_key,
             Action::FeeAssetChange(FeeAssetChangeAction::Addition(args.asset.clone())),
         )
         .await
@@ -74,7 +75,7 @@ impl Remove {
             args.sequencer_url.as_str(),
             args.sequencer_chain_id.clone(),
             &args.prefix,
-            args.private_key.as_str(),
+            &args.private_key,
             Action::FeeAssetChange(FeeAssetChangeAction::Removal(args.asset.clone())),
         )
         .await
@@ -95,8 +96,13 @@ struct ArgsInner {
     // Don't use a plain text private, prefer wrapper like from
     // the secrecy crate with specialized `Debug` and `Drop` implementations
     // that overwrite the key on drop and don't reveal it when printing.
-    #[arg(long, env = "SEQUENCER_PRIVATE_KEY")]
-    private_key: String,
+    #[arg(
+        long,
+        id = "HEX STRING",
+        value_parser = crate::utils::SigningKeyParser,
+        env = "SEQUENCER_PRIVATE_KEY"
+    )]
+    private_key: SigningKey,
     /// The url of the Sequencer node
     #[arg(
         long,

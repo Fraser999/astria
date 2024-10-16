@@ -1,6 +1,9 @@
-use astria_core::protocol::transaction::v1alpha1::{
-    action::ValidatorUpdate,
-    Action,
+use astria_core::{
+    crypto::SigningKey,
+    protocol::transaction::v1alpha1::{
+        action::ValidatorUpdate,
+        Action,
+    },
 };
 use color_eyre::eyre::{
     self,
@@ -29,12 +32,17 @@ pub(super) struct Command {
     #[arg(long, default_value = "astria")]
     prefix: String,
     /// The private key of the sudo account authorizing change
-    #[arg(long, env = "SEQUENCER_PRIVATE_KEY")]
     // TODO: https://github.com/astriaorg/astria/issues/594
     // Don't use a plain text private, prefer wrapper like from
     // the secrecy crate with specialized `Debug` and `Drop` implementations
     // that overwrite the key on drop and don't reveal it when printing.
-    private_key: String,
+    #[arg(
+        long,
+        id = "HEX STRING",
+        value_parser = crate::utils::SigningKeyParser,
+        env = "SEQUENCER_PRIVATE_KEY"
+    )]
+    private_key: SigningKey,
     /// The address of the Validator being updated
     #[arg(long)]
     validator_public_key: String,
@@ -59,7 +67,7 @@ impl Command {
             self.sequencer_url.as_str(),
             self.sequencer_chain_id.clone(),
             &self.prefix,
-            self.private_key.as_str(),
+            &self.private_key,
             Action::ValidatorUpdate(validator_update),
         )
         .await

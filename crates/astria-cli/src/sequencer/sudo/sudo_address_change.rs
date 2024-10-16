@@ -1,4 +1,5 @@
 use astria_core::{
+    crypto::SigningKey,
     primitive::v1::Address,
     protocol::transaction::v1alpha1::{
         action::SudoAddressChangeAction,
@@ -21,8 +22,13 @@ pub(super) struct Command {
     // Don't use a plain text private, prefer wrapper like from
     // the secrecy crate with specialized `Debug` and `Drop` implementations
     // that overwrite the key on drop and don't reveal it when printing.
-    #[arg(long, env = "SEQUENCER_PRIVATE_KEY")]
-    private_key: String,
+    #[arg(
+        long,
+        id = "HEX STRING",
+        value_parser = crate::utils::SigningKeyParser,
+        env = "SEQUENCER_PRIVATE_KEY"
+    )]
+    private_key: SigningKey,
     /// The url of the Sequencer node
     #[arg(
         long,
@@ -48,7 +54,7 @@ impl Command {
             self.sequencer_url.as_str(),
             self.sequencer_chain_id.clone(),
             &self.prefix,
-            self.private_key.as_str(),
+            &self.private_key,
             Action::SudoAddressChange(SudoAddressChangeAction {
                 new_address: self.address,
             }),

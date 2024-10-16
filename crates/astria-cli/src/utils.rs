@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+
 use astria_core::{
     crypto::SigningKey,
     primitive::v1::Address,
@@ -11,10 +13,19 @@ use astria_sequencer_client::{
     HttpClient,
     SequencerClientExt as _,
 };
+use clap::{
+    error::{
+        ContextKind,
+        ContextValue,
+        ErrorKind,
+    },
+    Arg,
+    Command,
+    Error,
+};
 use color_eyre::eyre::{
     self,
     ensure,
-    eyre,
     WrapErr as _,
 };
 
@@ -22,15 +33,13 @@ pub(crate) async fn submit_transaction(
     sequencer_url: &str,
     chain_id: String,
     prefix: &str,
-    private_key: &str,
+    signing_key: &SigningKey,
     action: Action,
 ) -> eyre::Result<Response> {
     let sequencer_client =
         HttpClient::new(sequencer_url).wrap_err("failed constructing http sequencer client")?;
 
-    let sequencer_key = signing_key_from_private_key(private_key)?;
-
-    let from_address = address_from_signing_key(&sequencer_key, prefix)?;
+    let from_address = address_from_signing_key(signing_key, prefix)?;
     println!("sending tx from address: {from_address}");
 
     let nonce_res = sequencer_client
@@ -44,7 +53,7 @@ pub(crate) async fn submit_transaction(
         .actions(vec![action])
         .try_build()
         .wrap_err("failed to construct a transaction")?
-        .into_signed(&sequencer_key);
+        .into_signed(signing_key);
     let res = sequencer_client
         .submit_transaction_sync(tx)
         .await
@@ -62,15 +71,46 @@ pub(crate) async fn submit_transaction(
     Ok(tx_response)
 }
 
-pub(crate) fn signing_key_from_private_key(private_key: &str) -> eyre::Result<SigningKey> {
-    // Decode the hex string to get the private key bytes
-    let private_key_bytes: [u8; 32] = hex::decode(private_key)
-        .wrap_err("failed to decode private key bytes from hex string")?
-        .try_into()
-        .map_err(|_| eyre!("invalid private key length; must be 32 bytes"))?;
+#[derive(Clone)]
+pub(crate) struct SigningKeyParser;
 
-    // Create and return a signing key from the private key bytes
-    Ok(SigningKey::from(private_key_bytes))
+impl clap::builder::TypedValueParser for SigningKeyParser {
+    type Value = SigningKey;
+
+    fn parse_ref(
+        &self,
+        cmd: &Command,
+        maybe_arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, Error> {
+        let Some(arg) = maybe_arg else {
+            let mut error = Error::new(ErrorKind::ValueValidation).with_cmd(cmd);
+            error.insert(ContextKind::InvalidValue, ContextValue::None);
+            return Err(error);
+        };
+
+        let error = |context: String| {
+            let mut e = Error::new(ErrorKind::ValueValidation).with_cmd(cmd);
+            e.insert(
+                ContextKind::InvalidArg,
+                ContextValue::String(arg.to_string()),
+            );
+            e.insert(ContextKind::InvalidValue, ContextValue::String(context));
+            e
+        };
+
+        let hex_str = clap::builder::StringValueParser::new().parse_ref(cmd, Some(arg), value)?;
+        let bytes = hex::decode(hex_str)
+            .map_err(|hex_error| error(format!("failed to parse as hex: {hex_error}")))?;
+        let byte_array = <[u8; 32]>::try_from(bytes).map_err(|returned_bytes| {
+            error(format!(
+                "invalid signing key length; must be 32 bytes but got {} byte{}",
+                returned_bytes.len(),
+                if returned_bytes.len() == 1 { "" } else { "s" }
+            ))
+        })?;
+        Ok(SigningKey::from(byte_array))
+    }
 }
 
 pub(crate) fn address_from_signing_key(

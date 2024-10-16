@@ -1,4 +1,5 @@
 use astria_core::{
+    crypto::SigningKey,
     primitive::v1::{
         asset,
         Address,
@@ -20,7 +21,6 @@ use tracing::info;
 
 use crate::utils::{
     address_from_signing_key,
-    signing_key_from_private_key,
     submit_transaction,
 };
 
@@ -64,8 +64,13 @@ pub(super) struct Command {
     // Don't use a plain text private, prefer wrapper like from
     // the secrecy crate with specialized `Debug` and `Drop` implementations
     // that overwrite the key on drop and don't reveal it when printing.
-    #[arg(long, env = "SEQUENCER_PRIVATE_KEY")]
-    private_key: String,
+    #[arg(
+        long,
+        id = "HEX STRING",
+        value_parser = crate::utils::SigningKeyParser,
+        env = "SEQUENCER_PRIVATE_KEY"
+    )]
+    private_key: SigningKey,
     /// The url of the Sequencer node
     #[arg(
          long,
@@ -90,13 +95,12 @@ pub(super) struct Command {
 
 impl Command {
     pub(crate) async fn run(self) -> eyre::Result<()> {
-        let signing_key = signing_key_from_private_key(&self.private_key)?;
-        let from_address = address_from_signing_key(&signing_key, &self.prefix)?;
+        let from_address = address_from_signing_key(&self.private_key, &self.prefix)?;
         let res = submit_transaction(
             self.sequencer_url.as_str(),
             self.sequencer_chain_id.clone(),
             &self.prefix,
-            self.private_key.as_str(),
+            &self.private_key,
             Action::Ics20Withdrawal(Ics20Withdrawal {
                 amount: self.amount,
                 denom: self.asset,
