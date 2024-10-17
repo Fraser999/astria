@@ -1,13 +1,13 @@
 use astria_eyre::{
-    eyre::WrapErr as _,
     Result,
+    eyre::WrapErr as _,
 };
 use borsh::{
     BorshDeserialize,
     BorshSerialize,
 };
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub(crate) enum StoredValue<'a> {
     Unit,
     Address(crate::address::storage::Value<'a>),

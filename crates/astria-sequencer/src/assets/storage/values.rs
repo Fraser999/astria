@@ -7,16 +7,16 @@ use borsh::{
     BorshSerialize,
 };
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub(crate) struct Value<'a>(ValueImpl<'a>);
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 enum ValueImpl<'a> {
     TracePrefixedDenom(TracePrefixedDenom<'a>),
     Fee(Fee),
 }
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub(in crate::assets) struct TracePrefixedDenom<'a> {
     trace: Vec<(Cow<'a, str>, Cow<'a, str>)>,
     base_denom: Cow<'a, str>,
@@ -33,6 +33,7 @@ impl<'a> From<&'a DomainTracePrefixed> for TracePrefixedDenom<'a> {
         }
     }
 }
+cache of domain type?
 
 impl<'a> From<TracePrefixedDenom<'a>> for DomainTracePrefixed {
     fn from(trace_prefixed: TracePrefixedDenom<'a>) -> Self {
@@ -67,7 +68,7 @@ impl<'a> TryFrom<crate::storage::StoredValue<'a>> for TracePrefixedDenom<'a> {
     }
 }
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub(in crate::assets) struct Fee(u128);
 
 impl From<u128> for Fee {

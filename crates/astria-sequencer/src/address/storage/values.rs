@@ -6,15 +6,15 @@ use borsh::{
     BorshSerialize,
 };
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub(crate) struct Value<'a>(ValueImpl<'a>);
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 enum ValueImpl<'a> {
     AddressPrefix(AddressPrefix<'a>),
 }
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub(in crate::address) struct AddressPrefix<'a>(Cow<'a, str>);
 
 impl<'a> From<&'a str> for AddressPrefix<'a> {
