@@ -8,20 +8,20 @@ use color_eyre::eyre::{
     self,
     WrapErr as _,
 };
+use colour::*;
 use frost_ed25519::{
+    Identifier,
     keys::dkg::{
         self,
         round1,
         round2,
     },
-    Identifier,
 };
 use rand::thread_rng;
 use serde::{
     Deserialize,
     Serialize,
 };
-use termion::color;
 
 use super::read_line_raw;
 
@@ -82,8 +82,7 @@ impl Command {
             package: round1_public_package,
         };
         println!("Send our public package to all other participants:");
-        print!("{}", color::Fg(color::Green));
-        println!(
+        dark_green_ln!(
             "{}",
             serde_json::to_string(&round1_public_package_with_id)
                 .wrap_err("failed to serialize round 1 public package")?
@@ -144,8 +143,7 @@ impl Command {
                 "Send package to participant with id {}:",
                 hex::encode(their_id.serialize()),
             );
-            print!("{}", color::Fg(color::Green));
-            println!(
+            dark_green_ln!(
                 "{}",
                 serde_json::to_string(&round2_package_with_id)
                     .wrap_err("failed to serialize round 2 package")?

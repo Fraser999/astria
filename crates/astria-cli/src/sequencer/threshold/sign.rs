@@ -8,6 +8,7 @@ use color_eyre::eyre::{
     self,
     WrapErr as _,
 };
+use colour::*;
 use frost_ed25519::{
     self,
     Identifier,
@@ -18,7 +19,6 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use termion::color;
 
 use super::read_line_raw;
 
@@ -104,8 +104,7 @@ impl Part1 {
         .wrap_err("failed to write nonces to file")?;
 
         println!("Our commitments are:",);
-        print!("{}", color::Fg(color::Green));
-        println!(
+        dark_green_ln!(
             "{}",
             serde_json::to_string(&commitments_with_id)
                 .wrap_err("failed to serialize commitments")?
@@ -254,8 +253,7 @@ impl Part2 {
             .wrap_err("failed to sign")?;
 
         println!("Our signature share is:",);
-        print!("{}", color::Fg(color::Green));
-        println!(
+        dark_green_ln!(
             "{}",
             serde_json::to_string(&SignatureShareWithIdentifier {
                 identifier: *secret_package.identifier(),
@@ -369,8 +367,7 @@ impl Aggregate {
             frost_ed25519::aggregate(&signing_package, &sig_shares, &public_key_package)
                 .wrap_err("failed to aggregate")?;
         println!("Aggregated signature:",);
-        print!("{}", color::Fg(color::Green));
-        println!(
+        dark_green_ln!(
             "{}",
             hex::encode(
                 signature
@@ -435,9 +432,8 @@ fn output_transaction(
             .wrap_err("failed to write transaction to file")?;
     } else {
         println!("Signed transaction:");
-        print!("{}", color::Fg(color::Green));
-        println!("{serialized_tx}");
-        println!("{}", color::Fg(color::Reset));
+        dark_green_ln!("{serialized_tx}");
+        println!();
     }
     Ok(())
 }

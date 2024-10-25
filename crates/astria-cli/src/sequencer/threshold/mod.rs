@@ -43,12 +43,12 @@ pub(crate) async fn read_line_raw() -> eyre::Result<String> {
         Write as _,
     };
 
-    use termion::color;
     // Use raw mode to allow reading more than 1KB/4KB of data at a time
     // See https://unix.stackexchange.com/questions/204815/terminal-does-not-accept-pasted-or-typed-lines-of-more-than-1024-characters
     use termion::raw::IntoRawMode;
 
-    print!("{}", color::Fg(color::Red));
+    // Switch to red foreground.
+    print!("\x1b[31m");
     // In raw mode, the input is not mirrored into the terminal, so we need
     // to read char-by-char and echo it back.
     let mut stdout = std::io::stdout().into_raw_mode()?;
@@ -76,7 +76,8 @@ pub(crate) async fn read_line_raw() -> eyre::Result<String> {
     // We consumed a newline of some kind but didn't echo it, now print
     // one out so subsequent output is guaranteed to be on a new line.
     println!();
-    print!("{}", color::Fg(color::Reset));
+    // Switch to default foreground.
+    print!("\x1b[22;39m");
 
     let line = String::from_utf8(bytes)?;
     Ok(line)

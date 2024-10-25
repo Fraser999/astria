@@ -568,6 +568,7 @@ dependencies = [
  "clap",
  "clap-stdin",
  "color-eyre",
+ "colour",
  "ethers",
  "frost-ed25519",
  "futures",

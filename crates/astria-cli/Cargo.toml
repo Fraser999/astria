@@ -24,6 +24,7 @@ astria-bridge-contracts = { path = "../astria-bridge-contracts" }
 astria-core = { path = "../astria-core", features = ["serde"] }
 
 clap = { workspace = true, features = ["derive", "env"] }
+colour = "2.1.0"
 ethers = { workspace = true, features = ["ws"] }
 hex = { workspace = true }
 ibc-types = { workspace = true }
