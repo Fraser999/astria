@@ -113,6 +113,14 @@ impl TimemarkedTransaction {
     pub(super) fn id(&self) -> [u8; 32] {
         self.tx_hash
     }
+
+    pub(super) fn signed_tx(&self) -> &Transaction {
+        &self.signed_tx
+    }
+
+    pub(super) fn time_first_seen(&self) -> Instant {
+        self.time_first_seen
+    }
 }
 
 impl fmt::Display for TimemarkedTransaction {
@@ -850,6 +858,18 @@ impl<const MAX_PARKED_TXS_PER_ACCOUNT: usize> ParkedTransactions<MAX_PARKED_TXS_
         }
 
         removed.collect()
+    }
+
+    pub(super) fn max_tx_count(&self) -> usize {
+        self.max_tx_count
+    }
+
+    #[expect(
+        clippy::unused_self,
+        reason = "this is the best way to access the value"
+    )]
+    pub(super) const fn max_parked_txs_per_account(&self) -> usize {
+        MAX_PARKED_TXS_PER_ACCOUNT
     }
 }
 

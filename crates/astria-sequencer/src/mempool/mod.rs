@@ -1,5 +1,6 @@
 #[cfg(feature = "benchmark")]
 mod benchmarks;
+mod console;
 mod mempool_state;
 mod transactions_container;
 
@@ -8,6 +9,11 @@ use std::{
         HashMap,
         HashSet,
         VecDeque,
+    },
+    fmt::{
+        self,
+        Display,
+        Formatter,
     },
     num::NonZeroUsize,
     sync::Arc,
@@ -18,6 +24,8 @@ use astria_core::{
     protocol::transaction::v1::Transaction,
 };
 use astria_eyre::eyre::Result;
+pub(crate) use console::MempoolAction;
+use console::TxStatus;
 pub(crate) use mempool_state::get_account_balances;
 use tokio::{
     sync::{
@@ -36,6 +44,7 @@ use transactions_container::{
     PendingTransactions,
     TimemarkedTransaction,
     TransactionsContainer as _,
+    TransactionsForAccount as _,
 };
 
 use crate::{
@@ -49,6 +58,19 @@ pub(crate) enum RemovalReason {
     NonceStale,
     LowerNonceInvalidated,
     FailedPrepareProposal(String),
+}
+
+impl Display for RemovalReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            RemovalReason::Expired => f.write_str("expired"),
+            RemovalReason::NonceStale => f.write_str("stale nonce"),
+            RemovalReason::LowerNonceInvalidated => f.write_str("lower nonce invalidated this tx"),
+            RemovalReason::FailedPrepareProposal(msg) => {
+                write!(f, "failed in prepare proposal: {msg}")
+            }
+        }
+    }
 }
 
 /// How long transactions are considered valid in the mempool.
@@ -104,6 +126,18 @@ impl RemovalCache {
         }
         self.remove_queue.push_back(tx_hash);
         self.cache.insert(tx_hash, reason);
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&'_ [u8; 32], &RemovalReason)> {
+        self.cache.iter()
+    }
+
+    pub(super) fn max_size(&self) -> usize {
+        self.max_size.get()
+    }
+
+    pub(super) fn get(&self, tx_hash: &[u8; 32]) -> Option<&RemovalReason> {
+        self.cache.get(tx_hash)
     }
 }
 
@@ -187,11 +221,22 @@ impl Mempool {
         }
     }
 
+    pub(crate) fn console_action(&self) -> MempoolAction {
+        MempoolAction::new(self.clone())
+    }
+
     /// Returns the number of transactions in the mempool.
     #[must_use]
     #[instrument(skip_all)]
     pub(crate) async fn len(&self) -> usize {
         self.contained_txs.read().await.len()
+    }
+
+    /// Returns the hashes of all transactions in the mempool.
+    #[must_use]
+    #[instrument(skip_all)]
+    pub(crate) async fn txs(&self) -> Vec<[u8; 32]> {
+        self.contained_txs.read().await.iter().copied().collect()
     }
 
     async fn lock_contained_txs(&self) -> ContainedTxLock<'_> {
@@ -485,6 +530,56 @@ impl Mempool {
     #[instrument(skip_all)]
     pub(crate) async fn pending_nonce(&self, address: &[u8; 20]) -> Option<u32> {
         self.pending.read().await.pending_nonce(address)
+    }
+
+    #[instrument(skip_all)]
+    pub(super) async fn clone_pending(&self) -> PendingTransactions {
+        self.pending.read().await.clone()
+    }
+
+    #[instrument(skip_all)]
+    pub(super) async fn clone_parked(&self) -> ParkedTransactions<MAX_PARKED_TXS_PER_ACCOUNT> {
+        self.parked.read().await.clone()
+    }
+
+    #[instrument(skip_all)]
+    pub(super) async fn clone_removal_cache(&self) -> RemovalCache {
+        self.comet_bft_removal_cache.read().await.clone()
+    }
+
+    #[instrument(skip_all)]
+    pub(super) async fn tx_status(&self, tx_hash: &[u8; 32]) -> TxStatus {
+        if !self.is_tracked(*tx_hash).await {
+            return TxStatus::Absent;
+        }
+        if let Some(ttx) = self
+            .pending
+            .read()
+            .await
+            .txs()
+            .values()
+            .find_map(|account_txs| account_txs.txs().values().find(|ttx| ttx.id() == *tx_hash))
+        {
+            return TxStatus::pending(ttx);
+        }
+        if let Some(ttx) = self
+            .parked
+            .read()
+            .await
+            .txs()
+            .values()
+            .find_map(|account_txs| account_txs.txs().values().find(|ttx| ttx.id() == *tx_hash))
+        {
+            return TxStatus::parked(ttx);
+        }
+        if let Some(reason) = self.comet_bft_removal_cache.read().await.get(tx_hash) {
+            return TxStatus::to_be_removed(reason);
+        }
+        error!(
+            tx_hash = %telemetry::display::hex(tx_hash),
+            "tx is tracked but unavailable in all containers"
+        );
+        TxStatus::Absent
     }
 
     async fn acquire_both_locks(

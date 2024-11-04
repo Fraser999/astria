@@ -19,7 +19,7 @@ clap = { workspace = true, features = [
 colour = "2.1.0"
 ethers-core = "2.0.14"
 hex = { workspace = true }
-indenter = "0.3.3"
+indenter = { workspace = true }
 itertools = { workspace = true }
 prost = { workspace = true }
 rlp = "0.5.2"

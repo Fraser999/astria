@@ -18,6 +18,7 @@ astria-core = { path = "../astria-core", features = [
   "unchecked-constructors",
 ] }
 astria-build-info = { path = "../astria-build-info", features = ["runtime"] }
+astria-diagnostics-console = { path = "../astria-diagnostics-console" }
 
 # The "anyhow" feature is only included because it is necessary for the implementation of
 # `penumbra_ibc::component::HostInterface` in `crates/astria-sequencer/src/ibc/host_interface.rs`.
@@ -48,10 +49,14 @@ tower-http = { version = "0.4", features = ["cors"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
+clap = { workspace = true, features = ["deprecated", "derive"] }
 divan = { workspace = true, optional = true }
 futures = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
+humantime = { workspace = true }
 ibc-types = { workspace = true, features = ["with_serde"] }
+indenter = { workspace = true }
+itertools = { workspace = true }
 penumbra-ibc = { workspace = true, features = ["component", "rpc"] }
 penumbra-proto = { workspace = true }
 penumbra-tower-trace = { workspace = true }
@@ -68,6 +73,7 @@ tendermint = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "tracing"] }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 

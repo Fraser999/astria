@@ -27,9 +27,11 @@ pub(crate) use self::{
 };
 use crate::Metrics;
 
+mod console;
 pub(crate) mod keys;
 mod snapshot;
 mod stored_value;
+pub(crate) use console::StorageAction;
 
 #[derive(Clone)]
 pub(crate) struct Storage {
@@ -84,6 +86,10 @@ impl Storage {
             metrics,
             _temp_dir: Some(Arc::new(temp_dir)),
         }
+    }
+
+    pub(crate) fn console_action(&self) -> StorageAction {
+        StorageAction::new(self.clone())
     }
 
     /// Returns the latest version (block height) of the tree recorded by `Storage`.

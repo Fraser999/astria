@@ -82,7 +82,26 @@ impl Sequencer {
         .wrap_err("failed to load storage backing chain state")?;
         let snapshot = storage.latest_snapshot();
 
+        let diagnostics_cfg = astria_diagnostics_console::Config {
+            enabled: true,
+            socket_path: "/tmp/.sequencer-diagnostics.socket".into(),
+            ..Default::default()
+        };
+        let diagnostics_console_token = tokio_util::sync::CancellationToken::new();
+        let mut diagnostics_console = astria_diagnostics_console::DiagnosticsConsole::new(
+            diagnostics_cfg,
+            diagnostics_console_token.clone(),
+        );
+
         let mempool = Mempool::new(metrics, config.mempool_parked_max_tx_count);
+
+        diagnostics_console
+            .register_action(mempool.console_action())
+            .wrap_err("failed to register action in the diagnostics console")?;
+        diagnostics_console
+            .register_action(storage.console_action())
+            .wrap_err("failed to register action in the diagnostics console")?;
+
         let app = App::new(snapshot, mempool.clone(), metrics)
             .await
             .wrap_err("failed to initialize app")?;
@@ -131,6 +150,8 @@ impl Sequencer {
             let _ = server_exit_tx.send(());
         });
 
+        let diagnostic_console_join_handle = diagnostics_console.run().unwrap().unwrap();
+
         select! {
             _ = signals.stop_rx.changed() => {
                 info!("shutting down sequencer");
@@ -141,6 +162,8 @@ impl Sequencer {
             }
         }
 
+        server_handle.abort();
+        diagnostics_console_token.cancel();
         shutdown_tx
             .send(())
             .map_err(|()| eyre!("failed to send shutdown signal to grpc server"))?;
@@ -148,7 +171,9 @@ impl Sequencer {
             .await
             .wrap_err("grpc server task failed")?
             .wrap_err("grpc server failed")?;
-        server_handle.abort();
+        diagnostic_console_join_handle
+            .await
+            .wrap_err("diagnostic console task failed")?;
         // We don't care about the returned value - it's likely a `cancelled` error.
         let _ = server_handle.await;
         // Shut down storage.

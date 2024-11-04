@@ -13,6 +13,7 @@ members = [
   "crates/astria-core-address",
   "crates/astria-core-consts",
   "crates/astria-core-crypto",
+  "crates/astria-diagnostics-console",
   "crates/astria-eyre",
   "crates/astria-grpc-mock",
   "crates/astria-grpc-mock-test",
@@ -40,6 +41,7 @@ default-members = [
   "crates/astria-core-address",
   "crates/astria-core-consts",
   "crates/astria-core-crypto",
+  "crates/astria-diagnostics-console",
   "crates/astria-grpc-mock",
   "crates/astria-grpc-mock-test",
   "crates/astria-grpc-mock-test-codegen",
@@ -74,6 +76,7 @@ hex-literal = "0.4.1"
 humantime = "2.1.0"
 hyper = "0.14"
 ibc-types = "0.12"
+indenter = "0.3.3"
 indexmap = "2.1.0"
 insta = "1.36.1"
 itertools = "0.12.1"
