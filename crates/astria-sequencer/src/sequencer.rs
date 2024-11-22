@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    path::Path,
+    time::Duration,
+};
 
 use astria_core::generated::{
     connect::{
@@ -10,6 +13,7 @@ use astria_core::generated::{
         },
     },
     sequencerblock::v1::sequencer_service_server::SequencerServiceServer,
+    upgrades::v1::Upgrade,
 };
 use astria_eyre::{
     anyhow_to_eyre,
@@ -55,7 +59,10 @@ use tracing::{
 
 use crate::{
     address::StateReadExt as _,
-    app::App,
+    app::{
+        App,
+        ShouldShutDown,
+    },
     assets::StateReadExt as _,
     config::Config,
     grpc::sequencer::SequencerServer,
@@ -68,6 +75,12 @@ use crate::{
 const MAX_RETRIES_TO_CONNECT_TO_ORACLE_SIDECAR: u32 = 36;
 
 pub struct Sequencer;
+
+fn parse_upgrade_file(path: &Path) -> Result<Upgrade> {
+    let contents = std::fs::read_to_string(path)
+        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
+}
 
 impl Sequencer {
     #[instrument(skip_all)]
@@ -123,27 +136,53 @@ impl Sequencer {
                 .context("failed to query state for base prefix")?;
         }
 
+        let mempool = Mempool::new(metrics, config.mempool_parked_max_tx_count);
         let oracle_client = new_oracle_client(&config)
             .await
             .wrap_err("failed to create connected oracle client")?;
-
-        let mempool = Mempool::new(metrics, config.mempool_parked_max_tx_count);
-        let app = App::new(
+        let upgrade = config
+            .upgrade_file
+            .as_deref()
+            .map(parse_upgrade_file)
+            .transpose()?;
+        let mut app = App::new(
             snapshot,
             mempool.clone(),
             crate::app::vote_extension::Handler::new(oracle_client),
+            upgrade,
             metrics,
         )
         .await
         .wrap_err("failed to initialize app")?;
 
+        if let ShouldShutDown::ShutDownForUpgrade {
+            upgrade_activation_height,
+            block_time,
+            hex_encoded_app_hash,
+        } = app.should_shut_down().await
+        {
+            info!(
+                upgrade_activation_height,
+                latest_app_hash = %hex_encoded_app_hash,
+                latest_block_time = %block_time,
+                "shutting down for upgrade"
+            );
+            return Ok(());
+        }
+
+        let consensus_token = tokio_util::sync::CancellationToken::new();
+        let cloned_token = consensus_token.clone();
         let consensus_service = tower::ServiceBuilder::new()
             .layer(request_span::layer(|req: &ConsensusRequest| {
                 req.create_span()
             }))
             .service(tower_actor::Actor::new(10, |queue: _| {
                 let storage = storage.clone();
-                async move { service::Consensus::new(storage, app, queue).run().await }
+                async move {
+                    service::Consensus::new(storage, app, queue, cloned_token)
+                        .run()
+                        .await
+                }
             }));
         let mempool_service = service::Mempool::new(storage.clone(), mempool.clone(), metrics);
         let info_service =
@@ -182,13 +221,9 @@ impl Sequencer {
         });
 
         select! {
-            _ = signals.stop_rx.changed() => {
-                info!("shutting down sequencer");
-            }
-
-            _ = server_exit_rx => {
-                error!("ABCI server task exited, this shouldn't happen");
-            }
+            _ = signals.stop_rx.changed() => info!("shutting down sequencer"),
+            () = consensus_token.cancelled() => info!("consensus server shutting down sequencer"),
+            _ = server_exit_rx => error!("ABCI server task exited, this shouldn't happen"),
         }
 
         shutdown_tx
@@ -373,6 +408,7 @@ mod tests {
             oracle_grpc_addr: "http://127.0.0.1:8081".to_string(),
             oracle_client_timeout_milliseconds: 1,
             mempool_parked_max_tx_count: 1,
+            upgrade_file: None,
         };
 
         let start = tokio::time::Instant::now();

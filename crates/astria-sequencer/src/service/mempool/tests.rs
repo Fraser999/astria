@@ -32,7 +32,7 @@ async fn future_nonces_are_accepted() {
     let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
     let mut mempool = Mempool::new(metrics, 100);
     let ve_handler = crate::app::vote_extension::Handler::new(None);
-    let mut app = App::new(snapshot, mempool.clone(), ve_handler, metrics)
+    let mut app = App::new(snapshot, mempool.clone(), ve_handler, None, metrics)
         .await
         .unwrap();
 
@@ -70,7 +70,7 @@ async fn rechecks_pass() {
     let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
     let mut mempool = Mempool::new(metrics, 100);
     let ve_handler = crate::app::vote_extension::Handler::new(None);
-    let mut app = App::new(snapshot, mempool.clone(), ve_handler, metrics)
+    let mut app = App::new(snapshot, mempool.clone(), ve_handler, None, metrics)
         .await
         .unwrap();
 
@@ -116,7 +116,7 @@ async fn can_reinsert_after_recheck_fail() {
     let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
     let mut mempool = Mempool::new(metrics, 100);
     let ve_handler = crate::app::vote_extension::Handler::new(None);
-    let mut app = App::new(snapshot, mempool.clone(), ve_handler, metrics)
+    let mut app = App::new(snapshot, mempool.clone(), ve_handler, None, metrics)
         .await
         .unwrap();
 
@@ -172,7 +172,7 @@ async fn recheck_adds_non_tracked_tx() {
     let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
     let mut mempool = Mempool::new(metrics, 100);
     let ve_handler = crate::app::vote_extension::Handler::new(None);
-    let mut app = App::new(snapshot, mempool.clone(), ve_handler, metrics)
+    let mut app = App::new(snapshot, mempool.clone(), ve_handler, None, metrics)
         .await
         .unwrap();
 

@@ -39,6 +39,8 @@ pub struct Config {
     pub oracle_client_timeout_milliseconds: u64,
     /// The maximum number of transactions that can be parked in the mempool.
     pub mempool_parked_max_tx_count: usize,
+    /// The path to the upgrade.json file.
+    pub upgrade_file: Option<PathBuf>,
 }
 
 impl config::Config for Config {

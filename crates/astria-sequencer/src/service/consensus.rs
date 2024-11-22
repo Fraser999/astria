@@ -15,17 +15,22 @@ use tokio::sync::mpsc;
 use tower_abci::BoxError;
 use tower_actor::Message;
 use tracing::{
+    info,
     instrument,
     warn,
     Instrument,
 };
 
-use crate::app::App;
+use crate::app::{
+    App,
+    ShouldShutDown,
+};
 
 pub(crate) struct Consensus {
     queue: mpsc::Receiver<Message<ConsensusRequest, ConsensusResponse, tower::BoxError>>,
     storage: Storage,
     app: App,
+    cancellation_token: tokio_util::sync::CancellationToken,
 }
 
 impl Consensus {
@@ -33,11 +38,13 @@ impl Consensus {
         storage: Storage,
         app: App,
         queue: mpsc::Receiver<Message<ConsensusRequest, ConsensusResponse, tower::BoxError>>,
+        cancellation_token: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
             queue,
             storage,
             app,
+            cancellation_token,
         }
     }
 
@@ -48,19 +55,37 @@ impl Consensus {
             span,
         }) = self.queue.recv().await
         {
+            info!("received consensus request: {req:?}");
             // The send only fails if the receiver was dropped, which happens
             // if the caller didn't propagate the message back to tendermint
             // for some reason -- but that's not our problem.
-            let rsp = self.handle_request(req).instrument(span.clone()).await;
-            if let Err(e) = rsp.as_ref() {
-                panic!("failed to handle consensus request, this is a bug: {e:?}");
-            }
+            let (rsp, should_shut_down) =
+                match self.handle_request(req).instrument(span.clone()).await {
+                    Ok(ok_res) => ok_res,
+                    Err(e) => {
+                        panic!("failed to handle consensus request, this is a bug: {e:?}");
+                    }
+                };
             // `send` returns the sent message if sending fail, so we are dropping it.
-            if rsp_sender.send(rsp).is_err() {
+            if rsp_sender.send(Ok(rsp)).is_err() {
                 warn!(
                     parent: &span,
                     "failed returning consensus response to request sender; dropping response"
                 );
+            }
+            if let ShouldShutDown::ShutDownForUpgrade {
+                upgrade_activation_height,
+                block_time,
+                hex_encoded_app_hash,
+            } = should_shut_down
+            {
+                info!(
+                    upgrade_activation_height,
+                    latest_app_hash = %hex_encoded_app_hash,
+                    latest_block_time = %block_time,
+                    "shutting down for upgrade"
+                );
+                self.cancellation_token.cancel();
             }
         }
         Ok(())
@@ -70,21 +95,25 @@ impl Consensus {
     async fn handle_request(
         &mut self,
         req: ConsensusRequest,
-    ) -> Result<ConsensusResponse, BoxError> {
+    ) -> Result<(ConsensusResponse, ShouldShutDown), BoxError> {
         Ok(match req {
-            ConsensusRequest::InitChain(init_chain) => ConsensusResponse::InitChain(
-                self.init_chain(init_chain)
-                    .await
-                    .wrap_err("failed initializing chain")?,
+            ConsensusRequest::InitChain(init_chain) => (
+                ConsensusResponse::InitChain(
+                    self.init_chain(init_chain)
+                        .await
+                        .wrap_err("failed initializing chain")?,
+                ),
+                ShouldShutDown::ContinueRunning,
             ),
-            ConsensusRequest::PrepareProposal(prepare_proposal) => {
+            ConsensusRequest::PrepareProposal(prepare_proposal) => (
                 ConsensusResponse::PrepareProposal(
                     self.handle_prepare_proposal(prepare_proposal)
                         .await
                         .wrap_err("failed to prepare proposal")?,
-                )
-            }
-            ConsensusRequest::ProcessProposal(process_proposal) => {
+                ),
+                ShouldShutDown::ContinueRunning,
+            ),
+            ConsensusRequest::ProcessProposal(process_proposal) => (
                 ConsensusResponse::ProcessProposal(
                     match self.handle_process_proposal(process_proposal).await {
                         Ok(()) => response::ProcessProposal::Accept,
@@ -96,9 +125,10 @@ impl Consensus {
                             response::ProcessProposal::Reject
                         }
                     },
-                )
-            }
-            ConsensusRequest::ExtendVote(extend_vote) => {
+                ),
+                ShouldShutDown::ContinueRunning,
+            ),
+            ConsensusRequest::ExtendVote(extend_vote) => (
                 ConsensusResponse::ExtendVote(match self.handle_extend_vote(extend_vote).await {
                     Ok(response) => response,
                     Err(e) => {
@@ -110,22 +140,28 @@ impl Consensus {
                             vote_extension: vec![].into(),
                         }
                     }
-                })
-            }
-            ConsensusRequest::VerifyVoteExtension(vote_extension) => {
+                }),
+                ShouldShutDown::ContinueRunning,
+            ),
+            ConsensusRequest::VerifyVoteExtension(vote_extension) => (
                 ConsensusResponse::VerifyVoteExtension(
                     self.handle_verify_vote_extension(vote_extension)
                         .await
                         .wrap_err("failed to verify vote extension")?,
-                )
-            }
-            ConsensusRequest::FinalizeBlock(finalize_block) => ConsensusResponse::FinalizeBlock(
-                self.finalize_block(finalize_block)
-                    .await
-                    .wrap_err("failed to finalize block")?,
+                ),
+                ShouldShutDown::ContinueRunning,
+            ),
+            ConsensusRequest::FinalizeBlock(finalize_block) => (
+                ConsensusResponse::FinalizeBlock(
+                    self.finalize_block(finalize_block)
+                        .await
+                        .wrap_err("failed to finalize block")?,
+                ),
+                ShouldShutDown::ContinueRunning,
             ),
             ConsensusRequest::Commit => {
-                ConsensusResponse::Commit(self.commit().await.wrap_err("failed to commit")?)
+                let (rsp, should_shut_down) = self.commit().await.wrap_err("failed to commit")?;
+                (ConsensusResponse::Commit(rsp), should_shut_down)
             }
         })
     }
@@ -232,9 +268,10 @@ impl Consensus {
     }
 
     #[instrument(skip_all)]
-    async fn commit(&mut self) -> Result<response::Commit> {
+    async fn commit(&mut self) -> Result<(response::Commit, ShouldShutDown)> {
         self.app.commit(self.storage.clone()).await;
-        Ok(response::Commit::default())
+        let should_shut_down = self.app.should_shut_down().await;
+        Ok((response::Commit::default(), should_shut_down))
     }
 }
 
@@ -516,6 +553,7 @@ mod tests {
             snapshot,
             mempool.clone(),
             crate::app::vote_extension::Handler::new(None),
+            None,
             metrics,
         )
         .await
@@ -532,7 +570,11 @@ mod tests {
         app.commit(storage.clone()).await;
 
         let (_tx, rx) = mpsc::channel(1);
-        (Consensus::new(storage.clone(), app, rx), mempool)
+        let cancellation_token = tokio_util::sync::CancellationToken::new();
+        (
+            Consensus::new(storage.clone(), app, rx, cancellation_token),
+            mempool,
+        )
     }
 
     #[tokio::test]
