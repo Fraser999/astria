@@ -59,14 +59,16 @@ pub struct SequencerBlock {
     /// / The block hash of the cometbft block that corresponds to this sequencer block.
     #[prost(bytes = "bytes", tag = "5")]
     pub block_hash: ::prost::bytes::Bytes,
-    /// / The extended commit info for the block, if vote extensions were enabled at this height.
-    #[prost(bytes = "bytes", optional, tag = "6")]
-    pub extended_commit_info: ::core::option::Option<::prost::bytes::Bytes>,
-    /// / The proof that the extended commit info is included in the cometbft block data (if it
-    /// / exists), specifically the third item in the data field.
+    /// The hashes of any upgrade changes applied during this block and their proof.
+    #[prost(message, optional, tag = "6")]
+    pub upgrade_change_hashes_with_proof: ::core::option::Option<
+        UpgradeChangeHashesWithProof,
+    >,
+    /// The extended commit info with proof for the block, if vote extensions were enabled at this
+    /// height.
     #[prost(message, optional, tag = "7")]
-    pub extended_commit_info_proof: ::core::option::Option<
-        super::super::primitive::v1::Proof,
+    pub extended_commit_info_with_proof: ::core::option::Option<
+        ExtendedCommitInfoWithProof,
     >,
 }
 impl ::prost::Name for SequencerBlock {
@@ -193,14 +195,16 @@ pub struct FilteredSequencerBlock {
     /// the rollup transactions.
     #[prost(message, optional, tag = "6")]
     pub rollup_ids_proof: ::core::option::Option<super::super::primitive::v1::Proof>,
-    /// / The extended commit info for the block, if vote extensions were enabled at this height.
-    #[prost(bytes = "bytes", optional, tag = "7")]
-    pub extended_commit_info: ::core::option::Option<::prost::bytes::Bytes>,
-    /// / The proof that the extended commit info is included in the cometbft block data (if it
-    /// / exists), specifically the third item in the data field.
+    /// The hashes of any upgrade changes applied during this block and their proof.
+    #[prost(message, optional, tag = "7")]
+    pub upgrade_change_hashes_with_proof: ::core::option::Option<
+        UpgradeChangeHashesWithProof,
+    >,
+    /// The extended commit info with proof for the block, if vote extensions were enabled at this
+    /// height.
     #[prost(message, optional, tag = "8")]
-    pub extended_commit_info_proof: ::core::option::Option<
-        super::super::primitive::v1::Proof,
+    pub extended_commit_info_with_proof: ::core::option::Option<
+        ExtendedCommitInfoWithProof,
     >,
 }
 impl ::prost::Name for FilteredSequencerBlock {
@@ -237,6 +241,44 @@ pub mod rollup_data {
 }
 impl ::prost::Name for RollupData {
     const NAME: &'static str = "RollupData";
+    const PACKAGE: &'static str = "astria.sequencerblock.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        ::prost::alloc::format!("astria.sequencerblock.v1.{}", Self::NAME)
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpgradeChangeHashesWithProof {
+    /// The SHA256 digests of all upgrade changes applied during this block, if an upgrade was
+    /// activated at this height.
+    #[prost(bytes = "bytes", repeated, tag = "1")]
+    pub upgrade_change_hashes: ::prost::alloc::vec::Vec<::prost::bytes::Bytes>,
+    /// The proof that the change hashes are included in the cometbft block data (if it exists),
+    /// specifically the third item in the data field.
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<super::super::primitive::v1::Proof>,
+}
+impl ::prost::Name for UpgradeChangeHashesWithProof {
+    const NAME: &'static str = "UpgradeChangeHashesWithProof";
+    const PACKAGE: &'static str = "astria.sequencerblock.v1";
+    fn full_name() -> ::prost::alloc::string::String {
+        ::prost::alloc::format!("astria.sequencerblock.v1.{}", Self::NAME)
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExtendedCommitInfoWithProof {
+    /// The extended commit info for the block, if vote extensions were enabled at this height.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub extended_commit_info: ::prost::bytes::Bytes,
+    /// The proof that the extended commit info is included in the cometbft block data (if it
+    /// exists). If no upgrade change hashes exist in the block, this will be the third item in the
+    /// cometbft block data field, otherwise it will be fourth.
+    #[prost(message, optional, tag = "2")]
+    pub proof: ::core::option::Option<super::super::primitive::v1::Proof>,
+}
+impl ::prost::Name for ExtendedCommitInfoWithProof {
+    const NAME: &'static str = "ExtendedCommitInfoWithProof";
     const PACKAGE: &'static str = "astria.sequencerblock.v1";
     fn full_name() -> ::prost::alloc::string::String {
         ::prost::alloc::format!("astria.sequencerblock.v1.{}", Self::NAME)
@@ -372,11 +414,16 @@ pub struct SubmittedMetadata {
     /// Corresponds to `astria.sequencerblock.v1.SequencerBlock.rollup_ids_proof`.
     #[prost(message, optional, tag = "5")]
     pub rollup_ids_proof: ::core::option::Option<super::super::primitive::v1::Proof>,
-    #[prost(bytes = "bytes", optional, tag = "6")]
-    pub extended_commit_info: ::core::option::Option<::prost::bytes::Bytes>,
+    /// The hashes of any upgrade changes applied during this block and their proof.
+    #[prost(message, optional, tag = "6")]
+    pub upgrade_change_hashes_with_proof: ::core::option::Option<
+        UpgradeChangeHashesWithProof,
+    >,
+    /// The extended commit info with proof for the block, if vote extensions were enabled at this
+    /// height.
     #[prost(message, optional, tag = "7")]
-    pub extended_commit_info_proof: ::core::option::Option<
-        super::super::primitive::v1::Proof,
+    pub extended_commit_info_with_proof: ::core::option::Option<
+        ExtendedCommitInfoWithProof,
     >,
 }
 impl ::prost::Name for SubmittedMetadata {

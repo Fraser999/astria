@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package astria.upgrades.v1;
+
+import "astria/protocol/genesis/v1/types.proto";
+
+message Upgrades {
+  Upgrade1 upgrade_1 = 1;
+}
+
+message BaseUpgradeInfo {
+  // The upgrade should be applied during the lifecycle of the block at this height.
+  uint64 activation_height = 1;
+  // The app version running after the upgrade is applied.
+  uint64 app_version = 2;
+}
+
+message Upgrade1 {
+  message ConnectOracleChange {
+    // The Connect oracle genesis data.
+    astria.protocol.genesis.v1.ConnectGenesis genesis = 1;
+  }
+
+  message ValidatorUpdateActionChange {}
+
+  BaseUpgradeInfo base_info = 1;
+  ConnectOracleChange connect_oracle_change = 2;
+  ValidatorUpdateActionChange validator_update_action_change = 3;
+}

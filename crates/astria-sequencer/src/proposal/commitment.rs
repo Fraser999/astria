@@ -7,9 +7,14 @@ use astria_core::{
         transaction::v1::Transaction,
     },
     sequencerblock::v1::block::{
+        DataItem,
         Deposit,
         RollupData,
     },
+};
+use astria_eyre::eyre::{
+    Result,
+    WrapErr,
 };
 use bytes::Bytes;
 
@@ -20,20 +25,20 @@ pub(crate) struct GeneratedCommitments {
 }
 
 impl GeneratedCommitments {
-    /// The total size of the commitments in bytes.
-    pub(crate) const TOTAL_SIZE: usize = 64;
-}
+    /// The total size of the commitments, encoded as `DataItem`s in bytes.
+    pub(crate) const TOTAL_SIZE: usize = DataItem::ENCODED_ROLLUP_TRANSACTIONS_ROOT_LENGTH
+        + DataItem::ENCODED_ROLLUP_IDS_ROOT_LENGTH;
 
-impl IntoIterator for GeneratedCommitments {
-    type IntoIter = std::array::IntoIter<Self::Item, 2>;
-    type Item = Bytes;
-
-    fn into_iter(self) -> Self::IntoIter {
-        [
-            self.rollup_datas_root.to_vec().into(),
-            self.rollup_ids_root.to_vec().into(),
+    pub(crate) fn into_iter(self) -> Result<std::array::IntoIter<Bytes, 2>> {
+        Ok([
+            DataItem::RollupTransactionsRoot(self.rollup_datas_root)
+                .encode()
+                .wrap_err("failed to encode rollup transactions root")?,
+            DataItem::RollupIdsRoot(self.rollup_ids_root)
+                .encode()
+                .wrap_err("failed to encode rollup ids root")?,
         ]
-        .into_iter()
+        .into_iter())
     }
 }
 
@@ -103,6 +108,7 @@ mod tests {
             TransactionBody,
         },
     };
+    use bytes::Bytes;
     use rand::rngs::OsRng;
 
     use super::*;

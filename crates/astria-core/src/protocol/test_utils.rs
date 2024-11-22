@@ -185,6 +185,7 @@ impl ConfigureSequencerBlock {
             proposer_address,
             data,
             deposits: deposits_map,
+            uses_data_item_enum: true,
             with_extended_commit_info,
         }
         .try_build()

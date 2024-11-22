@@ -3,6 +3,7 @@ use astria_eyre::eyre::{
     eyre,
     OptionExt as _,
     Result,
+    WrapErr,
 };
 
 use super::commitment::GeneratedCommitments;
@@ -20,7 +21,9 @@ pub(crate) struct BlockSizeConstraints {
 }
 
 impl BlockSizeConstraints {
-    pub(crate) fn new(cometbft_max_size: usize) -> Result<Self> {
+    pub(crate) fn new(cometbft_max_size: i64) -> Result<Self> {
+        let cometbft_max_size = usize::try_from(cometbft_max_size)
+            .wrap_err("failed to convert cometbft_max_size to usize")?;
         if cometbft_max_size < GeneratedCommitments::TOTAL_SIZE {
             return Err(eyre!(
                 "cometbft_max_size must be at least GeneratedCommitments::TOTAL_SIZE"

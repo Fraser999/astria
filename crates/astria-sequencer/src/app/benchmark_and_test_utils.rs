@@ -33,6 +33,7 @@ use astria_core::{
             ValidatorUpdate,
         },
     },
+    upgrades::v1::Upgrades,
     Protobuf,
 };
 use astria_eyre::eyre::WrapErr as _;
@@ -155,7 +156,7 @@ pub(crate) async fn initialize_app_with_storage(
     let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
     let mempool = Mempool::new(metrics, 100);
     let ve_handler = crate::app::vote_extension::Handler::new(None);
-    let mut app = App::new(snapshot, mempool, ve_handler, metrics)
+    let mut app = App::new(snapshot, mempool, ve_handler, Upgrades::default(), metrics)
         .await
         .unwrap();
 

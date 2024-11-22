@@ -41,7 +41,14 @@ use astria_core::{
             Transaction,
         },
     },
-    sequencerblock::v1::block::SequencerBlockBuilder,
+    sequencerblock::v1::{
+        block::SequencerBlockBuilder,
+        DataItem,
+    },
+    upgrades::v1::{
+        ChangeHash,
+        Upgrades,
+    },
     Protobuf as _,
 };
 use astria_eyre::{
@@ -56,6 +63,7 @@ use astria_eyre::{
         WrapErr as _,
     },
 };
+use bytes::Bytes;
 use cnidarium::{
     ArcStateDeltaExt,
     Snapshot,
@@ -85,6 +93,7 @@ use tendermint::{
     block::Header,
     AppHash,
     Hash,
+    Time,
 };
 use tracing::{
     debug,
@@ -145,6 +154,7 @@ use crate::{
             GeneratedCommitments,
         },
     },
+    upgrades::should_shut_down,
 };
 
 // ephemeral store key for the cache of results of executing of transactions in `prepare_proposal`.
@@ -155,26 +165,9 @@ const EXECUTION_RESULTS_KEY: &str = "execution_results";
 // cleared at the end of the block.
 const POST_TRANSACTION_EXECUTION_RESULT_KEY: &str = "post_transaction_execution_result";
 
-// the number of non-external transactions expected at the start of the block
-// before vote extensions are enabled.
-//
-// consists of:
-// 1. rollup data root
-// 2. rollup IDs root
-const INJECTED_TRANSACTIONS_COUNT_BEFORE_VOTE_EXTENSIONS_ENABLED: usize = 2;
-
-// the number of non-external transactions expected at the start of the block
-// after vote extensions are enabled.
-//
-// consists of:
-// 1. rollup data root
-// 2. rollup IDs root
-// 3. encoded `ExtendedCommitInfo` for the previous block
-const INJECTED_TRANSACTIONS_COUNT_AFTER_VOTE_EXTENSIONS_ENABLED: usize = 3;
-
 // the height to set the `vote_extensions_enable_height` to in state if vote extensions are
 // disabled.
-const VOTE_EXTENSIONS_DISABLED_HEIGHT: u64 = u64::MAX;
+const VOTE_EXTENSIONS_DISABLED_HEIGHT: u64 = 0;
 
 /// The inter-block state being written to by the application.
 type InterBlockState = Arc<StateDelta<Snapshot>>;
@@ -273,6 +266,8 @@ pub(crate) struct App {
     // used to create and verify vote extensions, if this is a validator node.
     vote_extension_handler: vote_extension::Handler,
 
+    upgrades: Upgrades,
+
     metrics: &'static Metrics,
 }
 
@@ -282,6 +277,7 @@ impl App {
         snapshot: Snapshot,
         mempool: Mempool,
         vote_extension_handler: vote_extension::Handler,
+        upgrades: Upgrades,
         metrics: &'static Metrics,
     ) -> Result<Self> {
         debug!("initializing App instance");
@@ -309,6 +305,7 @@ impl App {
             write_batch: None,
             app_hash,
             vote_extension_handler,
+            upgrades,
             metrics,
         })
     }
@@ -351,12 +348,6 @@ impl App {
             .wrap_err("failed to write block height to state")?;
 
         // if `vote_extensions_enable_height` is 0, vote extensions are disabled.
-        // we set it to `u64::MAX` in state so checking if our current height is past
-        // the vote extensions enabled height will always be false.
-        let vote_extensions_enable_height = match vote_extensions_enable_height {
-            0 => VOTE_EXTENSIONS_DISABLED_HEIGHT,
-            _ => vote_extensions_enable_height,
-        };
         state_tx
             .put_vote_extensions_enable_height(vote_extensions_enable_height)
             .wrap_err("failed to write vote extensions enabled height to state")?;
@@ -427,18 +418,44 @@ impl App {
         prepare_proposal: abci::request::PrepareProposal,
         storage: Storage,
     ) -> Result<abci::response::PrepareProposal> {
+        todo!(
+            "we really do need two versions of prepare_proposal, process_proposal, etc. This \
+             binary will run before upgrade 1 due - needs to follow flow on `main`"
+        );
+
         self.executed_proposal_fingerprint = Some(prepare_proposal.clone().into());
         self.update_state_for_new_round(&storage);
 
-        let vote_extensions_enable_height = self
-            .state
-            .get_vote_extensions_enable_height()
-            .await
-            .wrap_err("failed to get vote extensions enabled height")?;
+        let vote_extensions_enabled = self
+            .vote_extensions_enabled(prepare_proposal.height)
+            .await?;
 
-        let (max_tx_bytes, encoded_extended_commit_info) = if vote_extensions_enable_height
-            <= prepare_proposal.height.value()
-        {
+        let block_data = BlockData {
+            misbehavior: prepare_proposal.misbehavior,
+            height: prepare_proposal.height,
+            time: prepare_proposal.time,
+            next_validators_hash: prepare_proposal.next_validators_hash,
+            proposer_address: prepare_proposal.proposer_address,
+        };
+
+        let mut block_size_constraints = BlockSizeConstraints::new(prepare_proposal.max_tx_bytes)
+            .wrap_err("failed to create block size constraints")?;
+
+        let encoded_upgrade_change_hashes = self
+            .pre_execute_transactions(block_data)
+            .await
+            .wrap_err("failed to prepare for executing block")?
+            .map(|hashes| DataItem::UpgradeChangeHashes(hashes).encode())
+            .transpose()
+            .wrap_err("failed to encode upgrade change hashes")?;
+
+        if let Some(bytes) = &encoded_upgrade_change_hashes {
+            block_size_constraints
+                .cometbft_checked_add(bytes.len())
+                .wrap_err("exceeded size limit while adding upgrade change hashes")?;
+        }
+
+        let encoded_extended_commit_info = if vote_extensions_enabled {
             // create the extended commit info from the local last commit
             let Some(last_commit) = prepare_proposal.local_last_commit else {
                 bail!("local last commit is empty; this should not occur")
@@ -451,71 +468,52 @@ impl App {
             // note that at the height where vote extensions are enabled, the `extended_commit_info`
             // will always be empty, as there were no vote extensions for the previous block.
             let round = last_commit.round;
-            let extended_commit_info = match ProposalHandler::prepare_proposal(
+            let extended_commit_info = ProposalHandler::prepare_proposal(
                 &self.state,
                 prepare_proposal.height.into(),
                 last_commit,
             )
             .await
+            .unwrap_or_else(|error| {
+                warn!(
+                    error = AsRef::<dyn std::error::Error>::as_ref(&error),
+                    "failed to generate extended commit info"
+                );
+                ExtendedCommitInfoWithCurrencyPairMapping::empty(round)
+            });
+
+            let mut encoded_extended_commit_info = DataItem::ExtendedCommitInfo(
+                extended_commit_info.into_raw().encode_to_vec().into(),
+            )
+            .encode()
+            .wrap_err("failed to encode extended commit info")?;
+
+            if block_size_constraints
+                .cometbft_checked_add(encoded_extended_commit_info.len())
+                .is_err()
             {
-                Ok(info) => info,
-                Err(e) => {
-                    warn!(
-                        error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                        "failed to generate extended commit info"
-                    );
-                    ExtendedCommitInfoWithCurrencyPairMapping::empty(round)
-                }
-            };
+                // We would exceed the CometBFT size limit - try just adding an empty extended
+                // commit info rather than erroring out to ensure liveness.
+                warn!(
+                    encoded_extended_commit_info_len = encoded_extended_commit_info.len(),
+                    "extended commit info is too large to fit in block; not including in block"
+                );
+                encoded_extended_commit_info = DataItem::ExtendedCommitInfo(Bytes::new())
+                    .encode()
+                    .wrap_err("failed to encode empty extended commit info")?;
+                block_size_constraints
+                    .cometbft_checked_add(encoded_extended_commit_info.len())
+                    .wrap_err("exceeded size limit while adding empty extended commit info")?;
+            }
 
-            let mut encoded_extended_commit_info = extended_commit_info.into_raw().encode_to_vec();
-            let max_tx_bytes = usize::try_from(prepare_proposal.max_tx_bytes)
-                .wrap_err("failed to convert max_tx_bytes to usize")?;
-
-            // adjust max block size to account for extended commit info
-            (
-                max_tx_bytes
-                    .checked_sub(encoded_extended_commit_info.len())
-                    .unwrap_or_else(|| {
-                        // zero the commit info if it's too large to fit in the block
-                        // for liveness.
-                        warn!(
-                            encoded_extended_commit_info_len = encoded_extended_commit_info.len(),
-                            max_tx_bytes,
-                            "extended commit info is too large to fit in block; not including in \
-                             block"
-                        );
-                        encoded_extended_commit_info.clear();
-                        max_tx_bytes
-                    }),
-                Some(encoded_extended_commit_info),
-            )
+            Some(encoded_extended_commit_info)
         } else {
-            (
-                usize::try_from(prepare_proposal.max_tx_bytes)
-                    .wrap_err("failed to convert max_tx_bytes to usize")?,
-                None,
-            )
+            None
         };
-
-        let mut block_size_constraints = BlockSizeConstraints::new(max_tx_bytes)
-            .wrap_err("failed to create block size constraints")?;
-
-        let block_data = BlockData {
-            misbehavior: prepare_proposal.misbehavior,
-            height: prepare_proposal.height,
-            time: prepare_proposal.time,
-            next_validators_hash: prepare_proposal.next_validators_hash,
-            proposer_address: prepare_proposal.proposer_address,
-        };
-
-        self.pre_execute_transactions(block_data)
-            .await
-            .wrap_err("failed to prepare for executing block")?;
 
         // ignore the txs passed by cometbft in favour of our app-side mempool
         let (included_tx_bytes, signed_txs_included) = self
-            .prepare_proposal_tx_execution(&mut block_size_constraints)
+            .prepare_proposal_tx_execution(block_size_constraints)
             .await
             .wrap_err("failed to execute transactions")?;
         self.metrics
@@ -529,11 +527,9 @@ impl App {
         // the tx bytes.
         let txs = generate_rollup_datas_commitment(&signed_txs_included, deposits)
             .into_iter()
-            .chain(
-                encoded_extended_commit_info
-                    .map(bytes::Bytes::from)
-                    .into_iter(),
-            )
+            .wrap_err("failed to generate commitments iterator")?
+            .chain(encoded_upgrade_change_hashes.into_iter())
+            .chain(encoded_extended_commit_info.into_iter())
             .chain(included_tx_bytes)
             .collect();
 
@@ -602,12 +598,7 @@ impl App {
 
         let mut txs = VecDeque::from(process_proposal.txs.clone());
 
-        let vote_extensions_enable_height = self
-            .state
-            .get_vote_extensions_enable_height()
-            .await
-            .wrap_err("failed to get vote extensions enabled height")?;
-
+        todo!("got to here");
         let received_rollup_datas_root: [u8; 32] = txs
             .pop_front()
             .ok_or_eyre("no transaction commitment in proposal")?
@@ -622,7 +613,12 @@ impl App {
             .try_into()
             .map_err(|_| eyre!("chain IDs commitment must be 32 bytes"))?;
 
-        if vote_extensions_enable_height <= process_proposal.height.value() {
+        // TODO: strip out upgrade change hashes if they're due in this block
+
+        if self
+            .vote_extensions_enabled(process_proposal.height)
+            .await?
+        {
             let Some(last_commit) = process_proposal.proposed_last_commit else {
                 bail!("proposed last commit is empty; this should not occur")
             };
@@ -662,9 +658,12 @@ impl App {
             proposer_address: process_proposal.proposer_address,
         };
 
-        self.pre_execute_transactions(block_data)
+        let change_hashes = self
+            .pre_execute_transactions(block_data)
             .await
             .wrap_err("failed to prepare for executing block")?;
+
+        // TODO: check our change_hashes == the ones we stripped out above.
 
         // we don't care about the cometbft max_tx_bytes here, as cometbft would have
         // rejected the proposal if it was too large.
@@ -682,7 +681,7 @@ impl App {
             .collect::<Vec<_>>();
 
         let tx_results = self
-            .process_proposal_tx_execution(signed_txs.clone(), &mut block_size_constraints)
+            .process_proposal_tx_execution(signed_txs.clone(), block_size_constraints)
             .await
             .wrap_err("failed to execute transactions")?;
 
@@ -750,12 +749,13 @@ impl App {
     #[instrument(name = "App::prepare_proposal_tx_execution", skip_all, err(level = Level::DEBUG))]
     async fn prepare_proposal_tx_execution(
         &mut self,
-        block_size_constraints: &mut BlockSizeConstraints,
-    ) -> Result<(Vec<bytes::Bytes>, Vec<Transaction>)> {
+        block_size_constraints: BlockSizeConstraints,
+    ) -> Result<(Vec<Bytes>, Vec<Transaction>)> {
         let mempool_len = self.mempool.len().await;
         debug!(mempool_len, "executing transactions from mempool");
 
         let mut proposal_info = Proposal::Prepare {
+            block_size_constraints,
             validated_txs: Vec::new(),
             included_signed_txs: Vec::new(),
             failed_tx_count: 0,
@@ -777,15 +777,10 @@ impl App {
         for (tx_hash, tx) in pending_txs {
             unused_count = unused_count.saturating_sub(1);
 
-            if BreakOrContinue::Break
-                == proposal_checks_and_tx_execution(
-                    self,
-                    tx,
-                    Some(tx_hash),
-                    block_size_constraints,
-                    &mut proposal_info,
-                )
+            if self
+                .proposal_checks_and_tx_execution(tx, Some(tx_hash), &mut proposal_info)
                 .await?
+                .should_break()
             {
                 break;
             }
@@ -846,24 +841,20 @@ impl App {
     async fn process_proposal_tx_execution(
         &mut self,
         txs: Vec<Transaction>,
-        block_size_constraints: &mut BlockSizeConstraints,
+        block_size_constraints: BlockSizeConstraints,
     ) -> Result<Vec<ExecTxResult>> {
         let mut proposal_info = Proposal::Process {
+            block_size_constraints,
             execution_results: vec![],
             current_tx_group: Group::BundleableGeneral,
         };
 
         for tx in txs {
             let tx = Arc::new(tx);
-            if BreakOrContinue::Break
-                == proposal_checks_and_tx_execution(
-                    self,
-                    tx,
-                    None,
-                    block_size_constraints,
-                    &mut proposal_info,
-                )
+            if self
+                .proposal_checks_and_tx_execution(tx, None, &mut proposal_info)
                 .await?
+                .should_break()
             {
                 break;
             }
@@ -871,13 +862,203 @@ impl App {
         Ok(proposal_info.execution_results())
     }
 
-    /// sets up the state for execution of the block's transactions.
-    /// set the current height and timestamp, and calls `begin_block` on all components.
+    #[instrument(skip_all)]
+    async fn proposal_checks_and_tx_execution(
+        &mut self,
+        tx: Arc<Transaction>,
+        // `prepare_proposal_tx_execution` already has the tx hash, so we pass it in here
+        tx_hash: Option<[u8; TRANSACTION_ID_LEN]>,
+        proposal_info: &mut Proposal,
+    ) -> Result<BreakOrContinue> {
+        let tx_bytes = tx.to_raw().encode_to_vec();
+        let tx_hash_base_64 =
+            telemetry::display::base64(tx_hash.unwrap_or_else(|| Sha256::digest(&tx_bytes).into()))
+                .to_string();
+        let tx_len = tx_bytes.len();
+
+        info!(transaction_hash = %tx_hash_base_64, "executing transaction");
+
+        // check CometBFT size constraints for `prepare_proposal`
+        if let Proposal::Prepare {
+            block_size_constraints,
+            metrics,
+            excluded_txs,
+            ..
+        } = proposal_info
+        {
+            if !block_size_constraints.cometbft_has_space(tx_len) {
+                metrics.increment_prepare_proposal_excluded_transactions_cometbft_space();
+                debug!(
+                    transaction_hash = %tx_hash_base_64,
+                    block_size_constraints = %json(block_size_constraints),
+                    tx_data_bytes = tx_len,
+                    "excluding remaining transactions: max cometBFT data limit reached"
+                );
+                *excluded_txs = excluded_txs.saturating_add(1);
+
+                // break from calling loop, as the block is full
+                return Ok(BreakOrContinue::Break);
+            }
+        }
+
+        let debug_msg = match proposal_info {
+            Proposal::Prepare {
+                ..
+            } => "excluding transaction",
+            Proposal::Process {
+                ..
+            } => "transaction error",
+        };
+
+        // check sequencer size constraints
+        let tx_sequence_data_bytes = tx
+            .unsigned_transaction()
+            .actions()
+            .iter()
+            .filter_map(Action::as_rollup_data_submission)
+            .fold(0usize, |acc, seq| acc.saturating_add(seq.data.len()));
+        if !proposal_info
+            .block_size_constraints()
+            .sequencer_has_space(tx_sequence_data_bytes)
+        {
+            debug!(
+                transaction_hash = %tx_hash_base_64,
+                block_size_constraints = %json(&proposal_info.block_size_constraints()),
+                tx_data_bytes = tx_sequence_data_bytes,
+                "{debug_msg}: max block sequenced data limit reached"
+            );
+            match proposal_info {
+                Proposal::Prepare {
+                    metrics,
+                    excluded_txs,
+                    ..
+                } => {
+                    metrics.increment_prepare_proposal_excluded_transactions_sequencer_space();
+                    *excluded_txs = excluded_txs.saturating_add(1);
+
+                    // continue as there might be non-sequence txs that can fit
+                    return Ok(BreakOrContinue::Continue);
+                }
+                Proposal::Process {
+                    ..
+                } => bail!("max block sequenced data limit passed"),
+            };
+        }
+
+        // ensure transaction's group is less than or equal to current action group
+        let tx_group = tx.group();
+        if tx_group > proposal_info.current_tx_group() {
+            debug!(
+                transaction_hash = %tx_hash_base_64,
+                "{debug_msg}: group is higher priority than previously included transactions"
+            );
+            match proposal_info {
+                Proposal::Prepare {
+                    excluded_txs, ..
+                } => {
+                    *excluded_txs = excluded_txs.saturating_add(1);
+                    return Ok(BreakOrContinue::Continue);
+                }
+                Proposal::Process {
+                    ..
+                } => {
+                    bail!("transactions have incorrect transaction group ordering");
+                }
+            };
+        }
+
+        let execution_results = proposal_info.execution_results_mut();
+        match self.execute_transaction(tx.clone()).await {
+            Ok(events) => {
+                execution_results.push(ExecTxResult {
+                    events,
+                    ..Default::default()
+                });
+                proposal_info
+                    .block_size_constraints_mut()
+                    .sequencer_checked_add(tx_sequence_data_bytes)
+                    .wrap_err("error growing sequencer block size")?;
+                proposal_info
+                    .block_size_constraints_mut()
+                    .cometbft_checked_add(tx_len)
+                    .wrap_err("error growing cometBFT block size")?;
+                if let Proposal::Prepare {
+                    validated_txs,
+                    included_signed_txs,
+                    ..
+                } = proposal_info
+                {
+                    validated_txs.push(tx_bytes.into());
+                    included_signed_txs.push((*tx).clone());
+                }
+            }
+            Err(e) => {
+                debug!(
+                    transaction_hash = %tx_hash_base_64,
+                    error = AsRef::<dyn std::error::Error>::as_ref(&e),
+                    "{debug_msg}: failed to execute transaction"
+                );
+                match proposal_info {
+                    Proposal::Prepare {
+                        metrics,
+                        failed_tx_count,
+                        mempool,
+                        ..
+                    } => {
+                        metrics.increment_prepare_proposal_excluded_transactions_failed_execution();
+                        if e.downcast_ref::<InvalidNonce>().is_some() {
+                            // we don't remove the tx from mempool if it failed to execute
+                            // due to an invalid nonce, as it may be valid in the future.
+                            // if it's invalid due to the nonce being too low, it'll be
+                            // removed from the mempool in `update_mempool_after_finalization`.
+                            //
+                            // this is important for possible out-of-order transaction
+                            // groups fed into prepare_proposal. a transaction with a higher
+                            // nonce might be in a higher priority group than a transaction
+                            // from the same account wiht a lower nonce. this higher nonce
+                            // could execute in the next block fine.
+                        } else {
+                            *failed_tx_count = failed_tx_count.saturating_add(1);
+
+                            // remove the failing transaction from the mempool
+                            //
+                            // this will remove any transactions from the same sender
+                            // as well, as the dependent nonces will not be able
+                            // to execute
+                            mempool
+                                .remove_tx_invalid(
+                                    tx,
+                                    RemovalReason::FailedPrepareProposal(e.to_string()),
+                                )
+                                .await;
+                        }
+                    }
+                    Proposal::Process {
+                        ..
+                    } => return Err(e.wrap_err("transaction failed to execute")),
+                }
+            }
+        };
+        proposal_info.set_current_tx_group(tx_group);
+        Ok(BreakOrContinue::Continue)
+    }
+
+    /// Sets up the state for execution of the block's transactions.
     ///
-    /// this *must* be called anytime before a block's txs are executed, whether it's
+    /// Executes any upgrade with an activation height of this block height, sets the current
+    /// height and timestamp, and calls `begin_block` on all components.
+    ///
+    /// This *must* be called any time before a block's txs are executed, whether it's
     /// during the proposal phase, or finalize_block phase.
     #[instrument(name = "App::pre_execute_transactions", skip_all, err(level = Level::WARN))]
-    async fn pre_execute_transactions(&mut self, block_data: BlockData) -> Result<()> {
+    async fn pre_execute_transactions(
+        &mut self,
+        block_data: BlockData,
+    ) -> Result<Option<Vec<ChangeHash>>> {
+        let upgrade_change_hashes = self
+            .execute_upgrade_if_due(block_data.height)
+            .await
+            .wrap_err("failed to execute upgrade")?;
         let chain_id = self
             .state
             .get_chain_id()
@@ -924,7 +1105,7 @@ impl App {
             .await
             .wrap_err("begin_block failed")?;
 
-        Ok(())
+        Ok(upgrade_change_hashes)
     }
 
     #[instrument(name = "App::extend_vote", skip_all)]
@@ -978,37 +1159,29 @@ impl App {
         // get deposits for this block from state's ephemeral cache and put them to storage.
         let mut state_tx = StateDelta::new(self.state.clone());
         let deposits_in_this_block = self.state.get_cached_block_deposits();
-        debug!(
-            deposits = %telemetry::display::json(&deposits_in_this_block),
-            "got block deposits from state"
-        );
+        debug!(deposits = %json(&deposits_in_this_block), "got block deposits from state");
 
         state_tx
             .put_deposits(&block_hash, deposits_in_this_block.clone())
             .wrap_err("failed to put deposits to state")?;
 
-        let vote_extensions_enable_height = self
-            .state
-            .get_vote_extensions_enable_height()
-            .await
-            .wrap_err("failed to get vote extensions enabled height")?;
-        let vote_extensions_enabled = vote_extensions_enable_height <= height.value();
-        let injected_txs_count = if vote_extensions_enabled {
-            INJECTED_TRANSACTIONS_COUNT_AFTER_VOTE_EXTENSIONS_ENABLED
-        } else {
-            INJECTED_TRANSACTIONS_COUNT_BEFORE_VOTE_EXTENSIONS_ENABLED
-        };
-
         // cometbft expects a result for every tx in the block, so we need to return a
-        // tx result for the commitments, even though they're not actually user txs.
+        // tx result for the commitments and other injected data items, even though they're not
+        // actually user txs.
         //
         // the tx_results passed to this function only contain results for every user
-        // transaction, not the commitment, so its length is len(txs) - 3.
+        // transaction, not the injected ones.
+        let non_rollup_tx_data_item_count = txs
+            .len()
+            .checked_sub(tx_results.len())
+            .ok_or_eyre("more tx execution results than txs")?;
         let mut finalize_block_tx_results: Vec<ExecTxResult> = Vec::with_capacity(txs.len());
         finalize_block_tx_results
-            .extend(std::iter::repeat(ExecTxResult::default()).take(injected_txs_count));
+            .extend(std::iter::repeat(ExecTxResult::default()).take(non_rollup_tx_data_item_count));
         finalize_block_tx_results.extend(tx_results);
 
+        let uses_data_item_enum = !self.is_before_upgrade_1(height);
+        let with_extended_commit_info = self.vote_extensions_enabled(height).await?;
         let sequencer_block = SequencerBlockBuilder {
             block_hash,
             chain_id,
@@ -1017,7 +1190,8 @@ impl App {
             proposer_address,
             data: txs,
             deposits: deposits_in_this_block,
-            with_extended_commit_info: vote_extensions_enabled,
+            uses_data_item_enum,
+            with_extended_commit_info,
         }
         .try_build()
         .wrap_err("failed to convert block info and data to SequencerBlock")?;
@@ -1025,12 +1199,9 @@ impl App {
             .put_sequencer_block(sequencer_block)
             .wrap_err("failed to write sequencer block to state")?;
 
-        handle_consensus_param_updates(
-            &mut state_tx,
-            &end_block.consensus_param_updates,
-            vote_extensions_enable_height,
-        )
-        .wrap_err("failed to handle consensus param updates")?;
+        handle_consensus_param_updates(&mut state_tx, &end_block.consensus_param_updates)
+            .await
+            .wrap_err("failed to handle consensus param updates")?;
 
         let result = PostTransactionExecutionResult {
             events: end_block.events,
@@ -1066,50 +1237,38 @@ impl App {
             self.update_state_for_new_round(&storage);
         }
 
-        let vote_extensions_enable_height = self
-            .state
-            .get_vote_extensions_enable_height()
+        let vote_extensions_enabled = self.vote_extensions_enabled(finalize_block.height).await?;
+        let non_rollup_tx_data_item_count = self
+            .non_rollup_tx_data_item_count(finalize_block.height)
+            .await?;
+        ensure!(
+            finalize_block.txs.len() >= non_rollup_tx_data_item_count,
+            "block must contain at least {non_rollup_tx_data_item_count} transactions"
+        );
+        if vote_extensions_enabled {
+            let extended_commit_info_bytes = finalize_block
+                .txs
+                .get(non_rollup_tx_data_item_count - 1)
+                .expect("asserted length above");
+            let extended_commit_info = RawExtendedCommitInfoWithCurrencyPairMapping::decode(
+                extended_commit_info_bytes.as_ref(),
+            )
+            .wrap_err("failed to decode extended commit info")?;
+            let extended_commit_info =
+                ExtendedCommitInfoWithCurrencyPairMapping::try_from_raw(extended_commit_info)
+                    .wrap_err("failed to convert extended commit info from proto to native")?;
+            let mut state_tx: StateDelta<Arc<StateDelta<Snapshot>>> =
+                StateDelta::new(self.state.clone());
+            vote_extension::apply_prices_from_vote_extensions(
+                &mut state_tx,
+                extended_commit_info,
+                finalize_block.time.into(),
+                finalize_block.height.value(),
+            )
             .await
-            .wrap_err("failed to get vote extensions enabled height")?;
-        let injected_transactions_count =
-            if vote_extensions_enable_height <= finalize_block.height.value() {
-                ensure!(
-                    finalize_block.txs.len()
-                        >= INJECTED_TRANSACTIONS_COUNT_AFTER_VOTE_EXTENSIONS_ENABLED,
-                    "block must contain at least three transactions: the rollup transactions \
-                     commitment, rollup IDs commitment, and the extended commit info"
-                );
-
-                let extended_commit_info_bytes =
-                    finalize_block.txs.get(2).expect("asserted length above");
-                let extended_commit_info = RawExtendedCommitInfoWithCurrencyPairMapping::decode(
-                    extended_commit_info_bytes.as_ref(),
-                )
-                .wrap_err("failed to decode extended commit info")?;
-                let extended_commit_info =
-                    ExtendedCommitInfoWithCurrencyPairMapping::try_from_raw(extended_commit_info)
-                        .wrap_err("failed to convert extended commit info from proto to native")?;
-                let mut state_tx: StateDelta<Arc<StateDelta<Snapshot>>> =
-                    StateDelta::new(self.state.clone());
-                vote_extension::apply_prices_from_vote_extensions(
-                    &mut state_tx,
-                    extended_commit_info,
-                    finalize_block.time.into(),
-                    finalize_block.height.value(),
-                )
-                .await
-                .wrap_err("failed to apply prices from vote extensions")?;
-                let _ = self.apply(state_tx);
-                INJECTED_TRANSACTIONS_COUNT_AFTER_VOTE_EXTENSIONS_ENABLED
-            } else {
-                ensure!(
-                    finalize_block.txs.len()
-                        >= INJECTED_TRANSACTIONS_COUNT_BEFORE_VOTE_EXTENSIONS_ENABLED,
-                    "block must contain at least two transactions: the rollup transactions \
-                     commitment and rollup IDs commitment"
-                );
-                INJECTED_TRANSACTIONS_COUNT_BEFORE_VOTE_EXTENSIONS_ENABLED
-            };
+            .wrap_err("failed to apply prices from vote extensions")?;
+            let _ = self.apply(state_tx);
+        }
 
         // When the hash is not empty, we have already executed and cached the results
         if self.executed_proposal_hash.is_empty() {
@@ -1128,14 +1287,19 @@ impl App {
                 proposer_address,
             };
 
-            self.pre_execute_transactions(block_data)
+            let _ = self
+                .pre_execute_transactions(block_data)
                 .await
                 .wrap_err("failed to execute block")?;
 
             let mut tx_results = Vec::with_capacity(finalize_block.txs.len());
-            // skip the first `injected_transactions_count` transactions, as they are injected
+            // skip the first `non_rollup_tx_data_item_count` transactions, as they are injected
             // transactions
-            for tx in finalize_block.txs.iter().skip(injected_transactions_count) {
+            for tx in finalize_block
+                .txs
+                .iter()
+                .skip(non_rollup_tx_data_item_count)
+            {
                 let signed_tx = signed_transaction_from_bytes(tx)
                     .wrap_err("protocol error; only valid txs should be finalized")?;
 
@@ -1393,7 +1557,7 @@ impl App {
     }
 
     #[instrument(name = "App::commit", skip_all)]
-    pub(crate) async fn commit(&mut self, storage: Storage) {
+    pub(crate) async fn commit(&mut self, storage: Storage) -> Result<ShouldShutDown> {
         // Commit the pending writes, clearing the state.
         let app_hash = storage
             .commit_batch(self.write_batch.take().expect(
@@ -1412,6 +1576,8 @@ impl App {
 
         // Get the latest version of the state, now that we've committed it.
         self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+
+        should_shut_down(&self.upgrades, &storage.latest_snapshot()).await
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying
@@ -1434,17 +1600,104 @@ impl App {
 
         events
     }
+
+    /// Execute any changes to global state required as part of any upgrade with an activation
+    /// height == `current_block_height`.
+    ///
+    /// At a minimum, the `info` of each `Change` in such an upgrade must be written to verifiable
+    /// storage.
+    ///
+    /// Returns `Ok(None)` if no upgrade was executed, or `Ok(Some(hashes of executed changes))` if
+    /// an upgrade was executed.
+    async fn execute_upgrade_if_due(
+        &mut self,
+        block_height: tendermint::block::Height,
+    ) -> Result<Option<Vec<ChangeHash>>> {
+        let mut change_hashes = vec![];
+        if let Some(upgrade_1) = self.upgrades.upgrade_1() {
+            if upgrade_1.activation_height() == block_height.value() {
+                let upgrade_name = upgrade_1.name();
+                for change in upgrade_1.changes() {
+                    change_hashes.push(change.calculate_hash());
+                    self.state
+                        .put_upgrade_change_info(&upgrade_name, change)
+                        .wrap_err("failed to put upgrade change info")?;
+                }
+            }
+        }
+        if change_hashes.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(change_hashes))
+    }
+
+    /// Returns `true` if vote extensions are enabled for the block at the given height.
+    async fn vote_extensions_enabled(
+        &self,
+        block_height: tendermint::block::Height,
+    ) -> Result<bool> {
+        let vote_extensions_enable_height = self
+            .state
+            .get_vote_extensions_enable_height()
+            .await
+            .wrap_err("failed to get vote extensions enabled height")?;
+        // NOTE: if the value of `vote_extensions_enable_height` is zero, vote extensions are
+        // disabled. See
+        // https://docs.cometbft.com/v0.38/spec/abci/abci++_app_requirements#abciparamsvoteextensionsenableheight
+        Ok(
+            vote_extensions_enable_height != VOTE_EXTENSIONS_DISABLED_HEIGHT
+                && vote_extensions_enable_height <= block_height.value(),
+        )
+    }
+
+    /// Returns `true` if `Upgrade1` is in `self.upgrades` and its activation height is lower than
+    /// `block_height`.
+    fn is_before_upgrade_1(&self, block_height: tendermint::block::Height) -> bool {
+        self.upgrades
+            .upgrade_1()
+            .map(|upgrade_1| upgrade_1.activation_height() < block_height.value())
+            .unwrap_or_default()
+    }
+
+    /// Returns the number of extra data items in the `txs` field of `ProcessProposal` and
+    /// `FinalizeBlock`.  These are the commitments, upgrade change hashes and extended commit info.
+    async fn non_rollup_tx_data_item_count(
+        &self,
+        block_height: tendermint::block::Height,
+    ) -> Result<usize> {
+        // Always have rollup txs root and rollup IDs root.
+        let mut count = 2_usize;
+
+        // Increment `count` if this block height is an upgrade activation point, as `txs` will
+        // include an entry for upgrade change hashes.
+        for upgrade in self.upgrades.iter() {
+            if upgrade.activation_height() == block_height.value() {
+                count = count.saturating_add(1);
+                break;
+            }
+        }
+
+        // If vote extensions are enabled, `txs` will contain an entry for extended commit info.
+        if self.vote_extensions_enabled(block_height).await? {
+            count = count.saturating_add(1);
+        }
+
+        Ok(count)
+    }
 }
 
-fn handle_consensus_param_updates(
+async fn handle_consensus_param_updates(
     state_tx: &mut StateDelta<Arc<StateDelta<Snapshot>>>,
     consensus_param_updates: &Option<tendermint::consensus::Params>,
-    current_vote_extensions_enable_height: u64,
 ) -> Result<()> {
     if let Some(consensus_param_updates) = &consensus_param_updates {
         if let Some(new_vote_extensions_enable_height) =
             consensus_param_updates.abci.vote_extensions_enable_height
         {
+            let current_vote_extensions_enable_height = state_tx
+                .get_vote_extensions_enable_height()
+                .await
+                .wrap_err("failed to get vote extensions enabled height")?;
             // if vote extensions are already enabled, they cannot be disabled,
             // and the `vote_extensions_enable_height` cannot be changed.
             if current_vote_extensions_enable_height != VOTE_EXTENSIONS_DISABLED_HEIGHT {
@@ -1457,7 +1710,7 @@ fn handle_consensus_param_updates(
 
             // vote extensions are currently disabled, so updating the enabled height to
             // 0 (which also means disabling them) is a no-op.
-            if new_vote_extensions_enable_height.value() == 0 {
+            if new_vote_extensions_enable_height.value() == VOTE_EXTENSIONS_DISABLED_HEIGHT {
                 warn!("ignoring update to set vote extensions enable height to 0");
                 return Ok(());
             }
@@ -1472,6 +1725,15 @@ fn handle_consensus_param_updates(
     }
 
     Ok(())
+}
+
+pub(crate) enum ShouldShutDown {
+    ShutDownForUpgrade {
+        upgrade_activation_height: u64,
+        block_time: Time,
+        hex_encoded_app_hash: String,
+    },
+    ContinueRunning,
 }
 
 // updates the mempool to reflect current state
@@ -1522,9 +1784,19 @@ enum BreakOrContinue {
     Continue,
 }
 
+impl BreakOrContinue {
+    fn should_break(self) -> bool {
+        match self {
+            BreakOrContinue::Break => true,
+            BreakOrContinue::Continue => false,
+        }
+    }
+}
+
 enum Proposal {
     Prepare {
-        validated_txs: Vec<bytes::Bytes>,
+        block_size_constraints: BlockSizeConstraints,
+        validated_txs: Vec<Bytes>,
         included_signed_txs: Vec<Transaction>,
         failed_tx_count: usize,
         execution_results: Vec<ExecTxResult>,
@@ -1534,12 +1806,39 @@ enum Proposal {
         metrics: &'static Metrics,
     },
     Process {
+        block_size_constraints: BlockSizeConstraints,
         execution_results: Vec<ExecTxResult>,
         current_tx_group: Group,
     },
 }
 
 impl Proposal {
+    fn block_size_constraints(&self) -> &BlockSizeConstraints {
+        match self {
+            Proposal::Prepare {
+                block_size_constraints,
+                ..
+            }
+            | Proposal::Process {
+                block_size_constraints,
+                ..
+            } => block_size_constraints,
+        }
+    }
+
+    fn block_size_constraints_mut(&mut self) -> &mut BlockSizeConstraints {
+        match self {
+            Proposal::Prepare {
+                block_size_constraints,
+                ..
+            }
+            | Proposal::Process {
+                block_size_constraints,
+                ..
+            } => block_size_constraints,
+        }
+    }
+
     fn current_tx_group(&self) -> Group {
         match self {
             Proposal::Prepare {
@@ -1562,17 +1861,6 @@ impl Proposal {
         }
     }
 
-    fn execution_results_mut(&mut self) -> &mut Vec<ExecTxResult> {
-        match self {
-            Proposal::Prepare {
-                execution_results, ..
-            }
-            | Proposal::Process {
-                execution_results, ..
-            } => execution_results,
-        }
-    }
-
     fn execution_results(self) -> Vec<ExecTxResult> {
         match self {
             Proposal::Prepare {
@@ -1583,180 +1871,15 @@ impl Proposal {
             } => execution_results,
         }
     }
-}
 
-#[instrument(skip_all)]
-async fn proposal_checks_and_tx_execution(
-    app: &mut App,
-    tx: Arc<Transaction>,
-    // `prepare_proposal_tx_execution` already has the tx hash, so we pass it in here
-    tx_hash: Option<[u8; TRANSACTION_ID_LEN]>,
-    block_size_constraints: &mut BlockSizeConstraints,
-    proposal_info: &mut Proposal,
-) -> Result<BreakOrContinue> {
-    let tx_bytes = tx.to_raw().encode_to_vec();
-    let tx_hash_base_64 =
-        telemetry::display::base64(tx_hash.unwrap_or_else(|| Sha256::digest(&tx_bytes).into()))
-            .to_string();
-    let tx_len = tx_bytes.len();
-
-    info!(transaction_hash = %tx_hash_base_64, "executing transaction");
-
-    // check CometBFT size constraints for `prepare_proposal`
-    if let Proposal::Prepare {
-        metrics,
-        excluded_txs,
-        ..
-    } = proposal_info
-    {
-        if !block_size_constraints.cometbft_has_space(tx_len) {
-            metrics.increment_prepare_proposal_excluded_transactions_cometbft_space();
-            debug!(
-                transaction_hash = %tx_hash_base_64,
-                block_size_constraints = %json(&block_size_constraints),
-                tx_data_bytes = tx_len,
-                "excluding remaining transactions: max cometBFT data limit reached"
-            );
-            *excluded_txs = excluded_txs.saturating_add(1);
-
-            // break from calling loop, as the block is full
-            return Ok(BreakOrContinue::Break);
-        }
-    }
-
-    let debug_msg = match proposal_info {
-        Proposal::Prepare {
-            ..
-        } => "excluding transaction",
-        Proposal::Process {
-            ..
-        } => "transaction error",
-    };
-
-    // check sequencer size constraints
-    let tx_sequence_data_bytes = tx
-        .unsigned_transaction()
-        .actions()
-        .iter()
-        .filter_map(Action::as_rollup_data_submission)
-        .fold(0usize, |acc, seq| acc.saturating_add(seq.data.len()));
-    if !block_size_constraints.sequencer_has_space(tx_sequence_data_bytes) {
-        debug!(
-            transaction_hash = %tx_hash_base_64,
-            block_size_constraints = %json(&block_size_constraints),
-            tx_data_bytes = tx_sequence_data_bytes,
-            "{debug_msg}: max block sequenced data limit reached"
-        );
-        match proposal_info {
+    fn execution_results_mut(&mut self) -> &mut Vec<ExecTxResult> {
+        match self {
             Proposal::Prepare {
-                metrics,
-                excluded_txs,
-                ..
-            } => {
-                metrics.increment_prepare_proposal_excluded_transactions_sequencer_space();
-                *excluded_txs = excluded_txs.saturating_add(1);
-
-                // continue as there might be non-sequence txs that can fit
-                return Ok(BreakOrContinue::Continue);
+                execution_results, ..
             }
-            Proposal::Process {
-                ..
-            } => bail!("max block sequenced data limit passed"),
-        };
-    }
-
-    // ensure transaction's group is less than or equal to current action group
-    let tx_group = tx.group();
-    if tx_group > proposal_info.current_tx_group() {
-        debug!(
-            transaction_hash = %tx_hash_base_64,
-            "{debug_msg}: group is higher priority than previously included transactions"
-        );
-        match proposal_info {
-            Proposal::Prepare {
-                excluded_txs, ..
-            } => {
-                *excluded_txs = excluded_txs.saturating_add(1);
-                return Ok(BreakOrContinue::Continue);
-            }
-            Proposal::Process {
-                ..
-            } => {
-                bail!("transactions have incorrect transaction group ordering");
-            }
-        };
-    }
-
-    let execution_results = proposal_info.execution_results_mut();
-    match app.execute_transaction(tx.clone()).await {
-        Ok(events) => {
-            execution_results.push(ExecTxResult {
-                events,
-                ..Default::default()
-            });
-            block_size_constraints
-                .sequencer_checked_add(tx_sequence_data_bytes)
-                .wrap_err("error growing sequencer block size")?;
-            block_size_constraints
-                .cometbft_checked_add(tx_len)
-                .wrap_err("error growing cometBFT block size")?;
-            if let Proposal::Prepare {
-                validated_txs,
-                included_signed_txs,
-                ..
-            } = proposal_info
-            {
-                validated_txs.push(tx_bytes.into());
-                included_signed_txs.push((*tx).clone());
-            }
+            | Proposal::Process {
+                execution_results, ..
+            } => execution_results,
         }
-        Err(e) => {
-            debug!(
-                transaction_hash = %tx_hash_base_64,
-                error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                "{debug_msg}: failed to execute transaction"
-            );
-            match proposal_info {
-                Proposal::Prepare {
-                    metrics,
-                    failed_tx_count,
-                    mempool,
-                    ..
-                } => {
-                    metrics.increment_prepare_proposal_excluded_transactions_failed_execution();
-                    if e.downcast_ref::<InvalidNonce>().is_some() {
-                        // we don't remove the tx from mempool if it failed to execute
-                        // due to an invalid nonce, as it may be valid in the future.
-                        // if it's invalid due to the nonce being too low, it'll be
-                        // removed from the mempool in `update_mempool_after_finalization`.
-                        //
-                        // this is important for possible out-of-order transaction
-                        // groups fed into prepare_proposal. a transaction with a higher
-                        // nonce might be in a higher priority group than a transaction
-                        // from the same account wiht a lower nonce. this higher nonce
-                        // could execute in the next block fine.
-                    } else {
-                        *failed_tx_count = failed_tx_count.saturating_add(1);
-
-                        // remove the failing transaction from the mempool
-                        //
-                        // this will remove any transactions from the same sender
-                        // as well, as the dependent nonces will not be able
-                        // to execute
-                        mempool
-                            .remove_tx_invalid(
-                                tx,
-                                RemovalReason::FailedPrepareProposal(e.to_string()),
-                            )
-                            .await;
-                    }
-                }
-                Proposal::Process {
-                    ..
-                } => return Err(e.wrap_err("transaction failed to execute")),
-            }
-        }
-    };
-    proposal_info.set_current_tx_group(tx_group);
-    Ok(BreakOrContinue::Continue)
+    }
 }

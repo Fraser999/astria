@@ -2,6 +2,7 @@ pub mod block;
 pub mod celestia;
 
 pub use block::{
+    DataItem,
     RollupTransactions,
     SequencerBlock,
 };
@@ -45,12 +46,16 @@ pub(crate) fn are_rollup_txs_included(
     let rollup_datas = rollup_datas
         .iter()
         .map(|(rollup_id, tx_data)| (rollup_id, tx_data.transactions()));
-    let rollup_tree = derive_merkle_tree_from_rollup_txs(rollup_datas);
-    let hash_of_rollup_root = Sha256::digest(rollup_tree.root());
-    rollup_proof.verify(&hash_of_rollup_root, data_hash)
+
+    let rollup_tree_root = derive_merkle_tree_from_rollup_txs(rollup_datas).root();
+    let data_item = DataItem::RollupIdsRoot(rollup_tree_root);
+    let Ok(leaf_hash) = data_item.calculate_hash() else {
+        return false;
+    };
+    rollup_proof.verify(&leaf_hash, data_hash)
 }
 
-fn do_rollup_transaction_match_root(
+fn do_rollup_transactions_match_root(
     rollup_transactions: &RollupTransactions,
     root: [u8; 32],
 ) -> bool {
