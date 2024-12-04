@@ -154,30 +154,42 @@ fn median(mut price_list: Vec<Price>) -> Option<Price> {
     Some(median)
 }
 
-#[cfg(test)]
-mod test {
-    use indexmap::indexmap;
+#[cfg(any(test, feature = "benchmark"))]
+pub(super) mod test_helpers {
+    use super::{
+        CurrencyPairId,
+        CurrencyPairInfo,
+        IndexMap,
+        OracleVoteExtension,
+        Price,
+    };
 
-    use super::*;
-
-    fn get_id_to_currency_pair_mapping() -> IndexMap<CurrencyPairId, CurrencyPairInfo> {
-        indexmap! {
-            CurrencyPairId::new(0) => CurrencyPairInfo {
-                currency_pair: "ETH/USD".parse().unwrap(),
-                decimals: 0,
-            },
-            CurrencyPairId::new(1) => CurrencyPairInfo {
-                currency_pair: "BTC/USD".parse().unwrap(),
-                decimals: 0,
-            },
-            CurrencyPairId::new(2) => CurrencyPairInfo {
-                currency_pair: "TIA/USD".parse().unwrap(),
-                decimals: 0,
-            },
+    pub(in crate::connect) fn get_id_to_currency_pair_mapping(
+        count: usize,
+    ) -> IndexMap<CurrencyPairId, CurrencyPairInfo> {
+        const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut map = IndexMap::new();
+        for char1 in ALPHABET.chars() {
+            for char2 in ALPHABET.chars() {
+                for char3 in ALPHABET.chars() {
+                    let id = CurrencyPairId::new(map.len() as u64);
+                    let info = CurrencyPairInfo {
+                        currency_pair: format!("{char1}{char2}{char3}/USD").parse().unwrap(),
+                        decimals: 0,
+                    };
+                    assert!(map.insert(id, info).is_none());
+                    if map.len() == count {
+                        return map;
+                    }
+                }
+            }
         }
+        panic!("wanted {count} currency pairs, only created {}", map.len());
     }
 
-    fn oracle_vote_extension<I: IntoIterator<Item = u128>>(prices: I) -> OracleVoteExtension {
+    pub(in crate::connect) fn oracle_vote_extension<I: IntoIterator<Item = u128>>(
+        prices: I,
+    ) -> OracleVoteExtension {
         OracleVoteExtension {
             prices: prices
                 .into_iter()
@@ -186,6 +198,17 @@ mod test {
                 .collect(),
         }
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{
+        test_helpers::{
+            get_id_to_currency_pair_mapping,
+            oracle_vote_extension,
+        },
+        *,
+    };
 
     #[test]
     fn aggregate_oracle_votes_ok() {
@@ -194,7 +217,7 @@ mod test {
             oracle_vote_extension([10, 20, 30]),
             oracle_vote_extension([11, 21, 31]),
         ];
-        let id_to_currency_pairs = get_id_to_currency_pair_mapping();
+        let id_to_currency_pairs = get_id_to_currency_pair_mapping(3);
         let mut aggregated_prices = aggregate_oracle_votes(votes, &id_to_currency_pairs);
         assert_eq!(Price::new(10), aggregated_prices.next().unwrap().price());
         assert_eq!(Price::new(20), aggregated_prices.next().unwrap().price());
@@ -211,7 +234,7 @@ mod test {
             oracle_vote_extension([10, 20, 30, 40, 50]),
             oracle_vote_extension([11, 21, 31, 41, 51]),
         ];
-        let id_to_currency_pairs = get_id_to_currency_pair_mapping();
+        let id_to_currency_pairs = get_id_to_currency_pair_mapping(3);
         let mut aggregated_prices = aggregate_oracle_votes(votes, &id_to_currency_pairs);
         assert_eq!(Price::new(10), aggregated_prices.next().unwrap().price());
         assert_eq!(Price::new(20), aggregated_prices.next().unwrap().price());

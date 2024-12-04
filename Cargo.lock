@@ -711,6 +711,7 @@ dependencies = [
  "bytes",
  "celestia-tendermint",
  "celestia-types",
+ "divan",
  "hex",
  "ibc-types",
  "indexmap 2.4.0",

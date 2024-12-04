@@ -27,6 +27,7 @@ merkle = { package = "astria-merkle", path = "../astria-merkle" }
 
 bytes = { workspace = true }
 celestia-tendermint = { workspace = true }
+divan = { workspace = true, optional = true }
 hex = { workspace = true }
 ibc-types = { workspace = true }
 indexmap = { workspace = true }
@@ -58,9 +59,15 @@ brotli = ["dep:brotli"]
 # checks. It supports the case where the inputs are already deemed valid, e.g. having read them from
 # local storage.
 unchecked-constructors = ["astria-core-address/unchecked-constructor"]
+benchmark = ["dep:divan"]
 
 [dev-dependencies]
 astria-core = { path = ".", features = ["serde"] }
 insta = { workspace = true, features = ["json"] }
 rand = { workspace = true }
 tempfile = { workspace = true }
+
+[[bench]]
+name = "benchmark"
+harness = false
+required-features = ["benchmark"]
