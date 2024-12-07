@@ -29,7 +29,7 @@ use astria_core::{
             connect::v1::ExtendedCommitInfoWithCurrencyPairMapping as RawExtendedCommitInfoWithCurrencyPairMapping,
             transaction::v1 as raw,
         },
-        upgrades::v1::Change,
+        upgrades::v1::Upgrades,
     },
     protocol::{
         abci::AbciErrorCode,
@@ -276,7 +276,7 @@ pub(crate) struct App {
     // used to create and verify vote extensions, if this is a validator node.
     vote_extension_handler: vote_extension::Handler,
 
-    upgrade: Option<astria_core::generated::upgrades::v1::Upgrade>,
+    upgrade: Option<astria_core::generated::upgrades::v1::Upgrades>,
 
     metrics: &'static Metrics,
 }
