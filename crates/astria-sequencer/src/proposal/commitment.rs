@@ -13,6 +13,13 @@ use astria_core::{
 };
 use bytes::Bytes;
 
+struct FirstTx {
+    rollup_datas_root: [u8; 32],
+    rollup_ids_root: [u8; 32],
+    encoded_extended_commit_info: Option<Bytes>,
+    upgrade_hash: Option<[u8; 32]>,
+}
+
 /// Wrapper for values returned by [`generate_rollup_datas_commitment`].
 pub(crate) struct GeneratedCommitments {
     pub(crate) rollup_datas_root: [u8; 32],

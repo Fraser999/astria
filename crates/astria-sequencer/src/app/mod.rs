@@ -24,12 +24,9 @@ use std::{
 };
 
 use astria_core::{
-    generated::{
-        protocol::{
-            connect::v1::ExtendedCommitInfoWithCurrencyPairMapping as RawExtendedCommitInfoWithCurrencyPairMapping,
-            transaction::v1 as raw,
-        },
-        upgrades::v1::Change,
+    generated::protocol::{
+        connect::v1::ExtendedCommitInfoWithCurrencyPairMapping as RawExtendedCommitInfoWithCurrencyPairMapping,
+        transaction::v1 as raw,
     },
     protocol::{
         abci::AbciErrorCode,
@@ -45,6 +42,7 @@ use astria_core::{
         },
     },
     sequencerblock::v1::block::SequencerBlockBuilder,
+    upgrades::v1::Upgrades,
     Protobuf as _,
 };
 use astria_eyre::{
@@ -148,6 +146,7 @@ use crate::{
         },
     },
     transaction::InvalidNonce,
+    upgrades::should_shut_down,
 };
 
 // ephemeral store key for the cache of results of executing of transactions in `prepare_proposal`.
@@ -276,7 +275,7 @@ pub(crate) struct App {
     // used to create and verify vote extensions, if this is a validator node.
     vote_extension_handler: vote_extension::Handler,
 
-    upgrade: Option<astria_core::generated::upgrades::v1::Upgrade>,
+    upgrades: Upgrades,
 
     metrics: &'static Metrics,
 }
@@ -286,7 +285,7 @@ impl App {
         snapshot: Snapshot,
         mempool: Mempool,
         vote_extension_handler: vote_extension::Handler,
-        upgrade: Option<astria_core::generated::upgrades::v1::Upgrade>,
+        upgrades: Upgrades,
         metrics: &'static Metrics,
     ) -> Result<Self> {
         debug!("initializing App instance");
@@ -305,6 +304,8 @@ impl App {
         // there should be no unexpected copies elsewhere.
         let state = Arc::new(StateDelta::new(snapshot));
 
+        todo!("if upgrade(s) due to be actioned right now, execute upgrade(s), store hash");
+
         Ok(Self {
             state,
             mempool,
@@ -314,7 +315,7 @@ impl App {
             write_batch: None,
             app_hash,
             vote_extension_handler,
-            upgrade,
+            upgrades,
             metrics,
         })
     }
@@ -1527,7 +1528,7 @@ impl App {
     }
 
     #[instrument(name = "App::commit", skip_all)]
-    pub(crate) async fn commit(&mut self, storage: Storage) {
+    pub(crate) async fn commit(&mut self, storage: Storage) -> Result<ShouldShutDown> {
         // Commit the pending writes, clearing the state.
         let app_hash = storage
             .commit_batch(self.write_batch.take().expect(
@@ -1546,45 +1547,13 @@ impl App {
 
         // Get the latest version of the state, now that we've committed it.
         self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
-    }
 
-    pub(crate) async fn should_shut_down(&mut self) -> ShouldShutDown {
-        let Some(upgrade) = self.upgrade.as_ref() else {
-            return ShouldShutDown::ContinueRunning;
-        };
-        if !upgrade.shutdown_required {
-            return ShouldShutDown::ContinueRunning;
-        }
-        let block_height = self.state.get_block_height().await.unwrap_or_default();
-        if block_height.saturating_add(1) != upgrade.activation_height {
-            return ShouldShutDown::ContinueRunning;
+        if let Some(upgrades) = self.upgrades.as_ref() {
+            return should_shut_down(&upgrades, &storage.latest_snapshot()).await;
         }
 
-        let block_time = self
-            .state
-            .get_block_timestamp()
-            .await
-            .unwrap_or_else(|error| {
-                tracing::error!(%error, "failed getting latest block time from state");
-                Time::unix_epoch()
-            });
-
-        ShouldShutDown::ShutDownForUpgrade {
-            upgrade_activation_height: upgrade.activation_height,
-            block_time,
-            hex_encoded_app_hash: self.app_hash.to_string(),
-        }
-    }
-
-    fn changes_to_apply(&self, current_height: u64) -> impl Iterator<Item = &'_ Change> {
-        self.upgrade.as_ref().into_iter().flat_map(move |upgrade| {
-            upgrade.changes.iter().filter(move |change| {
-                change
-                    .activation_height
-                    .unwrap_or(upgrade.activation_height)
-                    == current_height
-            })
-        })
+        todo!("execute upgrade, store hash");
+        Ok(ShouldShutDown::ContinueRunning)
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying

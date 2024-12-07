@@ -1,19 +1,18 @@
-use std::{
-    path::Path,
-    time::Duration,
-};
+use std::time::Duration;
 
-use astria_core::generated::{
-    connect::{
-        marketmap::v2::query_server::QueryServer as MarketMapQueryServer,
-        oracle::v2::query_server::QueryServer as OracleQueryServer,
-        service::v2::{
-            oracle_client::OracleClient,
-            QueryPricesRequest,
+use astria_core::{
+    generated::{
+        connect::{
+            marketmap::v2::query_server::QueryServer as MarketMapQueryServer,
+            oracle::v2::query_server::QueryServer as OracleQueryServer,
+            service::v2::{
+                oracle_client::OracleClient,
+                QueryPricesRequest,
+            },
         },
+        sequencerblock::v1::sequencer_service_server::SequencerServiceServer,
     },
-    sequencerblock::v1::sequencer_service_server::SequencerServiceServer,
-    upgrades::v1::Upgrade,
+    upgrades::v1::Upgrades,
 };
 use astria_eyre::{
     anyhow_to_eyre,
@@ -70,17 +69,12 @@ use crate::{
     mempool::Mempool,
     metrics::Metrics,
     service,
+    upgrades::{ensure_historical_upgrades_applied, should_shut_down},
 };
 
 const MAX_RETRIES_TO_CONNECT_TO_ORACLE_SIDECAR: u32 = 36;
 
 pub struct Sequencer;
-
-fn parse_upgrade_file(path: &Path) -> Result<Upgrade> {
-    let contents = std::fs::read_to_string(path)
-        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
-}
 
 impl Sequencer {
     #[instrument(skip_all)]
@@ -113,13 +107,32 @@ impl Sequencer {
             config.db_filepath.clone(),
             substore_prefixes
                 .into_iter()
-                .map(std::string::ToString::to_string)
+                .map(ToString::to_string)
                 .collect(),
         )
         .await
         .map_err(anyhow_to_eyre)
         .wrap_err("failed to load storage backing chain state")?;
         let snapshot = storage.latest_snapshot();
+        let upgrades =
+            Upgrades::new(&config.upgrade_file).wrap_err("failed constructing upgrades")?;
+
+        ensure_historical_upgrades_applied(&upgrades, &snapshot)
+            .wrap_err("historical upgrades not applied")?;
+        if let ShouldShutDown::ShutDownForUpgrade {
+            upgrade_activation_height,
+            block_time,
+            hex_encoded_app_hash,
+        } = should_shut_down(&upgrades, &snapshot).await.wrap_err("failed to establish if sequencer should shut down for upgrade")?
+        {
+            info!(
+                upgrade_activation_height,
+                latest_app_hash = %hex_encoded_app_hash,
+                latest_block_time = %block_time,
+                "shutting down for upgrade"
+            );
+            return Ok(());
+        }
 
         // the native asset should be configurable only at genesis.
         // the genesis state must include the native asset's base
@@ -140,35 +153,15 @@ impl Sequencer {
         let oracle_client = new_oracle_client(&config)
             .await
             .wrap_err("failed to create connected oracle client")?;
-        let upgrade = config
-            .upgrade_file
-            .as_deref()
-            .map(parse_upgrade_file)
-            .transpose()?;
-        let mut app = App::new(
+        let app = App::new(
             snapshot,
             mempool.clone(),
             crate::app::vote_extension::Handler::new(oracle_client),
-            upgrade,
+            upgrades,
             metrics,
         )
         .await
         .wrap_err("failed to initialize app")?;
-
-        if let ShouldShutDown::ShutDownForUpgrade {
-            upgrade_activation_height,
-            block_time,
-            hex_encoded_app_hash,
-        } = app.should_shut_down().await
-        {
-            info!(
-                upgrade_activation_height,
-                latest_app_hash = %hex_encoded_app_hash,
-                latest_block_time = %block_time,
-                "shutting down for upgrade"
-            );
-            return Ok(());
-        }
 
         let consensus_token = tokio_util::sync::CancellationToken::new();
         let cloned_token = consensus_token.clone();

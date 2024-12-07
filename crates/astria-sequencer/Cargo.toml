@@ -33,7 +33,7 @@ telemetry = { package = "astria-telemetry", path = "../astria-telemetry", featur
   "display",
 ] }
 
-borsh = { version = "1.5.1", features = ["bytes", "derive"] }
+borsh = { workspace = true, features = ["bytes", "derive"] }
 cnidarium = { git = "https://github.com/penumbra-zone/penumbra.git", tag = "v0.80.7", features = [
   "metrics",
 ] }
@@ -84,6 +84,7 @@ config = { package = "astria-config", path = "../astria-config", features = [
 ] }
 insta = { workspace = true, features = ["json"] }
 paste = "1.0.15"
+pbjson-types = { workspace = true }
 maplit = "1.0.2"
 rand_chacha = "0.3.1"
 tokio = { workspace = true, features = ["test-util"] }

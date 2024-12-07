@@ -269,8 +269,11 @@ impl Consensus {
 
     #[instrument(skip_all)]
     async fn commit(&mut self) -> Result<(response::Commit, ShouldShutDown)> {
-        self.app.commit(self.storage.clone()).await;
-        let should_shut_down = self.app.should_shut_down().await;
+        let should_shut_down = self
+            .app
+            .commit(self.storage.clone())
+            .await
+            .wrap_err("error committing")?;
         Ok((response::Commit::default(), should_shut_down))
     }
 }
