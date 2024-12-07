@@ -29,7 +29,6 @@ use astria_core::{
             connect::v1::ExtendedCommitInfoWithCurrencyPairMapping as RawExtendedCommitInfoWithCurrencyPairMapping,
             transaction::v1 as raw,
         },
-        upgrades::v1::Change,
     },
     protocol::{
         abci::AbciErrorCode,
@@ -148,6 +147,7 @@ use crate::{
         },
     },
     transaction::InvalidNonce,
+    upgrades::Upgrades,
 };
 
 // ephemeral store key for the cache of results of executing of transactions in `prepare_proposal`.
@@ -276,7 +276,7 @@ pub(crate) struct App {
     // used to create and verify vote extensions, if this is a validator node.
     vote_extension_handler: vote_extension::Handler,
 
-    upgrade: Option<astria_core::generated::upgrades::v1::Upgrade>,
+    upgrades: Option<Upgrades>,
 
     metrics: &'static Metrics,
 }
@@ -286,7 +286,7 @@ impl App {
         snapshot: Snapshot,
         mempool: Mempool,
         vote_extension_handler: vote_extension::Handler,
-        upgrade: Option<astria_core::generated::upgrades::v1::Upgrade>,
+        upgrade: Option<Upgrades>,
         metrics: &'static Metrics,
     ) -> Result<Self> {
         debug!("initializing App instance");
@@ -314,7 +314,7 @@ impl App {
             write_batch: None,
             app_hash,
             vote_extension_handler,
-            upgrade,
+            upgrades: upgrade,
             metrics,
         })
     }
@@ -1433,6 +1433,7 @@ impl App {
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
 
+        let upgrades: Option<&crate::upgrades::Upgrades> = self.upgrades.as_ref().map(|u| );
         signed_tx
             .check_and_execute(&mut state_tx)
             .await
@@ -1549,43 +1550,44 @@ impl App {
     }
 
     pub(crate) async fn should_shut_down(&mut self) -> ShouldShutDown {
-        let Some(upgrade) = self.upgrade.as_ref() else {
+        let Some(upgrade) = self.upgrades.as_ref() else {
             return ShouldShutDown::ContinueRunning;
         };
-        if !upgrade.shutdown_required {
-            return ShouldShutDown::ContinueRunning;
-        }
-        let block_height = self.state.get_block_height().await.unwrap_or_default();
-        if block_height.saturating_add(1) != upgrade.activation_height {
-            return ShouldShutDown::ContinueRunning;
-        }
-
-        let block_time = self
-            .state
-            .get_block_timestamp()
-            .await
-            .unwrap_or_else(|error| {
-                tracing::error!(%error, "failed getting latest block time from state");
-                Time::unix_epoch()
-            });
-
-        ShouldShutDown::ShutDownForUpgrade {
-            upgrade_activation_height: upgrade.activation_height,
-            block_time,
-            hex_encoded_app_hash: self.app_hash.to_string(),
-        }
+        // if !upgrade.shutdown_required {
+        //     return ShouldShutDown::ContinueRunning;
+        // }
+        // let block_height = self.state.get_block_height().await.unwrap_or_default();
+        // if block_height.saturating_add(1) != upgrade.activation_height {
+        //     return ShouldShutDown::ContinueRunning;
+        // }
+        //
+        // let block_time = self
+        //     .state
+        //     .get_block_timestamp()
+        //     .await
+        //     .unwrap_or_else(|error| {
+        //         tracing::error!(%error, "failed getting latest block time from state");
+        //         Time::unix_epoch()
+        //     });
+        //
+        // ShouldShutDown::ShutDownForUpgrade {
+        //     upgrade_activation_height: upgrade.activation_height,
+        //     block_time,
+        //     hex_encoded_app_hash: self.app_hash.to_string(),
+        // }
+        todo!();
     }
 
-    fn changes_to_apply(&self, current_height: u64) -> impl Iterator<Item = &'_ Change> {
-        self.upgrade.as_ref().into_iter().flat_map(move |upgrade| {
-            upgrade.changes.iter().filter(move |change| {
-                change
-                    .activation_height
-                    .unwrap_or(upgrade.activation_height)
-                    == current_height
-            })
-        })
-    }
+    // fn changes_to_apply(&self, current_height: u64) -> impl Iterator<Item = &'_ Change> {
+    //     self.upgrade.as_ref().into_iter().flat_map(move |upgrade| {
+    //         upgrade.changes.iter().filter(move |change| {
+    //             change
+    //                 .activation_height
+    //                 .unwrap_or(upgrade.activation_height)
+    //                 == current_height
+    //         })
+    //     })
+    // }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying
     // StateWrite.  But if we want to share the StateDelta with spawned tasks,

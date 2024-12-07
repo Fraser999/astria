@@ -2,24 +2,26 @@ syntax = "proto3";
 
 package astria.upgrades.v1;
 
-import "google/protobuf/any.proto";
+import "astria/protocol/genesis/v1/types.proto";
 
-message Upgrade {
-  // The upgrade should be applied during the lifecycle of the block at this height.
-  uint64 activation_height = 1;
-  // Whether or not the sequencer should shut down after committing the block immediately before
-  // the activation height.
-  bool shutdown_required = 2;
-  // The changes to be applied.
-  repeated Change changes = 3;
+message Upgrades {
+  ConnectOracleUpgrade connect_oracle = 1;
+  WhateverUpgrade whatever = 2;
 }
 
-message Change {
-  // Short description of the change to be applied.
-  string description = 1;
-  // If this is set, this change is applied during the lifecycle of the block at this height. If
-  // not set, the parent `Upgrade::activation_height` is used.
-  optional uint64 activation_height = 2;
-  // Optional further details of the change.
-  optional google.protobuf.Any value = 3;
+message BaseInfo {
+  // The upgrade should be applied during the lifecycle of the block at this height.
+  uint64 activation_height = 1;
+  // Whether or not the sequencer should shut down after committing the block immediately
+  // before the activation height.
+  bool shutdown_required = 2;
+}
+
+message ConnectOracleUpgrade {
+  BaseInfo base_info = 1;
+  astria.protocol.genesis.v1.ConnectGenesis genesis = 2;
+}
+
+message WhateverUpgrade {
+  BaseInfo base_info = 1;
 }

@@ -1,5 +1,4 @@
 use std::{
-    path::Path,
     time::Duration,
 };
 
@@ -13,7 +12,6 @@ use astria_core::generated::{
         },
     },
     sequencerblock::v1::sequencer_service_server::SequencerServiceServer,
-    upgrades::v1::Upgrade,
 };
 use astria_eyre::{
     anyhow_to_eyre,
@@ -71,16 +69,11 @@ use crate::{
     metrics::Metrics,
     service,
 };
+use crate::upgrades::Upgrades;
 
 const MAX_RETRIES_TO_CONNECT_TO_ORACLE_SIDECAR: u32 = 36;
 
 pub struct Sequencer;
-
-fn parse_upgrade_file(path: &Path) -> Result<Upgrade> {
-    let contents = std::fs::read_to_string(path)
-        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
-}
 
 impl Sequencer {
     #[instrument(skip_all)]
@@ -143,7 +136,7 @@ impl Sequencer {
         let upgrade = config
             .upgrade_file
             .as_deref()
-            .map(parse_upgrade_file)
+            .map(Upgrades::new)
             .transpose()?;
         let mut app = App::new(
             snapshot,
