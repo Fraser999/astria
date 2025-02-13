@@ -36,7 +36,7 @@ impl ActionHandler for BridgeUnlock {
     // TODO(https://github.com/astriaorg/astria/issues/1430): move checks to the `BridgeUnlock` parsing.
     #[instrument(skip_all, err(level = Level::DEBUG))]
     async fn check_stateless(&self) -> Result<()> {
-        ensure!(self.amount > 0, "amount must be greater than zero",);
+        ensure!(self.amount > 0, "amount must be greater than zero");
         ensure!(self.memo.len() <= 64, "memo must not be more than 64 bytes");
         ensure!(
             !self.rollup_withdrawal_event_id.is_empty(),

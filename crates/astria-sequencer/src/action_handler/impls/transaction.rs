@@ -222,22 +222,22 @@ impl ActionHandler for Transaction {
             match action {
                 Action::Transfer(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("executing transfer action failed")?,
+                    .wrap_err("failed executing transfer")?,
                 Action::RollupDataSubmission(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("executing sequence action failed")?,
+                    .wrap_err("failed executing rollup data submission")?,
                 Action::ValidatorUpdate(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("executing validor update")?,
+                    .wrap_err("failed executing validator update")?,
                 Action::SudoAddressChange(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("executing sudo address change failed")?,
+                    .wrap_err("failed executing sudo address change")?,
                 Action::IbcSudoChange(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("executing ibc sudo change failed")?,
+                    .wrap_err("failed executing ibc sudo change")?,
                 Action::FeeChange(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("executing fee change failed")?,
+                    .wrap_err("failed executing fee change")?,
                 Action::Ibc(act) => {
                     // FIXME: this check should be moved to check_and_execute, as it now has
                     // access to the the signer through state. However, what's the correct
@@ -245,10 +245,10 @@ impl ActionHandler for Transaction {
                     // of crate::ibc::ics20_transfer::Ics20Transfer?
                     ensure!(
                         state
-                            .is_ibc_relayer(self)
+                            .is_ibc_relayer(&self)
                             .await
                             .wrap_err("failed to check if address is IBC relayer")?,
-                        "only IBC sudo address can execute IBC actions"
+                        "transaction signer not authorized to execute IBC actions"
                     );
                     let action = act
                         .clone()
@@ -267,7 +267,7 @@ impl ActionHandler for Transaction {
                     .wrap_err("failed executing ibc relayer change")?,
                 Action::FeeAssetChange(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
-                    .wrap_err("failed executing fee asseet change")?,
+                    .wrap_err("failed executing fee asset change")?,
                 Action::InitBridgeAccount(act) => check_execute_and_pay_fees(act, &mut state)
                     .await
                     .wrap_err("failed executing init bridge account")?,
