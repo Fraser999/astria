@@ -80,9 +80,9 @@ pub(crate) trait StateReadExt: StateRead {
     }
 
     #[instrument(skip_all, err(level = Level::WARN))]
-    async fn is_ibc_relayer<T: AddressBytes>(&self, address: T) -> Result<bool> {
+    async fn is_ibc_relayer<T: AddressBytes>(&self, address: &T) -> Result<bool> {
         Ok(self
-            .get_raw(&keys::ibc_relayer(&address))
+            .get_raw(&keys::ibc_relayer(address))
             .await
             .map_err(anyhow_to_eyre)
             .wrap_err("failed to read ibc relayer key from state")?
@@ -246,7 +246,7 @@ mod tests {
         let address = astria_address(&[42u8; 20]);
         assert!(
             !state
-                .is_ibc_relayer(address)
+                .is_ibc_relayer(&address)
                 .await
                 .expect("calls to properly formatted addresses should not fail"),
             "inputted address should've returned false"
@@ -266,7 +266,7 @@ mod tests {
         state.put_ibc_relayer_address(&address).unwrap();
         assert!(
             state
-                .is_ibc_relayer(address)
+                .is_ibc_relayer(&address)
                 .await
                 .expect("a relayer address was written and must exist inside the database"),
             "stored relayer address could not be verified"
@@ -276,7 +276,7 @@ mod tests {
         state.delete_ibc_relayer_address(&address);
         assert!(
             !state
-                .is_ibc_relayer(address)
+                .is_ibc_relayer(&address)
                 .await
                 .expect("calls on unset addresses should not fail"),
             "relayer address was not deleted as was intended"
@@ -296,7 +296,7 @@ mod tests {
         state.put_ibc_relayer_address(&address).unwrap();
         assert!(
             state
-                .is_ibc_relayer(address)
+                .is_ibc_relayer(&address)
                 .await
                 .expect("a relayer address was written and must exist inside the database"),
             "stored relayer address could not be verified"
@@ -307,14 +307,14 @@ mod tests {
         state.put_ibc_relayer_address(&address_1).unwrap();
         assert!(
             state
-                .is_ibc_relayer(address_1)
+                .is_ibc_relayer(&address_1)
                 .await
                 .expect("a relayer address was written and must exist inside the database"),
             "additional stored relayer address could not be verified"
         );
         assert!(
             state
-                .is_ibc_relayer(address)
+                .is_ibc_relayer(&address)
                 .await
                 .expect("a relayer address was written and must exist inside the database"),
             "original stored relayer address could not be verified"
