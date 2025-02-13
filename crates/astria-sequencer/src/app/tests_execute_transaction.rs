@@ -383,7 +383,7 @@ async fn app_execute_transaction_ibc_relayer_change_addition() {
         app.state.get_account_nonce(&alice_address).await.unwrap(),
         1
     );
-    assert!(app.state.is_ibc_relayer(alice_address).await.unwrap());
+    assert!(app.state.is_ibc_relayer(&alice_address).await.unwrap());
 }
 
 #[tokio::test]
@@ -411,7 +411,7 @@ async fn app_execute_transaction_ibc_relayer_change_deletion() {
         app.state.get_account_nonce(&alice_address).await.unwrap(),
         1
     );
-    assert!(!app.state.is_ibc_relayer(alice_address).await.unwrap());
+    assert!(!app.state.is_ibc_relayer(&alice_address).await.unwrap());
 }
 
 #[tokio::test]
