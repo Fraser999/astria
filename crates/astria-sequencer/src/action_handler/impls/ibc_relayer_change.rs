@@ -102,7 +102,7 @@ mod tests {
         let action = IbcRelayerChange::Addition(address_to_add);
         action.check_and_execute(&mut state).await.unwrap();
 
-        assert!(state.is_ibc_relayer(address_to_add).await.unwrap());
+        assert!(state.is_ibc_relayer(&address_to_add).await.unwrap());
     }
 
     #[tokio::test]
@@ -122,12 +122,12 @@ mod tests {
         state.put_ibc_sudo_address(ibc_sudo_address).unwrap();
         state.put_ibc_relayer_address(&address_to_remove).unwrap();
 
-        assert!(state.is_ibc_relayer(address_to_remove).await.unwrap());
+        assert!(state.is_ibc_relayer(&address_to_remove).await.unwrap());
 
         let action = IbcRelayerChange::Removal(address_to_remove);
         action.check_and_execute(&mut state).await.unwrap();
 
-        assert!(!state.is_ibc_relayer(address_to_remove).await.unwrap());
+        assert!(!state.is_ibc_relayer(&address_to_remove).await.unwrap());
     }
 
     #[tokio::test]
