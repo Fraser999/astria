@@ -30,20 +30,6 @@ metadata:
 data:
   init-cometbft.sh: |
     {{- tpl (.Files.Get "files/scripts/init-cometbft.sh") $ | nindent 4 }}
-  {{- if not .Values.global.dev }}
-  {{- else }}
-  markets.json: |
-    {{- tpl (.Files.Get "files/scripts/markets.json") $ | nindent 4 }}
-  {{- end }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Values.moniker }}-sequencer-upgrades
-  namespace: {{ include "sequencer.namespace" . }}
-data:
-  upgrades.json: |
-    {{- tpl (.Files.Get "files/upgrades/upgrades.json") $ | nindent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap
