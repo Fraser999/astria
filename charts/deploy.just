@@ -97,7 +97,7 @@ deploy-astrotrek:
     -n astria-dev-cluster \
 
 delete-astrotrek:
-  @just delete chart astrotrek 
+  @just delete chart astrotrek
 
 deploy-hermes-local:
   helm install hermes-local-chart ./charts/hermes \
@@ -171,6 +171,8 @@ deploy-local-metrics:
   kubectl apply -f kubernetes/metrics-server-local.yml
 
 defaultTag := ""
+# This should be set to the tag of the currently-running mainnet/testnet.
+preUpgradeTag := "pr-1751"
 deploy-smoke-test tag=defaultTag:
   @echo "Deploying ingress controller..." && just deploy ingress-controller > /dev/null
   @just wait-for-ingress-controller > /dev/null
@@ -182,6 +184,7 @@ deploy-smoke-test tag=defaultTag:
     -f dev/values/validators/all.yml \
     -f dev/values/validators/single.yml \
     {{ if tag != '' { replace('--set images.sequencer.devTag=# --set sequencer-relayer.images.sequencerRelayer.devTag=#', '#', tag) } else { '' } }} \
+    {{ if tag == preUpgradeTag { '--set genesis.postLatestUpgrade=false --set storage.enabled=true' } else { '' } }} \
     --create-namespace > /dev/null
   @just wait-for-sequencer > /dev/null
   @echo "Starting EVM rollup..." && helm install -n astria-dev-cluster astria-chain-chart ./charts/evm-stack -f dev/values/rollup/dev.yaml \
@@ -190,6 +193,9 @@ deploy-smoke-test tag=defaultTag:
     --set postgresql.enabled=false \
     --set evm-faucet.enabled=false > /dev/null
   @just wait-for-rollup > /dev/null
+
+deploy-upgrade-test:
+  @just deploy-smoke-test "{{preUpgradeTag}}"
 
 deploy-smoke-cli tag=defaultTag:
   @echo "Deploying ingress controller..." && just deploy ingress-controller > /dev/null
@@ -375,6 +381,13 @@ delete-smoke-test:
   just delete celestia-local
   just delete sequencer
   just delete rollup
+
+defaultVerbosity := ""
+run-upgrade-test tag verbose=defaultVerbosity:
+  python system-tests/upgrade_test.py \
+  --tag {{ if tag != '' { tag } else { 'latest' } }} \
+  --sequencer-rpc-url {{sequencer_rpc_url}} \
+  {{ if verbose != '' { '--verbose' } else { '' } }}
 
 evm_contract_address := "0xA58639fB5458e65E4fA917FF951C390292C24A15"
 run-smoke-cli tag=defaultTag:
