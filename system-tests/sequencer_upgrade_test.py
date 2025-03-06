@@ -27,8 +27,10 @@ To get verbose output, append a further arg using any value to the `just` comman
 
 import argparse
 import concurrent
+import subprocess
+import time
 import sequencer_upgrade_1_checks
-from sequencer_controller import SequencerController
+from helpers.sequencer_controller import SequencerController
 from helpers.utils import check_change_infos
 
 # The number of sequencer validator nodes to use in the test.
@@ -106,6 +108,49 @@ if upgrade_name == "upgrade1":
 print(f"Passed {upgrade_name}-specific pre-upgrade checks")
 
 print("App version before upgrade:", app_version_before)
+
+####################################################################################################
+
+helm_args = [
+    "helm", "install", "-n=astria-dev-cluster", "astria-chain-chart", "charts/evm-stack",
+    "--values=dev/values/rollup/dev.yaml",
+    f"--set=evm-rollup.images.conductor.devTag={PRE_UPGRADE_IMAGE_TAGS[upgrade_name]}",
+    f"--set=composer.images.composer.devTag={PRE_UPGRADE_IMAGE_TAGS[upgrade_name]}",
+    f"--set=evm-bridge-withdrawer.images.evmBridgeWithdrawer.devTag={PRE_UPGRADE_IMAGE_TAGS[upgrade_name]}",
+    "--set=blockscout-stack.enabled=false",
+    "--set=postgresql.enabled=false",
+    "--set=evm-faucet.enabled=false"
+]
+print(f"Running `{' '.join(map(str, helm_args))}`")
+helm_result = subprocess.run(helm_args, capture_output=False)
+if helm_result.returncode != 0:
+    raise SystemExit(f"failed to apply the EVM rollup configmap")
+
+kubectl_args = [
+    "kubectl", "rollout", "status", "--watch", "statefulset/astria-geth", "-n=astria-dev-cluster",
+    "--timeout=600s"
+]
+print(f"Running `{' '.join(map(str, kubectl_args))}`")
+kubectl_result = subprocess.run(kubectl_args, capture_output=False)
+if kubectl_result.returncode != 0:
+    raise SystemExit(f"failed waiting for EVM rollup")
+
+kubectl_args = [
+    "kubectl", "wait", "-n=astria-dev-cluster", "deployment", "evm-bridge-withdrawer-local",
+    "--for=condition=Available=True", "--timeout=600s"
+]
+print(f"Running `{' '.join(map(str, kubectl_args))}`")
+kubectl_result = subprocess.run(kubectl_args, capture_output=False)
+if kubectl_result.returncode != 0:
+    raise SystemExit(f"failed waiting for bridge withdrawer")
+
+for i in range(60):
+    print(".", end="", flush=True)
+    if i % 50 == 49:
+        print()
+    time.sleep(1)
+
+####################################################################################################
 
 # Get the current block height from the sequencer and set the upgrade to activate soon.
 block_height_difference = 10

@@ -2,9 +2,9 @@ import grpc
 import requests
 import subprocess
 import time
-from helpers.utils import check_change_infos, start_port_forwarding
-from helpers.proto.generated.service_pb2 import GetSequencerBlockRequest, GetUpgradesInfoRequest
-from helpers.proto.generated.service_pb2_grpc import SequencerServiceStub
+from .utils import check_change_infos, start_port_forwarding
+from .proto.generated.service_pb2 import GetSequencerBlockRequest, GetUpgradesInfoRequest
+from .proto.generated.service_pb2_grpc import SequencerServiceStub
 
 RPC_POD_PORT = 26657
 GRPC_POD_PORT = 8080
@@ -17,10 +17,7 @@ class SequencerController:
     servers.
     """
 
-    def __init__(
-            self,
-            node_name,
-    ):
+    def __init__(self, node_name):
         self.name = node_name
         if node_name == "node0":
             namespace = "astria-dev-cluster"
@@ -28,6 +25,7 @@ class SequencerController:
             namespace = f"astria-validator-{node_name}"
         self.namespace = namespace
         self.rpc_port_forward_process = None
+        self.rpc_local_port = None
         self.grpc_port_forward_process = None
         self.last_block_height_before_restart = None
 
@@ -45,7 +43,8 @@ class SequencerController:
             upgrade_name=None,
             upgrade_activation_height=None,
     ):
-        """Deploys a new sequencer on the cluster using the specified image tag.
+        """
+        Deploys a new sequencer on the cluster using the specified image tag.
 
         The sequencer (and associated sequencer-relayer) are installed via `helm install`, then
         when the rollout has completed, port-forwarding of the sequencer's RPC and gRPC endpoints
@@ -87,7 +86,8 @@ class SequencerController:
         self._ensure_reported_name_matches_assigned_name()
 
     def stage_upgrade(self, image_tag, upgrade_name, activation_height):
-        """Updates the image used for the sequencer in the cluster.
+        """
+        Updates the image used for the sequencer in the cluster.
 
         This method simply stages the upgrade; it doesn't wait for the sequencer to restart.
         """
@@ -130,7 +130,8 @@ class SequencerController:
         )
 
     def wait_for_upgrade(self, upgrade_activation_height):
-        """Waits for the sequencer to start following staging an upgrade and for it to execute the
+        """
+        Waits for the sequencer to start following staging an upgrade and for it to execute the
         upgrade.
 
         Expected to be called after calling `stage_upgrade`.
@@ -184,7 +185,8 @@ class SequencerController:
     # ===========================================
 
     def get_last_block_height(self):
-        """Queries the sequencer's JSON-RPC server for the latest block height.
+        """
+        Queries the sequencer's JSON-RPC server for the latest block height.
 
         Exits the process on error.
         """
@@ -195,7 +197,8 @@ class SequencerController:
             raise SystemExit(f"{self.name}: failed to get last block height: {error}")
 
     def try_get_last_block_height(self):
-        """Tries once only to query the sequencer's JSON-RPC server for the latest block height.
+        """
+        Tries once only to query the sequencer's JSON-RPC server for the latest block height.
 
         Throws a `requests` exception on error.
         """
@@ -203,8 +206,9 @@ class SequencerController:
         return int(response["response"]["last_block_height"])
 
     def get_vote_extensions_enable_height(self):
-        """Queries the sequencer's JSON-RPC server for `vote_extensions_enable_height` ABCI
-        consensus parameter.
+        """
+        Queries the sequencer's JSON-RPC server for `vote_extensions_enable_height` ABCI consensus
+        parameter.
 
         Exits the process on error.
         """
@@ -212,8 +216,9 @@ class SequencerController:
         return int(response["consensus_params"]["abci"]["vote_extensions_enable_height"])
 
     def wait_until_chain_at_height(self, height, timeout_duration):
-        """Polls the sequencer's JSON-RPC server for the latest block height until the given height
-        is reached or exceeded.
+        """
+        Polls the sequencer's JSON-RPC server for the latest block height until the given height is
+        reached or exceeded.
 
         Exits the process if this condition is not achieved within `timeout_duration` seconds.
         """
@@ -245,7 +250,8 @@ class SequencerController:
         print(f"{self.name}: latest block height: {latest_block_height}, finished awaiting block {height}")
 
     def get_app_version_at_genesis(self):
-        """Queries the sequencer's JSON-RPC server for the app version as reported via the `genesis`
+        """
+        Queries the sequencer's JSON-RPC server for the app version as reported via the `genesis`
         method.
 
         Exits the process on error.
@@ -257,7 +263,8 @@ class SequencerController:
             raise SystemExit(f"{self.name}: failed to get current app version: {error}")
 
     def get_current_app_version(self):
-        """Queries the sequencer's JSON-RPC server for the current app version as reported via the
+        """
+        Queries the sequencer's JSON-RPC server for the current app version as reported via the
         `abci_info` method.
 
         Exits the process on error.
@@ -273,7 +280,8 @@ class SequencerController:
     # =======================================
 
     def get_sequencer_block(self, height):
-        """Queries the sequencer's gRPC server for the sequencer block at the given height.
+        """
+        Queries the sequencer's gRPC server for the sequencer block at the given height.
 
         Exits the process on error or timeout.
         """
@@ -283,7 +291,8 @@ class SequencerController:
             raise SystemExit(f"{self.name}: failed to get sequencer block {height}:\n{error}\n")
 
     def get_upgrades_info(self):
-        """Queries the sequencer's gRPC server for the upgrades info.
+        """
+        Queries the sequencer's gRPC server for the upgrades info.
 
         Exits the process on error or timeout.
         """
@@ -380,13 +389,14 @@ class SequencerController:
         self.grpc_port_forward_process = None
 
     def _try_send_json_rpc_request_with_retry(self, method, *params, retries=1):
-        """Sends a JSON-RPC request to the associated sequencer's RPC server with the given method
-        and params.
+        """
+        Sends a JSON-RPC request to the associated sequencer's RPC server with the given method and
+        params.
 
         `params` should be pairs of key-value strings.
 
-        If first attempt fails, retries the specified number of times, restarting the port-forward
-        processes each time.
+        If the first attempt fails, retries the specified number of times, restarting the
+        port-forward processes each time.
 
         Throws a `requests` exception if all the RPC calls fail, or a `RuntimeError` if a JSON-RPC
         response is an error.
@@ -404,7 +414,8 @@ class SequencerController:
                     attempts += 1
 
     def _try_send_json_rpc_request(self, method, *params, verbose=True):
-        """Sends a single JSON-RPC request (i.e. no retries) to the associated sequencer's RPC
+        """
+        Sends a single JSON-RPC request (i.e. no retries) to the associated sequencer's RPC
         server with the given method and params.
 
         `params` should be pairs of key-value strings.
@@ -439,7 +450,8 @@ class SequencerController:
         return response["result"]
 
     def _try_send_grpc_request_with_retry(self, request, retries=1):
-        """Sends a gRPC request to the associated sequencer's gRPC server.
+        """
+        Sends a gRPC request to the associated sequencer's gRPC server.
 
         If first attempt fails, retries the specified number of times, restarting the port-forward
         processes each time.
@@ -459,7 +471,8 @@ class SequencerController:
                     attempts += 1
 
     def _try_send_grpc_request(self, request):
-        """Sends a single gRPC request (i.e. no retries) to the associated sequencer's gRPC server.
+        """
+        Sends a single gRPC request (i.e. no retries) to the associated sequencer's gRPC server.
 
         Throws an exception if the gRPC call fails.
         """
@@ -483,7 +496,8 @@ class SequencerController:
             raise error
 
     def _ensure_reported_name_matches_assigned_name(self):
-        """Ensure the node name provided in `__init__` matches the moniker of the node we're
+        """
+        Ensures the node name provided in `__init__` matches the moniker of the node we're
         associated with.
         """
         try:

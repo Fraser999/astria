@@ -35,12 +35,12 @@ def start_port_forwarding(node_name, namespace, pod_port):
         try:
             _stdout, stderr = port_forward_process.communicate(timeout=0.5)
             output = (
-                f"{node_name}: port-forwarding attempt for pod port {pod_port} to local port "
+                f"port-forwarding attempt for {node_name} pod port {pod_port} to local port "
                 f"{local_port} failed:{f'\n{stderr.decode()}' if attempts + 1 == max_attempts else ' retrying\n'}"
             )
             print(output, end="")
         except subprocess.TimeoutExpired:
-            print(f"{node_name}: port-forwarding pod port {pod_port} to local port {local_port}")
+            print(f"port-forwarding {node_name} pod port {pod_port} to local port {local_port}")
             return port_forward_process, local_port
         attempts += 1
     raise RuntimeError(f"Failed to forward to a local port for {node_name}")
