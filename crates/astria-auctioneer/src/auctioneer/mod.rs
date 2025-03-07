@@ -7,7 +7,7 @@ use std::{
 use astria_core::{
     primitive::v1::RollupId,
     sequencerblock::{
-        optimistic::v1alpha1::SequencerBlockCommit,
+        optimistic::v1alpha1::SequencerFinalizedBlockInfo,
         v1::block::FilteredSequencerBlock,
     },
 };

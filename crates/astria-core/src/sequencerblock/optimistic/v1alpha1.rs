@@ -8,34 +8,36 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct SequencerBlockCommitError(SequencerBlockCommitErrorKind);
+pub struct SequencerFinalizedBlockInfoError(SequencerFinalizedBlockInfoErrorKind);
 
-impl SequencerBlockCommitError {
+impl SequencerFinalizedBlockInfoError {
     fn block_hash(source: block::HashFromSliceError) -> Self {
-        Self(SequencerBlockCommitErrorKind::BlockHash {
+        Self(SequencerFinalizedBlockInfoErrorKind::BlockHash {
             source,
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-enum SequencerBlockCommitErrorKind {
+enum SequencerFinalizedBlockInfoErrorKind {
     #[error("failed to read .block_hash field as sequencer block hash")]
     BlockHash { source: block::HashFromSliceError },
 }
 
 #[derive(Clone, Debug)]
-pub struct SequencerBlockCommit {
+pub struct SequencerFinalizedBlockInfo {
     height: u64,
     block_hash: block::Hash,
+    pending_nonce: u32,
 }
 
-impl SequencerBlockCommit {
+impl SequencerFinalizedBlockInfo {
     #[must_use]
-    pub fn new(height: u64, block_hash: block::Hash) -> Self {
+    pub fn new(height: u64, block_hash: block::Hash, pending_nonce: u32) -> Self {
         Self {
             height,
             block_hash,
+            pending_nonce,
         }
     }
 
@@ -48,37 +50,45 @@ impl SequencerBlockCommit {
     pub fn block_hash(&self) -> &block::Hash {
         &self.block_hash
     }
+
+    #[must_use]
+    pub fn pending_nonce(&self) -> u32 {
+        self.pending_nonce
+    }
 }
 
-impl From<SequencerBlockCommit> for raw::SequencerBlockCommit {
-    fn from(value: SequencerBlockCommit) -> Self {
+impl From<SequencerFinalizedBlockInfo> for raw::SequencerFinalizedBlockInfo {
+    fn from(value: SequencerFinalizedBlockInfo) -> Self {
         value.to_raw()
     }
 }
 
-impl Protobuf for SequencerBlockCommit {
-    type Error = SequencerBlockCommitError;
-    type Raw = raw::SequencerBlockCommit;
+impl Protobuf for SequencerFinalizedBlockInfo {
+    type Error = SequencerFinalizedBlockInfoError;
+    type Raw = raw::SequencerFinalizedBlockInfo;
 
     fn try_from_raw_ref(raw: &Self::Raw) -> Result<Self, Self::Error> {
         let Self::Raw {
             height,
             block_hash,
+            pending_nonce,
         } = raw;
 
-        let block_hash =
-            block::Hash::try_from(&**block_hash).map_err(SequencerBlockCommitError::block_hash)?;
+        let block_hash = block::Hash::try_from(&**block_hash)
+            .map_err(SequencerFinalizedBlockInfoError::block_hash)?;
 
-        Ok(SequencerBlockCommit {
+        Ok(SequencerFinalizedBlockInfo {
             height: *height,
             block_hash,
+            pending_nonce: *pending_nonce,
         })
     }
 
     fn to_raw(&self) -> Self::Raw {
-        raw::SequencerBlockCommit {
+        raw::SequencerFinalizedBlockInfo {
             height: self.height(),
             block_hash: Bytes::copy_from_slice(self.block_hash.as_bytes()),
+            pending_nonce: self.pending_nonce,
         }
     }
 }

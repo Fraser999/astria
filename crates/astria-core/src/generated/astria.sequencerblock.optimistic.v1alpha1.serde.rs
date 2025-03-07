@@ -1,75 +1,4 @@
-impl serde::Serialize for GetBlockCommitmentStreamRequest {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let len = 0;
-        let struct_ser = serializer.serialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetBlockCommitmentStreamRequest", len)?;
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for GetBlockCommitmentStreamRequest {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                            Err(serde::de::Error::unknown_field(value, FIELDS))
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = GetBlockCommitmentStreamRequest;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct astria.sequencerblock.optimistic.v1alpha1.GetBlockCommitmentStreamRequest")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetBlockCommitmentStreamRequest, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                while map_.next_key::<GeneratedField>()?.is_some() {
-                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
-                }
-                Ok(GetBlockCommitmentStreamRequest {
-                })
-            }
-        }
-        deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetBlockCommitmentStreamRequest", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for GetBlockCommitmentStreamResponse {
+impl serde::Serialize for GetFinalizedBlockInfoStreamRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -77,29 +6,29 @@ impl serde::Serialize for GetBlockCommitmentStreamResponse {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.commitment.is_some() {
+        if self.address.is_some() {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetBlockCommitmentStreamResponse", len)?;
-        if let Some(v) = self.commitment.as_ref() {
-            struct_ser.serialize_field("commitment", v)?;
+        let mut struct_ser = serializer.serialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetFinalizedBlockInfoStreamRequest", len)?;
+        if let Some(v) = self.address.as_ref() {
+            struct_ser.serialize_field("address", v)?;
         }
         struct_ser.end()
     }
 }
-impl<'de> serde::Deserialize<'de> for GetBlockCommitmentStreamResponse {
+impl<'de> serde::Deserialize<'de> for GetFinalizedBlockInfoStreamRequest {
     #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "commitment",
+            "address",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Commitment,
+            Address,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -121,7 +50,7 @@ impl<'de> serde::Deserialize<'de> for GetBlockCommitmentStreamResponse {
                         E: serde::de::Error,
                     {
                         match value {
-                            "commitment" => Ok(GeneratedField::Commitment),
+                            "address" => Ok(GeneratedField::Address),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -131,33 +60,125 @@ impl<'de> serde::Deserialize<'de> for GetBlockCommitmentStreamResponse {
         }
         struct GeneratedVisitor;
         impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = GetBlockCommitmentStreamResponse;
+            type Value = GetFinalizedBlockInfoStreamRequest;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct astria.sequencerblock.optimistic.v1alpha1.GetBlockCommitmentStreamResponse")
+                formatter.write_str("struct astria.sequencerblock.optimistic.v1alpha1.GetFinalizedBlockInfoStreamRequest")
             }
 
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetBlockCommitmentStreamResponse, V::Error>
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetFinalizedBlockInfoStreamRequest, V::Error>
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut commitment__ = None;
+                let mut address__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Commitment => {
-                            if commitment__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("commitment"));
+                        GeneratedField::Address => {
+                            if address__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("address"));
                             }
-                            commitment__ = map_.next_value()?;
+                            address__ = map_.next_value()?;
                         }
                     }
                 }
-                Ok(GetBlockCommitmentStreamResponse {
-                    commitment: commitment__,
+                Ok(GetFinalizedBlockInfoStreamRequest {
+                    address: address__,
                 })
             }
         }
-        deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetBlockCommitmentStreamResponse", FIELDS, GeneratedVisitor)
+        deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetFinalizedBlockInfoStreamRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetFinalizedBlockInfoStreamResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.block_info.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetFinalizedBlockInfoStreamResponse", len)?;
+        if let Some(v) = self.block_info.as_ref() {
+            struct_ser.serialize_field("blockInfo", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetFinalizedBlockInfoStreamResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "block_info",
+            "blockInfo",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BlockInfo,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "blockInfo" | "block_info" => Ok(GeneratedField::BlockInfo),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetFinalizedBlockInfoStreamResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct astria.sequencerblock.optimistic.v1alpha1.GetFinalizedBlockInfoStreamResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetFinalizedBlockInfoStreamResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut block_info__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BlockInfo => {
+                            if block_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("blockInfo"));
+                            }
+                            block_info__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(GetFinalizedBlockInfoStreamResponse {
+                    block_info: block_info__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetFinalizedBlockInfoStreamResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for GetOptimisticBlockStreamRequest {
@@ -343,7 +364,7 @@ impl<'de> serde::Deserialize<'de> for GetOptimisticBlockStreamResponse {
         deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.GetOptimisticBlockStreamResponse", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for SequencerBlockCommit {
+impl serde::Serialize for SequencerFinalizedBlockInfo {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -357,7 +378,10 @@ impl serde::Serialize for SequencerBlockCommit {
         if !self.block_hash.is_empty() {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("astria.sequencerblock.optimistic.v1alpha1.SequencerBlockCommit", len)?;
+        if self.pending_nonce != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("astria.sequencerblock.optimistic.v1alpha1.SequencerFinalizedBlockInfo", len)?;
         if self.height != 0 {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("height", ToString::to_string(&self.height).as_str())?;
@@ -366,10 +390,13 @@ impl serde::Serialize for SequencerBlockCommit {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("blockHash", pbjson::private::base64::encode(&self.block_hash).as_str())?;
         }
+        if self.pending_nonce != 0 {
+            struct_ser.serialize_field("pendingNonce", &self.pending_nonce)?;
+        }
         struct_ser.end()
     }
 }
-impl<'de> serde::Deserialize<'de> for SequencerBlockCommit {
+impl<'de> serde::Deserialize<'de> for SequencerFinalizedBlockInfo {
     #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -379,12 +406,15 @@ impl<'de> serde::Deserialize<'de> for SequencerBlockCommit {
             "height",
             "block_hash",
             "blockHash",
+            "pending_nonce",
+            "pendingNonce",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Height,
             BlockHash,
+            PendingNonce,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -408,6 +438,7 @@ impl<'de> serde::Deserialize<'de> for SequencerBlockCommit {
                         match value {
                             "height" => Ok(GeneratedField::Height),
                             "blockHash" | "block_hash" => Ok(GeneratedField::BlockHash),
+                            "pendingNonce" | "pending_nonce" => Ok(GeneratedField::PendingNonce),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -417,18 +448,19 @@ impl<'de> serde::Deserialize<'de> for SequencerBlockCommit {
         }
         struct GeneratedVisitor;
         impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = SequencerBlockCommit;
+            type Value = SequencerFinalizedBlockInfo;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct astria.sequencerblock.optimistic.v1alpha1.SequencerBlockCommit")
+                formatter.write_str("struct astria.sequencerblock.optimistic.v1alpha1.SequencerFinalizedBlockInfo")
             }
 
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SequencerBlockCommit, V::Error>
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SequencerFinalizedBlockInfo, V::Error>
                 where
                     V: serde::de::MapAccess<'de>,
             {
                 let mut height__ = None;
                 let mut block_hash__ = None;
+                let mut pending_nonce__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Height => {
@@ -447,14 +479,23 @@ impl<'de> serde::Deserialize<'de> for SequencerBlockCommit {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::PendingNonce => {
+                            if pending_nonce__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pendingNonce"));
+                            }
+                            pending_nonce__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
-                Ok(SequencerBlockCommit {
+                Ok(SequencerFinalizedBlockInfo {
                     height: height__.unwrap_or_default(),
                     block_hash: block_hash__.unwrap_or_default(),
+                    pending_nonce: pending_nonce__.unwrap_or_default(),
                 })
             }
         }
-        deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.SequencerBlockCommit", FIELDS, GeneratedVisitor)
+        deserializer.deserialize_struct("astria.sequencerblock.optimistic.v1alpha1.SequencerFinalizedBlockInfo", FIELDS, GeneratedVisitor)
     }
 }

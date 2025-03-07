@@ -1,6 +1,9 @@
 use std::{
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        RwLock,
+    },
     time::Duration,
 };
 
@@ -10,28 +13,24 @@ use astria_core::{
             OptimisticBlockService,
             OptimisticBlockServiceServer,
         },
-        GetBlockCommitmentStreamRequest,
-        GetBlockCommitmentStreamResponse,
+        GetFinalizedBlockInfoStreamRequest,
+        GetFinalizedBlockInfoStreamResponse,
         GetOptimisticBlockStreamRequest,
         GetOptimisticBlockStreamResponse,
     },
-    primitive::v1::RollupId,
+    primitive::v1::{
+        Address,
+        RollupId,
+    },
     sequencerblock::{
-        optimistic::v1alpha1::SequencerBlockCommit,
-        v1::{
-            block,
-            SequencerBlock,
-        },
+        optimistic::v1alpha1::SequencerFinalizedBlockInfo,
+        v1::SequencerBlock,
     },
     Protobuf as _,
 };
 use astria_eyre::{
     eyre,
     eyre::WrapErr as _,
-};
-use tendermint::{
-    abci::request::FinalizeBlock,
-    Hash,
 };
 use tokio::{
     sync::mpsc,
@@ -59,6 +58,7 @@ use tracing::{
 use crate::app::event_bus::{
     EventBusSubscription,
     EventReceiver,
+    FinalizedBlockEvent,
 };
 
 const STREAM_TASKS_SHUTDOWN_DURATION: Duration = Duration::from_secs(1);
@@ -71,19 +71,25 @@ type GrpcStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 ///
 /// The service is split into a frontend and backend part,
 /// where [`Facade`] wrapped in a [`OptimisticBlockServer<Facade>`] is
-/// to be passed to a [`tonic::tranport::Server`], while [`Runner`] is
+/// to be passed to a [`tonic::transport::Server`], while [`Runner`]
 /// should be spawned as a separate task.
 ///
 /// The [`Runner`] keeps track of all stream that are requested on
 /// the gRPC server and are forwarded to it via the [`Facade`].
 pub(super) fn new(
     event_bus_subscription: EventBusSubscription,
+    finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
     cancellation_token: CancellationToken,
 ) -> (OptimisticBlockServiceServer<Facade>, Runner) {
     let (tx, rx) = mpsc::channel(128);
 
     let facade = Facade::new(tx);
-    let runner = Runner::new(event_bus_subscription, rx, cancellation_token);
+    let runner = Runner::new(
+        event_bus_subscription,
+        rx,
+        finalized_blocks_subscribers,
+        cancellation_token,
+    );
     let server = OptimisticBlockServiceServer::new(facade);
     (server, runner)
 }
@@ -93,19 +99,22 @@ struct StartOptimisticBlockStreamRequest {
     response: mpsc::Sender<Result<GetOptimisticBlockStreamResponse, Status>>,
 }
 
-struct StartBlockCommitmentStreamRequest {
-    response: mpsc::Sender<tonic::Result<GetBlockCommitmentStreamResponse>>,
+struct StartFinalizedBlockInfoStreamRequest {
+    address: Address,
+    response: mpsc::Sender<tonic::Result<GetFinalizedBlockInfoStreamResponse>>,
 }
 
 enum NewStreamRequest {
     OptimisticBlockStream(StartOptimisticBlockStreamRequest),
-    BlockCommitmentStream(StartBlockCommitmentStreamRequest),
+    FinalizedBlockInfoStream(StartFinalizedBlockInfoStreamRequest),
 }
 
 pub(super) struct Runner {
     event_bus_subscription: EventBusSubscription,
     stream_request_receiver: mpsc::Receiver<NewStreamRequest>,
     stream_tasks: JoinSet<Result<(), eyre::Report>>,
+    // The collection of addresses of subscribers to the finalized block stream.
+    finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
     cancellation_token: CancellationToken,
 }
 
@@ -113,12 +122,14 @@ impl Runner {
     fn new(
         event_bus_subscription: EventBusSubscription,
         stream_request_receiver: mpsc::Receiver<NewStreamRequest>,
+        finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
         cancellation_token: CancellationToken,
     ) -> Self {
         Self {
             event_bus_subscription,
             stream_request_receiver,
             stream_tasks: JoinSet::new(),
+            finalized_blocks_subscribers,
             cancellation_token,
         }
     }
@@ -141,18 +152,21 @@ impl Runner {
         ));
     }
 
-    fn handle_block_commitment_stream_request(
+    fn handle_finalized_block_info_stream_request(
         &mut self,
-        request: StartBlockCommitmentStreamRequest,
+        request: StartFinalizedBlockInfoStreamRequest,
     ) {
-        let StartBlockCommitmentStreamRequest {
+        let StartFinalizedBlockInfoStreamRequest {
+            address,
             response,
         } = request;
 
-        let finalized_blocks = self.event_bus_subscription.finalized_blocks();
-        self.stream_tasks.spawn(block_commitment_stream(
-            finalized_blocks,
+        let finalized_block_infos = self.event_bus_subscription.finalized_blocks();
+        self.stream_tasks.spawn(finalized_block_info_stream(
+            finalized_block_infos,
             response,
+            address,
+            self.finalized_blocks_subscribers.clone(),
             self.cancellation_token.child_token(),
         ));
     }
@@ -169,8 +183,8 @@ impl Runner {
                         NewStreamRequest::OptimisticBlockStream(request) => {
                             self.handle_optimistic_block_stream_request(request);
                         }
-                        NewStreamRequest::BlockCommitmentStream(request) => {
-                            self.handle_block_commitment_stream_request(request);
+                        NewStreamRequest::FinalizedBlockInfoStream(request) => {
+                            self.handle_finalized_block_info_stream_request(request);
                         }
                     }
                 },
@@ -269,32 +283,43 @@ impl Facade {
     }
 
     #[instrument(skip_all)]
-    async fn spawn_block_commitment_stream_request(
+    async fn spawn_finalized_block_info_stream_request(
         &self,
-    ) -> tonic::Result<Response<GrpcStream<GetBlockCommitmentStreamResponse>>> {
-        let (tx, rx) =
-            tokio::sync::mpsc::channel::<tonic::Result<GetBlockCommitmentStreamResponse>>(128);
+        get_finalized_block_info_stream_request: GetFinalizedBlockInfoStreamRequest,
+    ) -> tonic::Result<Response<GrpcStream<GetFinalizedBlockInfoStreamResponse>>> {
+        let address = {
+            let address = get_finalized_block_info_stream_request
+                .address
+                .ok_or_else(|| Status::invalid_argument("address is required"))?;
 
-        let request = NewStreamRequest::BlockCommitmentStream(StartBlockCommitmentStreamRequest {
-            response: tx,
-        });
+            Address::try_from_raw(address).map_err(|e| Status::invalid_argument(e.to_string()))?
+        };
+
+        let (tx, rx) =
+            tokio::sync::mpsc::channel::<tonic::Result<GetFinalizedBlockInfoStreamResponse>>(128);
+
+        let request =
+            NewStreamRequest::FinalizedBlockInfoStream(StartFinalizedBlockInfoStreamRequest {
+                address,
+                response: tx,
+            });
 
         self.stream_request_sender
             .send(request)
             .await
             .map_err(|e| {
-                Status::internal(format!("failed to create block commitment stream: {e}"))
+                Status::internal(format!("failed to create finalized block info stream: {e}"))
             })?;
 
         Ok(Response::new(
-            Box::pin(ReceiverStream::new(rx)) as GrpcStream<GetBlockCommitmentStreamResponse>
+            Box::pin(ReceiverStream::new(rx)) as GrpcStream<GetFinalizedBlockInfoStreamResponse>
         ))
     }
 }
 
 #[async_trait::async_trait]
 impl OptimisticBlockService for Facade {
-    type GetBlockCommitmentStreamStream = GrpcStream<GetBlockCommitmentStreamResponse>;
+    type GetFinalizedBlockInfoStreamStream = GrpcStream<GetFinalizedBlockInfoStreamResponse>;
     type GetOptimisticBlockStreamStream = GrpcStream<GetOptimisticBlockStreamResponse>;
 
     #[instrument(skip_all)]
@@ -309,45 +334,58 @@ impl OptimisticBlockService for Facade {
     }
 
     #[instrument(skip_all)]
-    async fn get_block_commitment_stream(
+    async fn get_finalized_block_info_stream(
         self: Arc<Self>,
-        _request: Request<GetBlockCommitmentStreamRequest>,
-    ) -> tonic::Result<Response<Self::GetBlockCommitmentStreamStream>> {
-        self.spawn_block_commitment_stream_request().await
+        request: Request<GetFinalizedBlockInfoStreamRequest>,
+    ) -> tonic::Result<Response<Self::GetFinalizedBlockInfoStreamStream>> {
+        let get_finalized_block_info_stream_request = request.into_inner();
+        self.spawn_finalized_block_info_stream_request(get_finalized_block_info_stream_request)
+            .await
     }
 }
 
-async fn block_commitment_stream(
-    mut finalized_blocks_receiver: EventReceiver<Arc<FinalizeBlock>>,
-    tx: mpsc::Sender<tonic::Result<GetBlockCommitmentStreamResponse>>,
+async fn finalized_block_info_stream(
+    mut finalized_blocks_receiver: EventReceiver<FinalizedBlockEvent>,
+    tx: mpsc::Sender<tonic::Result<GetFinalizedBlockInfoStreamResponse>>,
+    address: Address,
+    finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
     cancellation_token: CancellationToken,
 ) -> Result<(), eyre::Report> {
-    match cancellation_token
+    finalized_blocks_subscribers.write().unwrap().push(address);
+    let result = cancellation_token
         .run_until_cancelled(async move {
             loop {
                 match finalized_blocks_receiver.receive().await {
-                    Ok(finalized_block) => {
+                    Ok(finalized_block_event) => {
                         if let Err(error) =
                             info_span!(BLOCK_COMMITMENT_STREAM_SPAN).in_scope(|| {
-                                let Hash::Sha256(block_hash) = finalized_block.hash else {
-                                    warn!("block hash is empty; this should not occur");
+                                let Some(pending_nonce) =
+                                    finalized_block_event.pending_nonces.get(&address)
+                                else {
+                                    warn!(
+                                        "address is not in subscribed collection; this should not \
+                                         occur"
+                                    );
                                     return Ok(());
                                 };
 
-                                let sequencer_block_commit = SequencerBlockCommit::new(
-                                    finalized_block.height.value(),
-                                    block::Hash::new(block_hash),
-                                );
+                                let sequencer_finalized_block_info =
+                                    SequencerFinalizedBlockInfo::new(
+                                        finalized_block_event.height,
+                                        finalized_block_event.block_hash,
+                                        *pending_nonce,
+                                    );
 
-                                let get_block_commitment_stream_response =
-                                    GetBlockCommitmentStreamResponse {
-                                        commitment: Some(sequencer_block_commit.to_raw()),
+                                let get_finalized_block_info_stream_response =
+                                    GetFinalizedBlockInfoStreamResponse {
+                                        block_info: Some(sequencer_finalized_block_info.to_raw()),
                                     };
 
                                 match tx
-                                    .try_send(Ok(get_block_commitment_stream_response))
-                                    .wrap_err("forwarding block commitment stream to client failed")
-                                {
+                                    .try_send(Ok(get_finalized_block_info_stream_response))
+                                    .wrap_err(
+                                        "forwarding finalized block info stream to client failed",
+                                    ) {
                                     Ok(()) => Ok(()),
                                     Err(error) => {
                                         error!(%error);
@@ -365,11 +403,15 @@ async fn block_commitment_stream(
                 }
             }
         })
-        .await
-    {
-        Some(res) => res,
-        None => Ok(()),
-    }
+        .await;
+    // Only remove one instance of the address from the collection.
+    let mut subscribers = finalized_blocks_subscribers.write().unwrap();
+    if let Some(index) = subscribers.iter().rev().position(|addr| *addr == address) {
+        subscribers.remove(index);
+    } else {
+        warn!(%address, "should have this address in subscribers to finalize block events")
+    };
+    result.unwrap_or_else(|| Ok(()))
 }
 
 async fn optimistic_stream(

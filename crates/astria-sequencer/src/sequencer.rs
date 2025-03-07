@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    RwLock,
+};
+
 use astria_eyre::{
     anyhow_to_eyre,
     eyre::{
@@ -139,9 +144,15 @@ impl Sequencer {
 
         let mempool = Mempool::new(metrics, config.mempool_parked_max_tx_count);
 
-        let app = App::new(snapshot, mempool.clone(), metrics)
-            .await
-            .wrap_err("failed to initialize app")?;
+        let finalized_blocks_subscribers = Arc::new(RwLock::new(vec![]));
+        let app = App::new(
+            snapshot,
+            mempool.clone(),
+            finalized_blocks_subscribers.clone(),
+            metrics,
+        )
+        .await
+        .wrap_err("failed to initialize app")?;
 
         let event_bus_subscription = app.subscribe_to_events();
 
@@ -164,6 +175,7 @@ impl Sequencer {
             grpc_addr,
             config.no_optimistic_blocks,
             event_bus_subscription,
+            finalized_blocks_subscribers,
             grpc_shutdown_rx,
         ));
 

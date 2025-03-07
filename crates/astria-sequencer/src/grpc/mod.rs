@@ -1,9 +1,16 @@
 use std::{
     future::Future,
+    sync::{
+        Arc,
+        RwLock,
+    },
     time::Duration,
 };
 
-use astria_core::generated::astria::sequencerblock::v1::sequencer_service_server::SequencerServiceServer;
+use astria_core::{
+    generated::astria::sequencerblock::v1::sequencer_service_server::SequencerServiceServer,
+    primitive::v1::Address,
+};
 use astria_eyre::eyre;
 pub(crate) use state_ext::{
     StateReadExt,
@@ -85,12 +92,18 @@ impl BackgroundTasks {
     }
 }
 
+struct AccountNonces {
+    current: u32,
+    pending: u32,
+}
+
 pub(crate) async fn serve(
     storage: cnidarium::Storage,
     mempool: Mempool,
     grpc_addr: std::net::SocketAddr,
     no_optimistic_blocks: bool,
     event_bus_subscription: EventBusSubscription,
+    finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> eyre::Result<(), tonic::transport::Error> {
     use ibc_proto::ibc::core::{
@@ -111,6 +124,7 @@ pub(crate) async fn serve(
     } else {
         let (service, task) = optimistic::new(
             event_bus_subscription,
+            finalized_blocks_subscribers,
             background_tasks.cancellation_token(),
         );
         background_tasks.spawn("OPTIMISTIC", task.run());

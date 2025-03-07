@@ -1,8 +1,16 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+};
 
-use astria_core::sequencerblock::v1::SequencerBlock;
+use astria_core::{
+    primitive::v1::Address,
+    sequencerblock::v1::{
+        block,
+        SequencerBlock,
+    },
+};
 use astria_eyre::eyre::WrapErr as _;
-use tendermint::abci::request::FinalizeBlock;
 use tokio::sync::watch::{
     Receiver,
     Sender,
@@ -83,7 +91,7 @@ impl<T> EventSender<T> {
 /// and [`Self::finalized_blocks`].
 pub(crate) struct EventBusSubscription {
     process_proposal_blocks: EventReceiver<Arc<SequencerBlock>>,
-    finalized_blocks: EventReceiver<Arc<FinalizeBlock>>,
+    finalized_blocks: EventReceiver<FinalizedBlockEvent>,
 }
 
 impl EventBusSubscription {
@@ -101,7 +109,7 @@ impl EventBusSubscription {
     ///
     /// The returned [`EventReceiver`] will always provide the next
     /// event and ignore the latest one.
-    pub(crate) fn finalized_blocks(&self) -> EventReceiver<Arc<FinalizeBlock>> {
+    pub(crate) fn finalized_blocks(&self) -> EventReceiver<FinalizedBlockEvent> {
         let mut receiver = self.finalized_blocks.clone();
         receiver.inner.mark_unchanged();
         receiver
@@ -119,9 +127,8 @@ pub(super) struct EventBus {
     // Sends a process proposal block event to the subscribers. The event is sent in the form of a
     // sequencer block which is created during the process proposal block phase.
     process_proposal_block_sender: EventSender<Arc<SequencerBlock>>,
-    // Sends a finalized block event to the subscribers. The event is sent in the form of the
-    // finalize block abci request.
-    finalized_block_sender: EventSender<Arc<FinalizeBlock>>,
+    // Sends a finalized block event to the subscribers.
+    finalized_block_sender: EventSender<FinalizedBlockEvent>,
 }
 
 impl EventBus {
@@ -150,7 +157,14 @@ impl EventBus {
     }
 
     /// Sends a finalized block event over the event bus.
-    pub(super) fn send_finalized_block(&self, sequencer_block_commit: Arc<FinalizeBlock>) {
-        self.finalized_block_sender.send(sequencer_block_commit);
+    pub(super) fn send_finalized_block(&self, finalized_block_event: FinalizedBlockEvent) {
+        self.finalized_block_sender.send(finalized_block_event);
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct FinalizedBlockEvent {
+    pub(crate) height: u64,
+    pub(crate) block_hash: block::Hash,
+    pub(crate) pending_nonces: Arc<HashMap<Address, u32>>,
 }

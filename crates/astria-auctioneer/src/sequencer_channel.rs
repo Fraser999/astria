@@ -9,8 +9,8 @@ use std::{
 
 use astria_core::{
     generated::astria::sequencerblock::optimistic::v1alpha1::{
-        GetBlockCommitmentStreamRequest,
-        GetBlockCommitmentStreamResponse,
+        GetFinalizedBlockInfoStreamRequest,
+        GetFinalizedBlockInfoStreamResponse,
         GetOptimisticBlockStreamRequest,
         GetOptimisticBlockStreamResponse,
     },
@@ -19,7 +19,7 @@ use astria_core::{
         RollupId,
     },
     sequencerblock::{
-        optimistic::v1alpha1::SequencerBlockCommit,
+        optimistic::v1alpha1::SequencerFinalizedBlockInfo,
         v1::block::FilteredSequencerBlock,
     },
     Protobuf as _,
@@ -184,12 +184,13 @@ impl Stream for InnerBlockCommitmentStream {
                 )
             })?;
 
-        let commitment = SequencerBlockCommit::try_from_raw_ref(&raw).wrap_err_with(|| {
-            format!(
-                "failed to validate message `{}` received from server",
-                raw::SequencerBlockCommit::full_name()
-            )
-        })?;
+        let commitment =
+            SequencerFinalizedBlockInfo::try_from_raw_ref(&raw).wrap_err_with(|| {
+                format!(
+                    "failed to validate message `{}` received from server",
+                    raw::SequencerFinalizedBlockInfo::full_name()
+                )
+            })?;
 
         Poll::Ready(Some(Ok(commitment)))
     }

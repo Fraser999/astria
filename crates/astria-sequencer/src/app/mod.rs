@@ -17,13 +17,23 @@ mod tests_breaking_changes;
 mod tests_execute_transaction;
 
 use std::{
-    collections::VecDeque,
-    sync::Arc,
+    collections::{
+        HashMap,
+        HashSet,
+        VecDeque,
+    },
+    sync::{
+        Arc,
+        RwLock,
+    },
 };
 
 use astria_core::{
     generated::astria::protocol::transaction::v1 as raw,
-    primitive::v1::TRANSACTION_ID_LEN,
+    primitive::v1::{
+        Address,
+        TRANSACTION_ID_LEN,
+    },
     protocol::{
         abci::AbciErrorCode,
         genesis::v1::GenesisAppState,
@@ -36,7 +46,10 @@ use astria_core::{
             Transaction,
         },
     },
-    sequencerblock::v1::block::SequencerBlock,
+    sequencerblock::v1::{
+        block,
+        block::SequencerBlock,
+    },
     Protobuf as _,
 };
 use astria_eyre::{
@@ -79,6 +92,7 @@ use tendermint::{
 };
 use tracing::{
     debug,
+    error,
     info,
     instrument,
     Level,
@@ -91,6 +105,7 @@ pub(crate) use self::state_ext::{
 use crate::{
     accounts::{
         component::AccountsComponent,
+        StateReadExt as _,
         StateWriteExt as _,
     },
     action_handler::{
@@ -101,6 +116,7 @@ use crate::{
     app::event_bus::{
         EventBus,
         EventBusSubscription,
+        FinalizedBlockEvent,
     },
     assets::StateWriteExt as _,
     authority::{
@@ -241,6 +257,11 @@ pub(crate) struct App {
     // the sequencer event bus, used to send and receive events between components within the app
     event_bus: EventBus,
 
+    // The collection of addresses of subscribers to the finalized block stream.
+    // It is managed by the `optimistic` component, and read here in order to provide pending
+    // nonces for the subscribed addresses along with the finalized block event.
+    finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
+
     metrics: &'static Metrics,
 }
 
@@ -249,6 +270,7 @@ impl App {
     pub(crate) async fn new(
         snapshot: Snapshot,
         mempool: Mempool,
+        finalized_blocks_subscribers: Arc<RwLock<Vec<Address>>>,
         metrics: &'static Metrics,
     ) -> Result<Self> {
         debug!("initializing App instance");
@@ -278,6 +300,7 @@ impl App {
             write_batch: None,
             app_hash,
             event_bus,
+            finalized_blocks_subscribers,
             metrics,
         })
     }
@@ -878,9 +901,6 @@ impl App {
              rollup IDs commitment"
         );
 
-        // FIXME: refactor to avoid cloning the finalize block
-        let finalize_block_arc = Arc::new(finalize_block.clone());
-
         // When the hash is not empty, we have already executed and cached the results
         if self.executed_proposal_hash.is_empty() {
             // convert tendermint id to astria address; this assumes they are
@@ -973,7 +993,7 @@ impl App {
             tx_results: post_transaction_execution_result.tx_results,
         };
 
-        self.event_bus.send_finalized_block(finalize_block_arc);
+        self.send_finalize_block_event(&finalize_block).await;
 
         Ok(finalize_block_response)
     }
@@ -1150,6 +1170,41 @@ impl App {
         })
     }
 
+    async fn send_finalize_block_event(&self, finalize_block: &abci::request::FinalizeBlock) {
+        let Hash::Sha256(block_hash) = finalize_block.hash else {
+            // This case should already have been caught in `post_execute_transactions`.
+            error!("unexpected empty block hash in `send_finalize_block_event`");
+            return;
+        };
+        let subscriber_addresses: HashSet<Address> = self
+            .finalized_blocks_subscribers
+            .read()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+        let mut pending_nonces = HashMap::new();
+        for address in subscriber_addresses {
+            match self.state.get_account_nonce(&address).await {
+                Ok(nonce) => pending_nonces.insert(address, nonce),
+                Err(error) => {
+                    error!(
+                        address = %telemetry::display::base64(&address),
+                        error = &error as &dyn std::error::Error,
+                        "failed to fetch subscriber account nonce"
+                    );
+                    continue;
+                }
+            };
+        }
+
+        self.event_bus.send_finalized_block(FinalizedBlockEvent {
+            height: finalize_block.height.into(),
+            block_hash: block::Hash(block_hash),
+            pending_nonces: Arc::new(pending_nonces),
+        });
+    }
+
     #[instrument(name = "App::commit", skip_all)]
     pub(crate) async fn commit(&mut self, storage: Storage) {
         // Commit the pending writes, clearing the state.
@@ -1170,6 +1225,16 @@ impl App {
 
         // Get the latest version of the state, now that we've committed it.
         self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        let block_height = self
+            .state
+            .get_block_height()
+            .await
+            .expect("block height must be set");
+        let block_hash = self
+            .state
+            .get_block_hash_by_height(block_height)
+            .await
+            .expect("block hash must be set");
     }
 
     // StateDelta::apply only works when the StateDelta wraps an underlying

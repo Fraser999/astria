@@ -5,18 +5,23 @@ package astria.sequencerblock.optimistic.v1alpha1;
 import "astria/primitive/v1/types.proto";
 import "astria/sequencerblock/v1/block.proto";
 
-message GetBlockCommitmentStreamRequest {}
-
-// Identifying metadata for blocks that have been successfully committed in the Sequencer.
-message SequencerBlockCommit {
-  // Height of the sequencer block that was committed.
-  uint64 height = 1;
-  // Hash of the sequencer block that was committed.
-  bytes block_hash = 2;
+message GetFinalizedBlockInfoStreamRequest {
+  // The address for which the nonces will be provided in the responses.
+  astria.primitive.v1.Address address = 1;
 }
 
-message GetBlockCommitmentStreamResponse {
-  SequencerBlockCommit commitment = 1;
+// Identifying metadata for blocks that have been finalized in the Sequencer.
+message SequencerFinalizedBlockInfo {
+  // Height of the sequencer block that was finalized.
+  uint64 height = 1;
+  // Hash of the sequencer block that was finalized.
+  bytes block_hash = 2;
+  // The next available nonce for the associated account.
+  uint32 pending_nonce = 3;
+}
+
+message GetFinalizedBlockInfoStreamResponse {
+  SequencerFinalizedBlockInfo block_info = 1;
 }
 
 message GetOptimisticBlockStreamRequest {
@@ -29,11 +34,11 @@ message GetOptimisticBlockStreamResponse {
   astria.sequencerblock.v1.FilteredSequencerBlock block = 1;
 }
 
-// The Sequencer will serve this to the aucitoneer
+// The Sequencer will serve this to the Auctioneer.
 service OptimisticBlockService {
   // The Sequencer will stream the optimistic Sequencer block (filtered for the provided
   // rollup id) to the Auctioneer.
   rpc GetOptimisticBlockStream(GetOptimisticBlockStreamRequest) returns (stream GetOptimisticBlockStreamResponse);
-  // The Sequencer will stream the block commits to the Auctioneer.
-  rpc GetBlockCommitmentStream(GetBlockCommitmentStreamRequest) returns (stream GetBlockCommitmentStreamResponse);
+  // The Sequencer will stream the info about finalized blocks to the Auctioneer.
+  rpc GetFinalizedBlockInfoStream(GetFinalizedBlockInfoStreamRequest) returns (stream GetFinalizedBlockInfoStreamResponse);
 }
