@@ -4,6 +4,7 @@ use clap::{
 };
 
 use super::{
+    activation_point_calculator,
     blob_parser,
     genesis_example,
     genesis_parser,
@@ -29,6 +30,10 @@ pub enum Command {
     /// Parse blob data from an arg, a file, or stdin
     #[command(arg_required_else_help = true)]
     ParseBlob(blob_parser::Args),
+
+    /// Calculate the activation point to schedule an upcoming upgrade
+    #[command(arg_required_else_help = true)]
+    CalculateActivationPoint(activation_point_calculator::Args),
 }
 
 #[must_use]
