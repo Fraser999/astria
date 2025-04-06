@@ -1,5 +1,8 @@
 use astria_core::{
-    primitive::v1::ADDRESS_LEN,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        ADDRESS_LEN,
+    },
     protocol::transaction::v1::action::RecoverIbcClient,
 };
 use astria_eyre::{
@@ -26,7 +29,10 @@ use tracing::{
     Level,
 };
 
-use super::TransactionSignerAddressBytes;
+use super::{
+    AssetTransfer,
+    TransactionSignerAddressBytes,
+};
 use crate::{
     app::StateReadExt as _,
     authority::StateReadExt as _,
@@ -49,45 +55,17 @@ impl CheckedRecoverIbcClient {
             action,
             tx_signer: tx_signer.into(),
         };
-        let _ = checked_action.run_mutable_checks(state).await?;
+        checked_action.run_mutable_checks(state).await?;
 
         Ok(checked_action)
     }
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
-    pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        let ClientStates {
-            mut client_state,
-            replacement_client_state,
-        } = self.run_mutable_checks(&state).await?;
-
-        let substitute_consensus_state = state
-            .get_verified_consensus_state(
-                &replacement_client_state.latest_height(),
-                &self.action.replacement_client_id,
-            )
-            .await
-            .map_err(anyhow_to_eyre)
-            .wrap_err("failed to get verified consensus state")?;
-        state
-            .put_verified_consensus_state::<crate::ibc::host_interface::AstriaHost>(
-                replacement_client_state.latest_height(),
-                self.action.client_id.clone(),
-                substitute_consensus_state,
-            )
-            .await
-            .map_err(anyhow_to_eyre)
-            .wrap_err("failed to put verified consensus state")?;
-
-        client_state.latest_height = replacement_client_state.latest_height;
-        client_state.trusting_period = replacement_client_state.trusting_period;
-        client_state.chain_id = replacement_client_state.chain_id;
-        state.put_client(&self.action.client_id, client_state);
-
-        Ok(())
+    pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
+        self.exec_mutable_checks(state).await.map(|_| ())
     }
 
-    async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<ClientStates> {
+    async fn exec_mutable_checks<S: StateRead>(&self, state: S) -> Result<ClientStates> {
         // Ensure the tx signer is the current sudo address.
         let sudo_address = state
             .get_sudo_address()
@@ -153,6 +131,49 @@ impl CheckedRecoverIbcClient {
             replacement_client_state,
         })
     }
+
+    #[instrument(skip_all, err(level = Level::DEBUG))]
+    pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+        let ClientStates {
+            mut client_state,
+            replacement_client_state,
+        } = self.exec_mutable_checks(&state).await?;
+
+        let substitute_consensus_state = state
+            .get_verified_consensus_state(
+                &replacement_client_state.latest_height(),
+                &self.action.replacement_client_id,
+            )
+            .await
+            .map_err(anyhow_to_eyre)
+            .wrap_err("failed to get verified consensus state")?;
+        state
+            .put_verified_consensus_state::<crate::ibc::host_interface::AstriaHost>(
+                replacement_client_state.latest_height(),
+                self.action.client_id.clone(),
+                substitute_consensus_state,
+            )
+            .await
+            .map_err(anyhow_to_eyre)
+            .wrap_err("failed to put verified consensus state")?;
+
+        client_state.latest_height = replacement_client_state.latest_height;
+        client_state.trusting_period = replacement_client_state.trusting_period;
+        client_state.chain_id = replacement_client_state.chain_id;
+        state.put_client(&self.action.client_id, client_state);
+
+        Ok(())
+    }
+
+    pub(super) fn action(&self) -> &RecoverIbcClient {
+        &self.action
+    }
+}
+
+impl AssetTransfer for CheckedRecoverIbcClient {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        None
+    }
 }
 
 // according to the ADR, all fields must match except for the latest height, trusting period,
@@ -217,169 +238,41 @@ mod tests {
     use std::time::Duration;
 
     use astria_core::protocol::transaction::v1::action::*;
-    use cnidarium::{
-        Snapshot,
-        StateDelta,
-    };
     use ibc_proto::ics23::ProofSpec;
     use ibc_types::{
-        core::{
-            client::{
-                ClientId,
-                ClientType,
-                Height,
-            },
-            commitment::MerkleRoot,
-            connection::ChainId,
-        },
+        core::connection::ChainId,
         lightclients::tendermint::{
-            client_state::{
-                AllowUpdate,
-                ClientState,
-            },
-            ConsensusState,
+            client_state::ClientState,
             TrustThreshold,
         },
     };
-    use tendermint::{
-        Hash,
-        Time,
-    };
 
-    use super::{
-        super::{
-            test_utils::Fixture,
-            CheckedAction,
-        },
-        *,
-    };
+    use super::*;
     use crate::{
-        app::StateWriteExt,
-        authority::StateWriteExt as _,
-        benchmark_and_test_utils::{
-            assert_eyre_error,
-            astria_address,
+        benchmark_and_test_utils::astria_address,
+        checked_actions::CheckedSudoAddressChange,
+        test_utils::{
+            assert_error_contains,
+            dummy_ibc_client_state,
+            dummy_recover_ibc_client,
+            Fixture,
+            SUDO_ADDRESS_BYTES,
         },
-        ibc::host_interface::AstriaHost,
     };
-
-    fn client_id(counter: u64) -> ClientId {
-        ClientId::new(ClientType::new("test-id".to_string()), counter).unwrap()
-    }
-
-    fn new_client_state(rev_height: u64) -> ClientState {
-        let version = 2;
-        let chain_id = ChainId::new("test".to_string(), version);
-        let proof_spec = ProofSpec {
-            leaf_spec: None,
-            inner_spec: None,
-            max_depth: 0,
-            min_depth: 0,
-            prehash_key_before_comparison: false,
-        };
-        let height = Height::new(version, rev_height).unwrap();
-        let allow_update = AllowUpdate {
-            after_expiry: true,
-            after_misbehaviour: true,
-        };
-        ClientState::new(
-            chain_id,
-            TrustThreshold::TWO_THIRDS,
-            Duration::from_secs(1),
-            Duration::from_secs(64_000),
-            Duration::from_secs(1),
-            height,
-            vec![proof_spec],
-            vec![],
-            allow_update,
-            None,
-        )
-        .unwrap()
-    }
-
-    async fn init_active_client(
-        state: &mut StateDelta<Snapshot>,
-        client_id: &ClientId,
-        client_state: ClientState,
-    ) {
-        init_client(state, client_id, client_state, true).await;
-    }
-
-    async fn init_expired_client(
-        state: &mut StateDelta<Snapshot>,
-        client_id: &ClientId,
-        client_state: ClientState,
-    ) {
-        init_client(state, client_id, client_state, false).await;
-    }
-
-    async fn init_client(
-        state: &mut StateDelta<Snapshot>,
-        client_id: &ClientId,
-        client_state: ClientState,
-        active: bool,
-    ) {
-        let height = client_state.latest_height;
-        let trusting_period = client_state.trusting_period;
-        state.put_client(client_id, client_state);
-
-        state.put_revision_number(height.revision_number).unwrap();
-        // Don't allow the stored block height to decrease.
-        let current_stored_height = state.get_block_height().await.unwrap_or_default();
-        state
-            .put_block_height(std::cmp::max(height.revision_height, current_stored_height))
-            .unwrap();
-
-        let timestamp = Time::from_unix_timestamp(100, 2).unwrap();
-        state.put_block_timestamp(timestamp).unwrap();
-
-        let consensus_state_timestamp = if active {
-            // If we want the client to be active, just use the block timestamp for its consensus
-            // state.
-            timestamp
-        } else {
-            // If we want the client to be expired, make its consensus state timestamp earlier than
-            // the block timestamp by more than the trusting period.
-            timestamp
-                .checked_sub(trusting_period)
-                .and_then(|t| t.checked_sub(Duration::from_nanos(1)))
-                .unwrap()
-        };
-        let consensus_state = ConsensusState::new(
-            MerkleRoot {
-                hash: vec![1; 32],
-            },
-            consensus_state_timestamp,
-            Hash::Sha256([2; 32]),
-        );
-
-        state
-            .put_verified_consensus_state::<AstriaHost>(height, client_id.clone(), consensus_state)
-            .await
-            .unwrap();
-    }
-
-    fn new_recover_ibc_client() -> RecoverIbcClient {
-        RecoverIbcClient {
-            client_id: client_id(0),
-            replacement_client_id: client_id(1),
-        }
-    }
 
     #[tokio::test]
     async fn should_fail_construction_if_signer_is_not_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
-        // Store a sudo address different from the tx signer address.
-        let sudo_address = [2; ADDRESS_LEN];
-        assert_ne!(fixture.tx_signer, sudo_address);
-        fixture.state.put_sudo_address(sudo_address).unwrap();
+        let tx_signer = [2_u8; ADDRESS_LEN];
+        assert_ne!(*SUDO_ADDRESS_BYTES, tx_signer);
 
-        let action = new_recover_ibc_client();
-        let err = CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
+        let action = dummy_recover_ibc_client();
+        let err = fixture
+            .new_checked_action(action, tx_signer)
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to recover ibc client",
         );
@@ -387,65 +280,72 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_block_timestamp_not_available() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
-        let action = new_recover_ibc_client();
-        let err = CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
+        let action = dummy_recover_ibc_client();
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "failed to get block timestamp");
+        assert_error_contains(&err, "failed to get block timestamp");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_client_status_is_active() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_recover_ibc_client();
-        init_active_client(&mut fixture.state, &action.client_id, new_client_state(3)).await;
+        let action = dummy_recover_ibc_client();
+        fixture
+            .init_active_ibc_client(&action.client_id, dummy_ibc_client_state(3))
+            .await;
 
-        let err = CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "cannot recover an active client");
+        assert_error_contains(&err, "cannot recover an active client");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_replacement_client_status_is_not_active() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_recover_ibc_client();
-        init_expired_client(&mut fixture.state, &action.client_id, new_client_state(3)).await;
-        init_expired_client(
-            &mut fixture.state,
-            &action.replacement_client_id,
-            new_client_state(3),
-        )
-        .await;
+        let action = dummy_recover_ibc_client();
+        fixture
+            .init_expired_ibc_client(&action.client_id, dummy_ibc_client_state(3))
+            .await;
+        fixture
+            .init_expired_ibc_client(&action.replacement_client_id, dummy_ibc_client_state(3))
+            .await;
 
-        let err = CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "substitute client must be active");
+        assert_error_contains(&err, "substitute client must be active");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_replacement_client_height_not_less_than_client_height() {
         let check = |height: u64| async move {
-            let mut fixture = Fixture::new().await;
+            let mut fixture = Fixture::default_initialized().await;
 
-            let action = new_recover_ibc_client();
-            init_expired_client(&mut fixture.state, &action.client_id, new_client_state(3)).await;
-            init_active_client(
-                &mut fixture.state,
-                &action.replacement_client_id,
-                new_client_state(height),
-            )
-            .await;
+            let action = dummy_recover_ibc_client();
+            fixture
+                .init_expired_ibc_client(&action.client_id, dummy_ibc_client_state(3))
+                .await;
+            fixture
+                .init_active_ibc_client(
+                    &action.replacement_client_id,
+                    dummy_ibc_client_state(height),
+                )
+                .await;
 
-            let err = CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
+            let err = fixture
+                .new_checked_action(action, *SUDO_ADDRESS_BYTES)
                 .await
                 .unwrap_err();
-            assert_eyre_error(
+            assert_error_contains(
                 &err,
                 "substitute client must have a higher height than that of subject client",
             );
@@ -459,28 +359,28 @@ mod tests {
         replacement_client_state: ClientState,
         expected_error_message: &str,
     ) {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_recover_ibc_client();
-        init_expired_client(&mut fixture.state, &action.client_id, new_client_state(3)).await;
-        init_active_client(
-            &mut fixture.state,
-            &action.replacement_client_id,
-            replacement_client_state,
-        )
-        .await;
+        let action = dummy_recover_ibc_client();
+        fixture
+            .init_expired_ibc_client(&action.client_id, dummy_ibc_client_state(3))
+            .await;
+        fixture
+            .init_active_ibc_client(&action.replacement_client_id, replacement_client_state)
+            .await;
 
-        let err = CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
-        assert_eyre_error(&err, expected_error_message);
+        assert_error_contains(&err, expected_error_message);
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_mismatch_in_client_state_trust_level() {
         let replacement_client_state = ClientState {
             trust_level: TrustThreshold::ONE_THIRD,
-            ..new_client_state(4)
+            ..dummy_ibc_client_state(4)
         };
         should_fail_construction_if_mismatch_in_client_state_field(
             replacement_client_state,
@@ -493,7 +393,7 @@ mod tests {
     async fn should_fail_construction_if_mismatch_in_client_state_unbonding_period() {
         let replacement_client_state = ClientState {
             unbonding_period: Duration::from_secs(10),
-            ..new_client_state(4)
+            ..dummy_ibc_client_state(4)
         };
         should_fail_construction_if_mismatch_in_client_state_field(
             replacement_client_state,
@@ -506,7 +406,7 @@ mod tests {
     async fn should_fail_construction_if_mismatch_in_client_state_max_clock_drift() {
         let replacement_client_state = ClientState {
             max_clock_drift: Duration::from_secs(10),
-            ..new_client_state(4)
+            ..dummy_ibc_client_state(4)
         };
         should_fail_construction_if_mismatch_in_client_state_field(
             replacement_client_state,
@@ -526,7 +426,7 @@ mod tests {
         };
         let replacement_client_state = ClientState {
             proof_specs: vec![proof_spec],
-            ..new_client_state(4)
+            ..dummy_ibc_client_state(4)
         };
         should_fail_construction_if_mismatch_in_client_state_field(
             replacement_client_state,
@@ -539,7 +439,7 @@ mod tests {
     async fn should_fail_construction_if_mismatch_in_client_state_upgrade_path() {
         let replacement_client_state = ClientState {
             upgrade_path: vec!["a".to_string()],
-            ..new_client_state(4)
+            ..dummy_ibc_client_state(4)
         };
         should_fail_construction_if_mismatch_in_client_state_field(
             replacement_client_state,
@@ -550,49 +450,47 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_execution_if_signer_is_not_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         // Construct the checked action while the sudo address is still the tx signer so
         // construction succeeds.
-        let action = new_recover_ibc_client();
-        init_expired_client(&mut fixture.state, &action.client_id, new_client_state(3)).await;
-        init_active_client(
-            &mut fixture.state,
-            &action.replacement_client_id,
-            new_client_state(4),
-        )
-        .await;
+        let action = dummy_recover_ibc_client();
+        fixture
+            .init_expired_ibc_client(&action.client_id, dummy_ibc_client_state(3))
+            .await;
+        fixture
+            .init_active_ibc_client(&action.replacement_client_id, dummy_ibc_client_state(4))
+            .await;
 
-        let checked_action =
-            CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        let checked_action: CheckedRecoverIbcClient = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
 
         // Change the sudo address to something other than the tx signer.
         let sudo_address_change = SudoAddressChange {
             new_address: astria_address(&[2; ADDRESS_LEN]),
         };
-        let checked_sudo_address_change = CheckedAction::new_sudo_address_change(
-            sudo_address_change,
-            fixture.tx_signer,
-            &fixture.state,
-        )
-        .await
-        .unwrap();
+        let checked_sudo_address_change: CheckedSudoAddressChange = fixture
+            .new_checked_action(sudo_address_change, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
         checked_sudo_address_change
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
-        let new_sudo_address = fixture.state.get_sudo_address().await.unwrap();
-        assert_ne!(fixture.tx_signer, new_sudo_address);
+        let new_sudo_address = fixture.state().get_sudo_address().await.unwrap();
+        assert_ne!(*SUDO_ADDRESS_BYTES, new_sudo_address);
 
         // Try to execute the checked action now - should fail due to signer no longer being
         // authorized.
         let err = checked_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to recover ibc client",
         );
@@ -600,16 +498,16 @@ mod tests {
 
     #[tokio::test]
     async fn should_execute() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_recover_ibc_client();
+        let action = dummy_recover_ibc_client();
 
         // Prepare a replacement with different values for height, trusting period and chain ID.
-        let expired_client_state = new_client_state(3);
+        let expired_client_state = dummy_ibc_client_state(3);
         let replacement_client_state = ClientState {
             trusting_period: Duration::from_secs(10),
             chain_id: ChainId::new("different".to_string(), 2),
-            ..new_client_state(4)
+            ..dummy_ibc_client_state(4)
         };
         assert_ne!(
             expired_client_state.latest_height,
@@ -623,32 +521,35 @@ mod tests {
             expired_client_state.chain_id,
             replacement_client_state.chain_id
         );
-        init_expired_client(&mut fixture.state, &action.client_id, expired_client_state).await;
-        init_active_client(
-            &mut fixture.state,
-            &action.replacement_client_id,
-            replacement_client_state.clone(),
-        )
-        .await;
+        fixture
+            .init_expired_ibc_client(&action.client_id, expired_client_state)
+            .await;
+        fixture
+            .init_active_ibc_client(
+                &action.replacement_client_id,
+                replacement_client_state.clone(),
+            )
+            .await;
 
         // Check the client status before execution is `Expired`.
         let client_id = action.client_id.clone();
-        let block_time = fixture.state.get_block_timestamp().await.unwrap();
+        let block_time = fixture.state().get_block_timestamp().await.unwrap();
         let status_before = fixture
-            .state
+            .state()
             .get_client_status(&client_id, block_time)
             .await;
         assert_eq!(status_before, ClientStatus::Expired);
 
         // Execute the checked action.
-        let checked_action =
-            CheckedRecoverIbcClient::new(action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
-        checked_action.execute(&mut fixture.state).await.unwrap();
+        let checked_action: CheckedRecoverIbcClient = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
+        checked_action.execute(fixture.state_mut()).await.unwrap();
 
         // The client state should now hold the replacement values.
-        let stored_client_state = fixture.state.get_client_state(&client_id).await.unwrap();
+        let stored_client_state = fixture.state().get_client_state(&client_id).await.unwrap();
         assert_eq!(
             stored_client_state.latest_height,
             replacement_client_state.latest_height
@@ -664,7 +565,7 @@ mod tests {
 
         // The client status should now be `Active`.
         let status_after = fixture
-            .state
+            .state()
             .get_client_status(&client_id, block_time)
             .await;
         assert_eq!(status_after, ClientStatus::Active);

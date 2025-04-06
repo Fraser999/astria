@@ -24,7 +24,6 @@ use crate::{
     accounts::StateReadExt as _,
     app::StateReadExt as _,
     bridge::StateReadExt as _,
-    fees::query::get_fees_for_transaction,
 };
 
 #[instrument(skip_all, fields(tx_hash = %tx.id()), err(level = Level::DEBUG))]
@@ -67,21 +66,21 @@ pub(crate) async fn check_balance_for_total_fees_and_transfers<S: StateRead>(
 
 // Returns the total cost of the transaction (fees and transferred values for all actions in the
 // transaction).
-#[instrument(skip_all, fields(tx_hash = %tx.id()), err(level = Level::DEBUG))]
+#[instrument(skip_all, fields(tx_hash = %_tx.id()), err(level = Level::DEBUG))]
 pub(crate) async fn get_total_transaction_cost<S: StateRead>(
-    tx: &Transaction,
-    state: &S,
+    _tx: &Transaction,
+    _state: &S,
 ) -> Result<HashMap<asset::IbcPrefixed, u128>> {
-    let mut cost_by_asset: HashMap<asset::IbcPrefixed, u128> =
-        get_fees_for_transaction(tx.unsigned_transaction(), state)
-            .await
-            .context("failed to get fees for transaction")?;
-
-    add_total_transfers_for_transaction(tx, state, &mut cost_by_asset)
-        .await
-        .context("failed to add total transfers for transaction")?;
-
-    Ok(cost_by_asset)
+    todo!();
+    // let mut cost_by_asset: HashMap<asset::IbcPrefixed, u128> = total_fees(tx.body().actions,
+    // state)     .await
+    //     .context("failed to get fees for transaction")?;
+    //
+    // add_total_transfers_for_transaction(tx, state, &mut cost_by_asset)
+    //     .await
+    //     .context("failed to add total transfers for transaction")?;
+    //
+    // Ok(cost_by_asset)
 }
 
 async fn add_total_transfers_for_transaction<S: StateRead>(

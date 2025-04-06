@@ -14,7 +14,10 @@ use std::{
 };
 
 use astria_core::{
-    primitive::v1::asset::IbcPrefixed,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        TransactionId,
+    },
     protocol::transaction::v1::Transaction,
 };
 use astria_eyre::eyre::Result;
@@ -42,8 +45,13 @@ use transactions_container::{
 
 use crate::{
     accounts,
+    checked_transaction::{
+        CheckedTransaction,
+        CheckedTransactionError,
+    },
     Metrics,
 };
+use crate::accounts::AddressBytes as _;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) enum RemovalReason {
@@ -51,6 +59,7 @@ pub(crate) enum RemovalReason {
     NonceStale,
     LowerNonceInvalidated,
     FailedPrepareProposal(String),
+    FailedCheckTx(String),
 }
 
 /// How long transactions are considered valid in the mempool.
@@ -68,8 +77,8 @@ const REMOVAL_CACHE_SIZE: usize = 50_000;
 /// a transaction is invalidated due to mempool removal policies.
 #[derive(Clone)]
 pub(crate) struct RemovalCache {
-    cache: HashMap<[u8; 32], RemovalReason>,
-    remove_queue: VecDeque<[u8; 32]>,
+    cache: HashMap<TransactionId, RemovalReason>,
+    remove_queue: VecDeque<TransactionId>,
     max_size: NonZeroUsize,
 }
 
@@ -84,14 +93,14 @@ impl RemovalCache {
 
     /// Returns Some(RemovalReason) if the transaction is cached and
     /// removes the entry from the cache if present.
-    fn remove(&mut self, tx_hash: [u8; 32]) -> Option<RemovalReason> {
-        self.cache.remove(&tx_hash)
+    fn remove(&mut self, tx_id: &TransactionId) -> Option<RemovalReason> {
+        self.cache.remove(tx_id)
     }
 
     /// Adds the transaction to the cache, will preserve the original
     /// `RemovalReason` if already in the cache.
-    fn add(&mut self, tx_hash: [u8; 32], reason: RemovalReason) {
-        if self.cache.contains_key(&tx_hash) {
+    fn add(&mut self, tx_id: TransactionId, reason: RemovalReason) {
+        if self.cache.contains_key(&tx_id) {
             return;
         };
 
@@ -100,48 +109,46 @@ impl RemovalCache {
             // size.
             //
             // Make space for the new transaction by removing the oldest transaction.
-            let removed_tx = self
+            let removed_tx_id = self
                 .remove_queue
                 .pop_front()
                 .expect("cache should contain elements");
             warn!(
-                tx_hash = %telemetry::display::hex(&removed_tx),
+                %removed_tx_id,
                 removal_cache_size = REMOVAL_CACHE_SIZE,
                 "popped transaction from appside mempool removal cache, CometBFT will not remove \
                 this transaction from its mempool - removal cache size possibly too low"
             );
             // Remove transaction from cache if it is present.
-            self.cache.remove(&removed_tx);
+            self.cache.remove(&removed_tx_id);
         }
-        self.remove_queue.push_back(tx_hash);
-        self.cache.insert(tx_hash, reason);
+        self.remove_queue.push_back(tx_id);
+        self.cache.insert(tx_id, reason);
     }
 }
 
 struct ContainedTxLock<'a> {
     mempool: &'a Mempool,
-    txs: RwLockWriteGuard<'a, HashSet<[u8; 32]>>,
+    txs: RwLockWriteGuard<'a, HashSet<TransactionId>>,
 }
 
 impl ContainedTxLock<'_> {
-    fn add(&mut self, id: [u8; 32]) {
-        if !self.txs.insert(id) {
+    fn add(&mut self, tx_id: TransactionId) {
+        if !self.txs.insert(tx_id) {
             self.mempool.metrics.increment_internal_logic_error();
             error!(
-                tx_hash = %telemetry::display::hex(&id),
-                "attempted to add transaction already tracked in mempool's tracked container, is logic \
-                error"
+                %tx_id,
+                "attempted to add tx already tracked in mempool's tracked container"
             );
         }
     }
 
-    fn remove(&mut self, id: [u8; 32]) {
-        if !self.txs.remove(&id) {
+    fn remove(&mut self, tx_id: &TransactionId) {
+        if !self.txs.remove(tx_id) {
             self.mempool.metrics.increment_internal_logic_error();
             error!(
-                tx_hash = %telemetry::display::hex(&id),
-                "attempted to remove transaction absent from mempool's tracked container, is logic \
-                error"
+                %tx_id,
+                "attempted to remove tx absent from mempool's tracked container"
             );
         }
     }
@@ -176,7 +183,7 @@ pub(crate) struct Mempool {
     pending: Arc<RwLock<PendingTransactions>>,
     parked: Arc<RwLock<ParkedTransactions<MAX_PARKED_TXS_PER_ACCOUNT>>>,
     comet_bft_removal_cache: Arc<RwLock<RemovalCache>>,
-    contained_txs: Arc<RwLock<HashSet<[u8; 32]>>>,
+    contained_txs: Arc<RwLock<HashSet<TransactionId>>>,
     metrics: &'static Metrics,
 }
 
@@ -214,21 +221,25 @@ impl Mempool {
 
     /// Inserts a transaction into the mempool and does not allow for transaction replacement.
     /// Will return the reason for insertion failure if failure occurs.
-    #[instrument(skip_all, fields(tx_hash = %tx.id(), current_account_nonce), err(level = Level::DEBUG))]
+    #[instrument(
+        skip_all,
+        fields(tx_id = %checked_tx.id(), current_account_nonce),
+        err(level = Level::DEBUG)
+    )]
     pub(crate) async fn insert(
         &self,
-        tx: Arc<Transaction>,
+        checked_tx: Arc<CheckedTransaction>,
         current_account_nonce: u32,
         current_account_balances: HashMap<IbcPrefixed, u128>,
-        transaction_cost: HashMap<IbcPrefixed, u128>,
+        transaction_costs: HashMap<IbcPrefixed, u128>,
     ) -> Result<(), InsertionError> {
-        let timemarked_tx = TimemarkedTransaction::new(tx, transaction_cost);
-        let id = timemarked_tx.id();
+        let ttx_to_insert = TimemarkedTransaction::new(checked_tx, transaction_costs);
+        let tx_id_to_insert = *ttx_to_insert.id();
         let (mut pending, mut parked) = self.acquire_both_locks().await;
 
         // try insert into pending
         match pending.add(
-            timemarked_tx.clone(),
+            ttx_to_insert.clone(),
             current_account_nonce,
             &current_account_balances,
         ) {
@@ -237,7 +248,7 @@ impl Mempool {
                 drop(pending);
                 // try to add to parked queue
                 match parked.add(
-                    timemarked_tx,
+                    ttx_to_insert,
                     current_account_nonce,
                     &current_account_balances,
                 ) {
@@ -247,7 +258,7 @@ impl Mempool {
                             .set_transactions_in_mempool_parked(parked.len());
 
                         // track in contained txs
-                        self.lock_contained_txs().await.add(id);
+                        self.lock_contained_txs().await.add(tx_id_to_insert);
                         Ok(())
                     }
                     Err(err) => Err(err),
@@ -262,29 +273,32 @@ impl Mempool {
             ) => error,
             Ok(()) => {
                 // check parked for txs able to be promoted
-                let to_promote = parked.find_promotables(
-                    timemarked_tx.address(),
-                    timemarked_tx
-                        .nonce()
-                        .checked_add(1)
-                        .expect("failed to increment nonce in promotion"),
-                    &pending.subtract_contained_costs(
-                        timemarked_tx.address(),
-                        current_account_balances.clone(),
-                    ),
+                let address_bytes = ttx_to_insert.address_bytes();
+                let target_nonce = ttx_to_insert
+                    .nonce()
+                    .checked_add(1)
+                    .expect("failed to increment nonce in promotion");
+                let available_balances = pending.subtract_contained_costs(
+                    address_bytes,
+                    current_account_balances.clone(),
+                );
+                let promotables = parked.find_promotables(
+                    address_bytes,
+                    target_nonce,
+                    &available_balances,
                 );
                 // promote the transactions
-                for ttx in to_promote {
-                    let tx_id = ttx.id();
+                for ttx_to_promote in promotables {
+                    let tx_id_to_promote = *ttx_to_promote.id();
                     if let Err(error) =
-                        pending.add(ttx, current_account_nonce, &current_account_balances)
+                        pending.add(ttx_to_promote, current_account_nonce, &current_account_balances)
                     {
                         // NOTE: this branch is not expected to be hit so grabbing the lock inside
                         // of the loop is more performant.
-                        self.lock_contained_txs().await.remove(timemarked_tx.id());
+                        self.lock_contained_txs().await.remove(&tx_id_to_promote);
                         error!(
                             current_account_nonce,
-                            tx_hash = %telemetry::display::hex(&tx_id),
+                            %tx_id_to_promote,
                             %error,
                             "failed to promote transaction during insertion"
                         );
@@ -292,17 +306,30 @@ impl Mempool {
                 }
 
                 // track in contained txs
-                self.lock_contained_txs().await.add(timemarked_tx.id());
+                self.lock_contained_txs().await.add(tx_id_to_insert);
 
                 Ok(())
             }
         }
     }
 
-    /// Returns a copy of all transactions and their hashes ready for execution, sorted first by the
+    /// Calls `CheckedTransaction::run_mutable_checks` on the given transaction.
+    ///
+    /// Returns `Ok` if the transaction is found in pending or parked and passes the mutable checks.
+    /// Returns `Err(None)` if the transaction is not found. Returns `Err(Some)` if the transaction
+    /// is held in the `comet_bft_removal_cache` or if it fails the mutable checks. In this case,
+    /// the transaction is also removed from the mempool entirely.
+    pub(crate) async fn check_tx(
+        &self,
+        tx_id: &TransactionId,
+    ) -> Result<(), Option<RemovalReason>> {
+        todo!();
+    }
+
+    /// Returns a copy of all transactions and their IDs ready for execution, sorted first by the
     /// difference between a transaction and the account's current nonce and then by the time that
     /// the transaction was first seen by the appside mempool.
-    pub(crate) async fn builder_queue(&self) -> Vec<([u8; 32], Arc<Transaction>)> {
+    pub(crate) async fn builder_queue(&self) -> Vec<(TransactionId, Arc<CheckedTransaction>)> {
         self.pending.read().await.builder_queue()
     }
 
@@ -311,26 +338,26 @@ impl Mempool {
     ///
     /// This function should only be used to remove invalid/failing transactions and not executed
     /// transactions. Executed transactions will be removed in the `run_maintenance()` function.
-    #[instrument(skip_all, fields(tx_hash = %signed_tx.id()))]
+    #[instrument(skip_all, fields(tx_id = %checked_tx.id()))]
     pub(crate) async fn remove_tx_invalid(
         &self,
-        signed_tx: Arc<Transaction>,
+        checked_tx: Arc<CheckedTransaction>,
         reason: RemovalReason,
     ) {
-        let tx_hash = signed_tx.id().get();
-        let address = *signed_tx.verification_key().address_bytes();
+        let tx_id = *checked_tx.id();
+        let address_bytes = *checked_tx.address_bytes();
 
         // Try to remove from pending.
-        let removed_txs = match self.pending.write().await.remove(signed_tx) {
-            Ok(mut removed_txs) => {
+        let removed_tx_ids = match self.pending.write().await.remove(checked_tx) {
+            Ok(mut removed_tx_ids) => {
                 // Remove all of parked.
-                removed_txs.append(&mut self.parked.write().await.clear_account(&address));
-                removed_txs
+                removed_tx_ids.append(&mut self.parked.write().await.clear_account(&address_bytes));
+                removed_tx_ids
             }
-            Err(signed_tx) => {
+            Err(checked_tx) => {
                 // Not found in pending, try to remove from parked and if not found, just return.
-                match self.parked.write().await.remove(signed_tx) {
-                    Ok(removed_txs) => removed_txs,
+                match self.parked.write().await.remove(checked_tx) {
+                    Ok(removed_tx_ids) => removed_tx_ids,
                     Err(_) => return,
                 }
             }
@@ -341,25 +368,25 @@ impl Mempool {
 
         // Add the original tx first to preserve its reason for removal. The second
         // attempt to add it inside the loop below will be a no-op.
-        removal_cache.add(tx_hash, reason);
+        removal_cache.add(tx_id, reason);
         let mut contained_lock = self.lock_contained_txs().await;
-        for removed_tx in removed_txs {
-            contained_lock.remove(removed_tx);
-            removal_cache.add(removed_tx, RemovalReason::LowerNonceInvalidated);
+        for removed_tx_id in removed_tx_ids {
+            contained_lock.remove(&removed_tx_id);
+            removal_cache.add(removed_tx_id, RemovalReason::LowerNonceInvalidated);
         }
     }
 
     /// Checks if a transaction was flagged to be removed from the `CometBFT` mempool. Will
     /// remove the transaction from the cache if it is present.
-    #[instrument(skip_all, fields(tx_hash = %hex::encode(tx_hash)))]
-    pub(crate) async fn check_removed_comet_bft(&self, tx_hash: [u8; 32]) -> Option<RemovalReason> {
-        self.comet_bft_removal_cache.write().await.remove(tx_hash)
+    #[instrument(skip_all, fields(%tx_id))]
+    pub(crate) async fn check_removed_comet_bft(&self, tx_id: &TransactionId) -> Option<RemovalReason> {
+        self.comet_bft_removal_cache.write().await.remove(tx_id)
     }
 
     /// Returns true if the transaction is tracked as inserted.
-    #[instrument(skip_all, fields(tx_hash = %hex::encode(tx_hash)))]
-    pub(crate) async fn is_tracked(&self, tx_hash: [u8; 32]) -> bool {
-        self.contained_txs.read().await.contains(&tx_hash)
+    #[instrument(skip_all, fields(%tx_id))]
+    pub(crate) async fn is_tracked(&self, tx_id: &TransactionId) -> bool {
+        self.contained_txs.read().await.contains(tx_id)
     }
 
     /// Updates stored transactions to reflect current blockchain state. Will remove transactions
@@ -371,7 +398,7 @@ impl Mempool {
     #[instrument(skip_all)]
     pub(crate) async fn run_maintenance<S: accounts::StateReadExt>(&self, state: &S, recost: bool) {
         let (mut pending, mut parked) = self.acquire_both_locks().await;
-        let mut removed_txs = Vec::<([u8; 32], RemovalReason)>::new();
+        let mut removed_txs = Vec::<(TransactionId, RemovalReason)>::new();
 
         // To clean we need to:
         // 1.) remove stale and expired transactions
@@ -388,23 +415,23 @@ impl Mempool {
             .collect();
 
         // TODO: Make this concurrent, all account state is separate with IO bound disk reads.
-        for address in &addresses {
+        for address_bytes in &addresses {
             // get current account state
-            let current_nonce = match state.get_account_nonce(address).await {
+            let current_nonce = match state.get_account_nonce(address_bytes).await {
                 Ok(res) => res,
                 Err(error) => {
                     error!(
-                        address = %telemetry::display::base64(&address),
+                        address = %telemetry::display::base64(&address_bytes),
                         "failed to fetch account nonce when cleaning accounts: {error:#}"
                     );
                     continue;
                 }
             };
-            let current_balances = match get_account_balances(state, address).await {
+            let current_balances = match get_account_balances(state, address_bytes).await {
                 Ok(res) => res,
                 Err(error) => {
                     error!(
-                        address = %telemetry::display::base64(address),
+                        address = %telemetry::display::base64(address_bytes),
                         "failed to fetch account balances when cleaning accounts: {error:#}"
                     );
                     continue;
@@ -412,29 +439,29 @@ impl Mempool {
             };
 
             // clean pending and parked of stale and expired
-            removed_txs.extend(pending.clean_account_stale_expired(address, current_nonce));
+            removed_txs.extend(pending.clean_account_stale_expired(address_bytes, current_nonce));
             if recost {
-                pending.recost_transactions(address, state).await;
+                pending.recost_transactions(address_bytes, state).await;
             }
 
-            removed_txs.extend(parked.clean_account_stale_expired(address, current_nonce));
+            removed_txs.extend(parked.clean_account_stale_expired(address_bytes, current_nonce));
             if recost {
-                parked.recost_transactions(address, state).await;
+                parked.recost_transactions(address_bytes, state).await;
             }
 
             // get transactions to demote from pending
-            let demotion_txs = pending.find_demotables(address, &current_balances);
+            let demotion_txs = pending.find_demotables(address_bytes, &current_balances);
 
             if demotion_txs.is_empty() {
                 // nothing to demote, check for transactions to promote
                 let pending_nonce = pending
-                    .pending_nonce(address)
+                    .pending_nonce(address_bytes)
                     .map_or(current_nonce, |nonce| nonce);
 
                 let remaining_balances =
-                    pending.subtract_contained_costs(address, current_balances.clone());
+                    pending.subtract_contained_costs(address_bytes, current_balances.clone());
                 let promotion_txs =
-                    parked.find_promotables(address, pending_nonce, &remaining_balances);
+                    parked.find_promotables(address_bytes, pending_nonce, &remaining_balances);
 
                 for tx in promotion_txs {
                     let tx_id = tx.id();
@@ -445,7 +472,7 @@ impl Mempool {
                         self.lock_contained_txs().await.remove(tx_id);
                         self.metrics.increment_internal_logic_error();
                         error!(
-                            address = %telemetry::display::base64(&address),
+                            address = %telemetry::display::base64(&address_bytes),
                             current_nonce,
                             tx_hash = %telemetry::display::hex(&tx_id),
                             %error,
@@ -464,7 +491,7 @@ impl Mempool {
                         self.lock_contained_txs().await.remove(tx_id);
                         self.metrics.increment_internal_logic_error();
                         error!(
-                            address = %telemetry::display::base64(&address),
+                            address = %telemetry::display::base64(&address_bytes),
                             current_nonce,
                             tx_hash = %telemetry::display::hex(&tx_id),
                             %error,

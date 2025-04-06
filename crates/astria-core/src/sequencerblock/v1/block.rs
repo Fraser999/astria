@@ -877,7 +877,7 @@ impl SequencerBlock {
                     .map_err(SequencerBlockError::transaction_protobuf_decode)?;
             let tx = Transaction::try_from_raw(raw_tx)
                 .map_err(SequencerBlockError::raw_signed_transaction_conversion)?;
-            for action in tx.into_unsigned().into_actions() {
+            for action in tx.into_body().into_actions() {
                 // XXX: The fee asset is dropped. We shjould explain why that's ok.
                 if let action::Action::RollupDataSubmission(action::RollupDataSubmission {
                     rollup_id,

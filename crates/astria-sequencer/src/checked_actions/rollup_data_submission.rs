@@ -1,4 +1,7 @@
-use astria_core::protocol::transaction::v1::action::RollupDataSubmission;
+use astria_core::{
+    primitive::v1::asset::IbcPrefixed,
+    protocol::transaction::v1::action::RollupDataSubmission,
+};
 use astria_eyre::eyre::{
     ensure,
     Result,
@@ -7,6 +10,8 @@ use tracing::{
     instrument,
     Level,
 };
+
+use super::AssetTransfer;
 
 #[derive(Debug)]
 pub(crate) struct CheckedRollupDataSubmission {
@@ -27,25 +32,33 @@ impl CheckedRollupDataSubmission {
 
         Ok(checked_action)
     }
+
+    pub(super) fn action(&self) -> &RollupDataSubmission {
+        &self.action
+    }
+}
+
+impl AssetTransfer for CheckedRollupDataSubmission {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use astria_core::primitive::v1::RollupId;
     use bytes::Bytes;
 
     use super::*;
-    use crate::benchmark_and_test_utils::{
-        assert_eyre_error,
-        nria,
+    use crate::{
+        benchmark_and_test_utils::assert_eyre_error,
+        test_utils::dummy_rollup_data_submission,
     };
 
     #[tokio::test]
     async fn should_fail_construction_if_data_is_empty() {
         let action = RollupDataSubmission {
-            rollup_id: RollupId::new([1; 32]),
             data: Bytes::new(),
-            fee_asset: nria().into(),
+            ..dummy_rollup_data_submission()
         };
         let err = CheckedRollupDataSubmission::new(action).unwrap_err();
 

@@ -1,5 +1,8 @@
 use astria_core::{
-    primitive::v1::ADDRESS_LEN,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        ADDRESS_LEN,
+    },
     protocol::transaction::v1::action::BridgeSudoChange,
 };
 use astria_eyre::eyre::{
@@ -17,7 +20,10 @@ use tracing::{
     Level,
 };
 
-use super::TransactionSignerAddressBytes;
+use super::{
+    AssetTransfer,
+    TransactionSignerAddressBytes,
+};
 use crate::{
     address::StateReadExt as _,
     bridge::{
@@ -70,6 +76,27 @@ impl CheckedBridgeSudoChange {
     }
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
+    pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
+        // check that the signer of this tx is the authorized sudo address for the bridge account
+        let Some(sudo_address) = state
+            .get_bridge_account_sudo_address(&self.action.bridge_address)
+            .await
+            .wrap_err("failed to read bridge account sudo address from storage")?
+        else {
+            // TODO: if the sudo address is unset, should we still allow this action
+            // if the signer is the bridge address itself?
+            bail!("bridge account does not have an associated sudo address in storage");
+        };
+
+        ensure!(
+            &sudo_address == self.tx_signer.as_bytes(),
+            "transaction signer not authorized to change bridge sudo address",
+        );
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
 
@@ -91,67 +118,48 @@ impl CheckedBridgeSudoChange {
         Ok(())
     }
 
-    async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
-        // check that the signer of this tx is the authorized sudo address for the bridge account
-        let Some(sudo_address) = state
-            .get_bridge_account_sudo_address(&self.action.bridge_address)
-            .await
-            .wrap_err("failed to read bridge account sudo address from storage")?
-        else {
-            // TODO: if the sudo address is unset, should we still allow this action
-            // if the signer is the bridge address itself?
-            bail!("bridge account does not have an associated sudo address in storage");
-        };
+    pub(super) fn action(&self) -> &BridgeSudoChange {
+        &self.action
+    }
+}
 
-        ensure!(
-            &sudo_address == self.tx_signer.as_bytes(),
-            "transaction signer not authorized to change bridge sudo address",
-        );
-
-        Ok(())
+impl AssetTransfer for CheckedBridgeSudoChange {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use astria_core::protocol::transaction::v1::action::BridgeSudoChange;
-
     use super::{
-        super::test_utils::{
-            address_with_prefix,
-            Fixture,
-        },
+        super::test_utils::address_with_prefix,
         *,
     };
-    use crate::benchmark_and_test_utils::{
-        assert_eyre_error,
-        astria_address,
-        ASTRIA_PREFIX,
+    use crate::{
+        benchmark_and_test_utils::ASTRIA_PREFIX,
+        test_utils::{
+            assert_error_contains,
+            dummy_bridge_sudo_change,
+            Fixture,
+            SUDO_ADDRESS_BYTES,
+        },
     };
-
-    fn new_bridge_sudo_change() -> BridgeSudoChange {
-        BridgeSudoChange {
-            bridge_address: astria_address(&[99; ADDRESS_LEN]),
-            new_sudo_address: Some(astria_address(&[98; ADDRESS_LEN])),
-            new_withdrawer_address: Some(astria_address(&[97; ADDRESS_LEN])),
-            fee_asset: "test".parse().unwrap(),
-        }
-    }
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let prefix = "different_prefix";
         let action = BridgeSudoChange {
             bridge_address: address_with_prefix([50; ADDRESS_LEN], prefix),
-            ..new_bridge_sudo_change()
+            ..dummy_bridge_sudo_change()
         };
-        let err = CheckedBridgeSudoChange::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -159,18 +167,19 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_new_sudo_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let prefix = "different_prefix";
         let action = BridgeSudoChange {
             new_sudo_address: Some(address_with_prefix([50; ADDRESS_LEN], prefix)),
-            ..new_bridge_sudo_change()
+            ..dummy_bridge_sudo_change()
         };
-        let err = CheckedBridgeSudoChange::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -178,18 +187,19 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_new_withdrawer_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let prefix = "different_prefix";
         let action = BridgeSudoChange {
             new_withdrawer_address: Some(address_with_prefix([50; ADDRESS_LEN], prefix)),
-            ..new_bridge_sudo_change()
+            ..dummy_bridge_sudo_change()
         };
-        let err = CheckedBridgeSudoChange::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -197,14 +207,15 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_sudo_address_not_set() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_sudo_change();
-        let err = CheckedBridgeSudoChange::new(action, fixture.tx_signer, fixture.state)
+        let action = dummy_bridge_sudo_change();
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "bridge account does not have an associated sudo address",
         );
@@ -212,22 +223,18 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_signer_is_not_bridge_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_sudo_change();
-        // Store a sudo address different from the tx signer address.
-        let sudo_address = [2; ADDRESS_LEN];
-        assert_ne!(fixture.tx_signer, sudo_address);
-        fixture
-            .state
-            .put_bridge_account_sudo_address(&action.bridge_address, sudo_address)
-            .unwrap();
+        let action = dummy_bridge_sudo_change();
+        let tx_signer = [2; ADDRESS_LEN];
+        assert_ne!(tx_signer, *SUDO_ADDRESS_BYTES);
 
-        let err = CheckedBridgeSudoChange::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, tx_signer)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to change bridge sudo address",
         );
@@ -235,46 +242,45 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_execution_if_signer_is_not_bridge_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_sudo_change();
+        let action = dummy_bridge_sudo_change();
         let bridge_address = action.bridge_address;
-        // Store the tx signer address as the sudo address.
-        fixture
-            .state
-            .put_bridge_account_sudo_address(&bridge_address, fixture.tx_signer)
-            .unwrap();
+        // Store `SUDO_ADDRESS_BYTES` as the sudo address.
+        fixture.bridge_initializer(bridge_address).init();
 
         // Construct two checked bridge sudo change actions while the sudo address is still the
-        // tx signer so construction succeeds.
-        let checked_action_1 =
-            CheckedBridgeSudoChange::new(action.clone(), fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
-        let checked_action_2 =
-            CheckedBridgeSudoChange::new(action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        // `SUDO_ADDRESS_BYTES` so construction succeeds.
+        let checked_action_1: CheckedBridgeSudoChange = fixture
+            .new_checked_action(action.clone(), *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
+        let checked_action_2: CheckedBridgeSudoChange = fixture
+            .new_checked_action(action.clone(), *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
 
         // Execute the first checked action to change the sudo address to one different from the tx
         // signer address.
-        checked_action_1.execute(&mut fixture.state).await.unwrap();
+        checked_action_1.execute(fixture.state_mut()).await.unwrap();
         let new_sudo_address = fixture
-            .state
+            .state()
             .get_bridge_account_sudo_address(&bridge_address)
             .await
             .expect("should get bridge sudo address")
             .expect("bridge sudo address should be Some");
-        assert_ne!(fixture.tx_signer, new_sudo_address);
+        assert_ne!(*SUDO_ADDRESS_BYTES, new_sudo_address);
 
         // Try to execute the second checked action now - should fail due to signer no longer being
         // authorized.
         let err = checked_action_2
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to change bridge sudo address",
         );
@@ -282,26 +288,24 @@ mod tests {
 
     #[tokio::test]
     async fn should_execute() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_sudo_change();
+        let action = dummy_bridge_sudo_change();
         let bridge_address = action.bridge_address;
         let new_sudo_address = action.new_sudo_address.unwrap();
         let new_withdrawer_address = action.new_withdrawer_address.unwrap();
-        fixture
-            .state
-            .put_bridge_account_sudo_address(&bridge_address, fixture.tx_signer)
-            .unwrap();
-        let checked_action =
-            CheckedBridgeSudoChange::new(action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        fixture.bridge_initializer(bridge_address).init();
+        let checked_action: CheckedBridgeSudoChange = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
 
-        checked_action.execute(&mut fixture.state).await.unwrap();
+        checked_action.execute(fixture.state_mut()).await.unwrap();
 
         assert_eq!(
             fixture
-                .state
+                .state()
                 .get_bridge_account_sudo_address(&bridge_address)
                 .await
                 .unwrap(),
@@ -309,7 +313,7 @@ mod tests {
         );
         assert_eq!(
             fixture
-                .state
+                .state()
                 .get_bridge_account_withdrawer_address(&bridge_address)
                 .await
                 .unwrap(),

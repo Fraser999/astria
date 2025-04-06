@@ -1,6 +1,9 @@
 use astria_core::{
     primitive::v1::{
-        asset::Denom,
+        asset::{
+            Denom,
+            IbcPrefixed,
+        },
         TransactionId,
         ADDRESS_LEN,
     },
@@ -23,7 +26,10 @@ use tracing::{
     Level,
 };
 
-use super::TransactionSignerAddressBytes;
+use super::{
+    AssetTransfer,
+    TransactionSignerAddressBytes,
+};
 use crate::{
     accounts::StateWriteExt as _,
     address::StateReadExt as _,
@@ -123,6 +129,7 @@ impl<const PURE_LOCK: bool> CheckedBridgeLockImpl<PURE_LOCK> {
         Ok(checked_action)
     }
 
+    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         if PURE_LOCK
             && state
@@ -140,6 +147,10 @@ impl<const PURE_LOCK: bool> CheckedBridgeLockImpl<PURE_LOCK> {
         let deposit_abci_event = create_deposit_event(&self.deposit);
         state.cache_deposit_event(self.deposit.clone());
         state.record(deposit_abci_event);
+    }
+
+    pub(super) fn action(&self) -> &BridgeLock {
+        &self.action
     }
 }
 
@@ -164,10 +175,6 @@ impl CheckedBridgeLockImpl<true> {
 }
 
 impl CheckedBridgeLockImpl<false> {
-    pub(super) fn action(&self) -> &BridgeLock {
-        &self.action
-    }
-
     pub(super) fn tx_id(&self) -> &TransactionId {
         &self.tx_id
     }
@@ -177,11 +184,18 @@ impl CheckedBridgeLockImpl<false> {
     }
 }
 
+impl<const PURE_LOCK: bool> AssetTransfer for CheckedBridgeLockImpl<PURE_LOCK> {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        Some((self.action.asset.to_ibc_prefixed(), self.action.amount))
+    }
+}
+
 // NOTE: unit tests here cover only `CheckedBridgeLockImpl<true>`.  Test coverage of
 // `CheckedBridgeLockImpl<false>` is in `checked_actions::bridge_transfer`.
 #[cfg(test)]
 mod tests {
     use astria_core::{
+        crypto::ADDRESS_LENGTH,
         primitive::v1::{
             asset::{
                 IbcPrefixed,
@@ -193,61 +207,39 @@ mod tests {
     };
 
     use super::{
-        super::{
-            test_utils::{
-                address_with_prefix,
-                Fixture,
-            },
-            CheckedAction,
-        },
+        super::test_utils::address_with_prefix,
         *,
     };
     use crate::{
         assets::StateWriteExt as _,
         benchmark_and_test_utils::{
-            assert_eyre_error,
             astria_address,
-            nria,
             ASTRIA_PREFIX,
+        },
+        checked_actions::CheckedInitBridgeAccount,
+        test_utils::{
+            assert_error_contains,
+            dummy_bridge_lock,
+            Fixture,
+            SUDO_ADDRESS_BYTES,
         },
     };
 
-    fn new_bridge_lock() -> BridgeLock {
-        BridgeLock {
-            to: astria_address(&[50; ADDRESS_LEN]),
-            amount: 100,
-            asset: nria().into(),
-            fee_asset: nria().into(),
-            destination_chain_address: "test-chain".to_string(),
-        }
-    }
-
-    async fn new_checked_bridge_lock(
-        fixture: &Fixture,
-        action: BridgeLock,
-    ) -> Result<CheckedBridgeLock> {
-        CheckedBridgeLock::new(
-            action,
-            fixture.tx_signer,
-            TransactionId::new([10; 32]),
-            11,
-            &fixture.state,
-        )
-        .await
-    }
-
     #[tokio::test]
     async fn should_fail_construction_if_destination_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let prefix = "different_prefix";
         let action = BridgeLock {
             to: address_with_prefix([50; ADDRESS_LEN], prefix),
-            ..new_bridge_lock()
+            ..dummy_bridge_lock()
         };
-        let err = new_checked_bridge_lock(&fixture, action).await.unwrap_err();
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -255,20 +247,19 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_destination_asset_not_allowed() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         let action = BridgeLock {
             asset: Denom::IbcPrefixed(IbcPrefixed::new([10; 32])),
-            ..new_bridge_lock()
+            ..dummy_bridge_lock()
         };
-        fixture
-            .state
-            .put_bridge_account_ibc_asset(&action.to, nria())
-            .unwrap();
+        fixture.bridge_initializer(action.to).init();
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap_err();
 
-        let err = new_checked_bridge_lock(&fixture, action).await.unwrap_err();
-
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "asset ID is not authorized for transfer to bridge account",
         );
@@ -276,36 +267,42 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_account_rollup_id_not_found() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_lock();
+        let action = dummy_bridge_lock();
         fixture
             .bridge_initializer(action.to)
             .with_no_rollup_id()
             .init();
 
-        let err = new_checked_bridge_lock(&fixture, action).await.unwrap_err();
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap_err();
 
-        assert_eyre_error(&err, "bridge lock must be sent to a bridge account");
+        assert_error_contains(&err, "bridge lock must be sent to a bridge account");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_asset_mapping_fails() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         let asset = Denom::IbcPrefixed(IbcPrefixed::new([10; 32]));
         let action = BridgeLock {
             asset: asset.clone(),
-            ..new_bridge_lock()
+            ..dummy_bridge_lock()
         };
         fixture
             .bridge_initializer(action.to)
             .with_asset(asset)
             .init();
 
-        let err = new_checked_bridge_lock(&fixture, action).await.unwrap_err();
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "mapping from IBC prefixed bridge asset to trace prefixed not found",
         );
@@ -313,42 +310,36 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_signer_is_bridge_account() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_lock();
+        let action = dummy_bridge_lock();
+        fixture.bridge_initializer(action.to).init();
+        let tx_signer = [2; ADDRESS_LENGTH];
         fixture
-            .state
-            .put_bridge_account_ibc_asset(&action.to, nria())
-            .unwrap();
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&action.to, RollupId::new([1; 32]))
-            .unwrap();
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&fixture.tx_signer, RollupId::new([2; 32]))
-            .unwrap();
+            .bridge_initializer(astria_address(&tx_signer))
+            .init();
 
-        let err = new_checked_bridge_lock(&fixture, action).await.unwrap_err();
+        let err = fixture
+            .new_checked_action(action, tx_signer)
+            .await
+            .unwrap_err();
 
-        assert_eyre_error(&err, "bridge accounts cannot send bridge locks");
+        assert_error_contains(&err, "bridge accounts cannot send bridge locks");
     }
 
     #[tokio::test]
     async fn should_fail_execution_if_signer_is_bridge_account() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         // Construct a checked bridge lock while the signer account is not a bridge account.
-        let action = new_bridge_lock();
-        fixture
-            .state
-            .put_bridge_account_ibc_asset(&action.to, nria())
-            .unwrap();
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&action.to, RollupId::new([1; 32]))
-            .unwrap();
-        let checked_action = new_checked_bridge_lock(&fixture, action).await.unwrap();
+        let action = dummy_bridge_lock();
+        fixture.bridge_initializer(action.to).init();
+        let tx_signer = [2; ADDRESS_LENGTH];
+        let checked_action: CheckedBridgeLock = fixture
+            .new_checked_action(action, tx_signer)
+            .await
+            .unwrap()
+            .into();
 
         // Initialize the signer's account as a bridge account.
         let init_bridge_account = InitBridgeAccount {
@@ -358,92 +349,84 @@ mod tests {
             sudo_address: None,
             withdrawer_address: None,
         };
-        let checked_init_bridge_account = CheckedAction::new_init_bridge_account(
-            init_bridge_account,
-            fixture.tx_signer,
-            &fixture.state,
-        )
-        .await
-        .unwrap();
+        let checked_init_bridge_account: CheckedInitBridgeAccount = fixture
+            .new_checked_action(init_bridge_account, tx_signer)
+            .await
+            .unwrap()
+            .into();
         checked_init_bridge_account
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
 
         // Try to execute the checked bridge lock now - should fail due to bridge account now
         // existing.
         let err = checked_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "bridge accounts cannot send bridge locks");
+        assert_error_contains(&err, "bridge accounts cannot send bridge locks");
     }
 
     #[tokio::test]
     async fn should_fail_execution_if_signer_account_has_insufficient_balance() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        let action = new_bridge_lock();
-        fixture
-            .state
-            .put_bridge_account_ibc_asset(&action.to, nria())
-            .unwrap();
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&action.to, RollupId::new([1; 32]))
-            .unwrap();
-        let checked_action = new_checked_bridge_lock(&fixture, action).await.unwrap();
+        let action = dummy_bridge_lock();
+        fixture.bridge_initializer(action.to).init();
+        let tx_signer = [2; ADDRESS_LENGTH];
+        let checked_action: CheckedBridgeLock = fixture
+            .new_checked_action(action, tx_signer)
+            .await
+            .unwrap()
+            .into();
 
         let err = checked_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "failed to decrease signer account balance");
+        assert_error_contains(&err, "failed to decrease signer account balance");
     }
 
     #[tokio::test]
     async fn should_execute() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         // Construct the checked bridge lock while the account has insufficient balance to ensure
         // balance checks are only part of execution.
-        let action = new_bridge_lock();
-        let rollup_id = RollupId::new([1; 32]);
+        let action = dummy_bridge_lock();
+        let rollup_id = RollupId::new([10; 32]);
         fixture
-            .state
-            .put_bridge_account_ibc_asset(&action.to, nria())
-            .unwrap();
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&action.to, rollup_id)
-            .unwrap();
-        let checked_action = new_checked_bridge_lock(&fixture, action.clone())
+            .bridge_initializer(action.to)
+            .with_rollup_id(rollup_id)
+            .init();
+        let tx_signer = [2; ADDRESS_LENGTH];
+        let checked_action: CheckedBridgeLock = fixture
+            .new_checked_action(action.clone(), tx_signer)
             .await
-            .unwrap();
+            .unwrap()
+            .into();
 
         // Provide the signer account with sufficient balance.
         fixture
-            .state
-            .increase_balance(&fixture.tx_signer, &action.asset, action.amount)
+            .state_mut()
+            .increase_balance(&tx_signer, &action.asset, action.amount)
             .await
             .unwrap();
 
         // Check the balances are correct before execution.
-        assert_eq!(
-            fixture.get_nria_balance(&fixture.tx_signer).await,
-            action.amount
-        );
+        assert_eq!(fixture.get_nria_balance(&tx_signer).await, action.amount);
         assert_eq!(fixture.get_nria_balance(&action.to).await, 0);
 
-        checked_action.execute(&mut fixture.state).await.unwrap();
+        checked_action.execute(fixture.state_mut()).await.unwrap();
 
         // Check the balances are correct after execution.
-        assert_eq!(fixture.get_nria_balance(&fixture.tx_signer).await, 0);
+        assert_eq!(fixture.get_nria_balance(&tx_signer).await, 0);
         assert_eq!(fixture.get_nria_balance(&action.to).await, action.amount);
 
         // Check the deposit is recorded.
         let deposits = fixture
-            .state
+            .state()
             .get_cached_block_deposits()
             .get(&rollup_id)
             .unwrap()
@@ -462,14 +445,14 @@ mod tests {
         assert_eq!(deposit.source_action_index, checked_action.position_in_tx);
 
         // Check the deposit event is cached.
-        let deposit_events = fixture.state.flatten().1.take_events();
+        let deposit_events = fixture.into_events();
         assert_eq!(deposit_events.len(), 1);
         assert_eq!(deposit_events[0].kind, "tx.deposit");
     }
 
     #[tokio::test]
     async fn should_map_ibc_to_trace_prefixed_for_deposit() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         // Construct the bridge lock with an IBC denom, and check it is recorded in the `Deposit` as
         // trace-prefixed.
@@ -477,33 +460,36 @@ mod tests {
         let ibc_asset = trace_asset.to_ibc_prefixed();
         let action = BridgeLock {
             asset: Denom::IbcPrefixed(ibc_asset),
-            ..new_bridge_lock()
+            ..dummy_bridge_lock()
         };
 
+        let rollup_id = RollupId::new([10; 32]);
         fixture
-            .state
-            .put_bridge_account_ibc_asset(&action.to, ibc_asset)
-            .unwrap();
-        let rollup_id = RollupId::new([1; 32]);
+            .bridge_initializer(action.to)
+            .with_rollup_id(rollup_id)
+            .with_asset(ibc_asset)
+            .init();
         fixture
-            .state
-            .put_bridge_account_rollup_id(&action.to, rollup_id)
+            .state_mut()
+            .put_ibc_asset(trace_asset.clone())
             .unwrap();
-        fixture.state.put_ibc_asset(trace_asset.clone()).unwrap();
-        let checked_action = new_checked_bridge_lock(&fixture, action.clone())
+        let tx_signer = [2; ADDRESS_LENGTH];
+        let checked_action: CheckedBridgeLock = fixture
+            .new_checked_action(action.clone(), tx_signer)
+            .await
+            .unwrap()
+            .into();
+
+        fixture
+            .state_mut()
+            .increase_balance(&tx_signer, &action.asset, action.amount)
             .await
             .unwrap();
 
-        fixture
-            .state
-            .increase_balance(&fixture.tx_signer, &action.asset, action.amount)
-            .await
-            .unwrap();
-
-        checked_action.execute(&mut fixture.state).await.unwrap();
+        checked_action.execute(fixture.state_mut()).await.unwrap();
 
         let deposits = &fixture
-            .state
+            .state()
             .get_cached_block_deposits()
             .get(&rollup_id)
             .unwrap()

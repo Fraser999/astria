@@ -6,7 +6,10 @@ use std::fmt::{
 
 use astria_core::{
     primitive::v1::{
-        asset::Denom,
+        asset::{
+            Denom,
+            IbcPrefixed,
+        },
         Address,
         Bech32,
         ADDRESS_LEN,
@@ -46,7 +49,10 @@ use tracing::{
     Level,
 };
 
-use super::TransactionSignerAddressBytes;
+use super::{
+    AssetTransfer,
+    TransactionSignerAddressBytes,
+};
 use crate::{
     accounts::StateWriteExt as _,
     address::StateReadExt as _,
@@ -62,9 +68,7 @@ use crate::{
 };
 
 pub(crate) struct CheckedIcs20Withdrawal {
-    amount: u128,
-    denom: Denom,
-    fee_asset: Denom,
+    action: Ics20Withdrawal,
     withdrawal_address: [u8; ADDRESS_LEN],
     bridge_address_and_rollup_withdrawal: Option<(Address, Ics20WithdrawalFromRollup)>,
     ibc_packet: IBCPacket<Unchecked>,
@@ -123,16 +127,11 @@ impl CheckedIcs20Withdrawal {
             None
         };
 
-        let amount = action.amount;
-        let denom = action.denom.clone();
-        let fee_asset = action.fee_asset.clone();
-        let ibc_packet = create_ibc_packet_from_withdrawal(action, &state).await?;
+        let ibc_packet = create_ibc_packet_from_withdrawal(action.clone(), &state).await?;
         let tx_signer = TransactionSignerAddressBytes::from(tx_signer);
 
         let checked_action = Self {
-            amount,
-            denom,
-            fee_asset,
+            action,
             withdrawal_address,
             bridge_address_and_rollup_withdrawal,
             ibc_packet,
@@ -144,71 +143,7 @@ impl CheckedIcs20Withdrawal {
     }
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
-    pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        self.run_mutable_checks(&state).await?;
-        if let Some((_bridge_address, rollup_withdrawal)) =
-            &self.bridge_address_and_rollup_withdrawal
-        {
-            state
-                .put_withdrawal_event_block_for_bridge_account(
-                    &self.withdrawal_address,
-                    &rollup_withdrawal.rollup_withdrawal_event_id,
-                    rollup_withdrawal.rollup_block_number,
-                )
-                .wrap_err("failed to write withdrawal event block to storage")?;
-        }
-
-        let current_timestamp = state
-            .get_block_timestamp()
-            .await
-            .wrap_err("failed to read block timestamp from storage")?;
-        // `IBCPacket<Unchecked>` doesn't implement `Clone` - manually clone it.
-        let unchecked_packet = IBCPacket::new(
-            self.ibc_packet.source_port().clone(),
-            self.ibc_packet.source_channel().clone(),
-            *self.ibc_packet.timeout_height(),
-            self.ibc_packet.timeout_timestamp(),
-            self.ibc_packet.data().to_vec(),
-        );
-        let checked_packet = state
-            .send_packet_check(unchecked_packet, current_timestamp)
-            .await
-            .map_err(anyhow_to_eyre)
-            .wrap_err("ibc packet failed send check")?;
-
-        state
-            .decrease_balance(&self.withdrawal_address, &self.denom, self.amount)
-            .await
-            .wrap_err("failed to decrease sender or bridge balance")?;
-
-        // If we're the source, move tokens to the escrow account, otherwise the tokens are just
-        // burned.
-        if is_source(
-            checked_packet.source_port(),
-            checked_packet.source_channel(),
-            &self.denom,
-        ) {
-            let channel_balance = state
-                .get_ibc_channel_balance(self.ibc_packet.source_channel(), &self.denom)
-                .await
-                .wrap_err("failed to read channel balance from storage")?;
-
-            state
-                .put_ibc_channel_balance(
-                    self.ibc_packet.source_channel(),
-                    &self.denom,
-                    channel_balance
-                        .checked_add(self.amount)
-                        .ok_or_eyre("overflow when adding to channel balance")?,
-                )
-                .wrap_err("failed to write channel balance to storage")?;
-        }
-
-        state.send_packet_execute(checked_packet).await;
-        Ok(())
-    }
-
-    async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
+    pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         if let Some((bridge_address, rollup_withdrawal)) =
             &self.bridge_address_and_rollup_withdrawal
         {
@@ -248,15 +183,92 @@ impl CheckedIcs20Withdrawal {
 
         Ok(())
     }
+
+    #[instrument(skip_all, err(level = Level::DEBUG))]
+    pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
+        self.run_mutable_checks(&state).await?;
+        if let Some((_bridge_address, rollup_withdrawal)) =
+            &self.bridge_address_and_rollup_withdrawal
+        {
+            state
+                .put_withdrawal_event_block_for_bridge_account(
+                    &self.withdrawal_address,
+                    &rollup_withdrawal.rollup_withdrawal_event_id,
+                    rollup_withdrawal.rollup_block_number,
+                )
+                .wrap_err("failed to write withdrawal event block to storage")?;
+        }
+
+        let current_timestamp = state
+            .get_block_timestamp()
+            .await
+            .wrap_err("failed to read block timestamp from storage")?;
+        // `IBCPacket<Unchecked>` doesn't implement `Clone` - manually clone it.
+        let unchecked_packet = IBCPacket::new(
+            self.ibc_packet.source_port().clone(),
+            self.ibc_packet.source_channel().clone(),
+            *self.ibc_packet.timeout_height(),
+            self.ibc_packet.timeout_timestamp(),
+            self.ibc_packet.data().to_vec(),
+        );
+        let checked_packet = state
+            .send_packet_check(unchecked_packet, current_timestamp)
+            .await
+            .map_err(anyhow_to_eyre)
+            .wrap_err("ibc packet failed send check")?;
+
+        state
+            .decrease_balance(
+                &self.withdrawal_address,
+                &self.action.denom,
+                self.action.amount,
+            )
+            .await
+            .wrap_err("failed to decrease sender or bridge balance")?;
+
+        // If we're the source, move tokens to the escrow account, otherwise the tokens are just
+        // burned.
+        if is_source(
+            checked_packet.source_port(),
+            checked_packet.source_channel(),
+            &self.action.denom,
+        ) {
+            let channel_balance = state
+                .get_ibc_channel_balance(self.ibc_packet.source_channel(), &self.action.denom)
+                .await
+                .wrap_err("failed to read channel balance from storage")?;
+
+            state
+                .put_ibc_channel_balance(
+                    self.ibc_packet.source_channel(),
+                    &self.action.denom,
+                    channel_balance
+                        .checked_add(self.action.amount)
+                        .ok_or_eyre("overflow when adding to channel balance")?,
+                )
+                .wrap_err("failed to write channel balance to storage")?;
+        }
+
+        state.send_packet_execute(checked_packet).await;
+        Ok(())
+    }
+
+    pub(super) fn action(&self) -> &Ics20Withdrawal {
+        &self.action
+    }
+}
+
+impl AssetTransfer for CheckedIcs20Withdrawal {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        Some((self.action.denom.to_ibc_prefixed(), self.action.amount))
+    }
 }
 
 impl Debug for CheckedIcs20Withdrawal {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CheckedIcs20Withdrawal")
-            .field("amount", &self.amount)
-            .field("denom", &self.denom)
-            .field("fee_asset", &self.fee_asset)
+            .field("action", &self.action)
             .field("withdrawal_address", &self.withdrawal_address)
             .field(
                 "bridge_address_and_rollup_withdrawal",
@@ -335,167 +347,49 @@ mod tests {
     use std::iter;
 
     use astria_core::{
-        primitive::v1::{
-            Address,
-            RollupId,
-        },
+        primitive::v1::RollupId,
         protocol::transaction::v1::action::{
             BridgeSudoChange,
-            Ics20Withdrawal,
+            InitBridgeAccount,
         },
     };
-    use ibc_types::core::client::Height;
 
     use super::{
-        super::{
-            test_utils::{
-                address_with_prefix,
-                test_asset,
-                Fixture,
-            },
-            CheckedAction,
-        },
+        super::test_utils::address_with_prefix,
         *,
     };
-    use crate::benchmark_and_test_utils::{
-        assert_eyre_error,
-        astria_address,
-        ASTRIA_PREFIX,
+    use crate::{
+        benchmark_and_test_utils::{
+            astria_address,
+            ASTRIA_PREFIX,
+        },
+        checked_actions::{
+            CheckedBridgeSudoChange,
+            CheckedInitBridgeAccount,
+        },
+        test_utils::{
+            assert_error_contains,
+            Fixture,
+            Ics20WithdrawalBuilder,
+            SUDO_ADDRESS,
+            SUDO_ADDRESS_BYTES,
+        },
     };
-
-    fn new_rollup_withdrawal() -> Ics20WithdrawalFromRollup {
-        Ics20WithdrawalFromRollup {
-            rollup_block_number: 2,
-            rollup_withdrawal_event_id: "event-1".to_string(),
-            rollup_return_address: "abc".to_string(),
-            memo: "a memo".to_string(),
-        }
-    }
-
-    struct Ics20WithdrawalBuilder {
-        amount: u128,
-        return_address: Address,
-        timeout_time: u64,
-        bridge_address: Option<Address>,
-        rollup_withdrawal: Option<Ics20WithdrawalFromRollup>,
-    }
-
-    impl Ics20WithdrawalBuilder {
-        fn new() -> Self {
-            Self {
-                amount: 1,
-                return_address: astria_address(&[1; ADDRESS_LEN]),
-                timeout_time: 100_000_000_000,
-                bridge_address: None,
-                rollup_withdrawal: None,
-            }
-        }
-
-        fn with_amount(mut self, amount: u128) -> Self {
-            self.amount = amount;
-            self
-        }
-
-        fn with_return_address(mut self, return_address: Address) -> Self {
-            self.return_address = return_address;
-            self
-        }
-
-        fn with_timeout_time(mut self, timeout_time: u64) -> Self {
-            self.timeout_time = timeout_time;
-            self
-        }
-
-        fn with_bridge_address(mut self, bridge_address: Address) -> Self {
-            self.bridge_address = Some(bridge_address);
-            self
-        }
-
-        fn with_default_rollup_withdrawal(mut self) -> Self {
-            self.rollup_withdrawal = Some(new_rollup_withdrawal());
-            self
-        }
-
-        fn with_rollup_return_address<T: Into<String>>(mut self, rollup_return_address: T) -> Self {
-            if self.rollup_withdrawal.is_none() {
-                self.rollup_withdrawal = Some(new_rollup_withdrawal());
-            }
-            self.rollup_withdrawal
-                .as_mut()
-                .unwrap()
-                .rollup_return_address = rollup_return_address.into();
-            self
-        }
-
-        fn with_rollup_withdrawal_event_id<T: Into<String>>(
-            mut self,
-            rollup_withdrawal_event_id: T,
-        ) -> Self {
-            if self.rollup_withdrawal.is_none() {
-                self.rollup_withdrawal = Some(new_rollup_withdrawal());
-            }
-            self.rollup_withdrawal
-                .as_mut()
-                .unwrap()
-                .rollup_withdrawal_event_id = rollup_withdrawal_event_id.into();
-            self
-        }
-
-        fn with_rollup_block_number(mut self, rollup_block_number: u64) -> Self {
-            if self.rollup_withdrawal.is_none() {
-                self.rollup_withdrawal = Some(new_rollup_withdrawal());
-            }
-            self.rollup_withdrawal.as_mut().unwrap().rollup_block_number = rollup_block_number;
-            self
-        }
-
-        fn build(self) -> Ics20Withdrawal {
-            let Self {
-                amount,
-                return_address,
-                timeout_time,
-                bridge_address,
-                rollup_withdrawal,
-            } = self;
-            let memo = rollup_withdrawal
-                .map(|rollup_withdrawal| {
-                    assert!(
-                        bridge_address.is_some(),
-                        "setting rollup withdrawal fields has no effect if bridge address is not \
-                         set"
-                    );
-                    serde_json::to_string(&rollup_withdrawal).unwrap()
-                })
-                .unwrap_or_default();
-            Ics20Withdrawal {
-                amount,
-                denom: test_asset(),
-                destination_chain_address: "test-chain".to_string(),
-                return_address,
-                timeout_height: Height::new(10, 1).unwrap(),
-                timeout_time,
-                source_channel: "channel-0".to_string().parse().unwrap(),
-                fee_asset: test_asset(),
-                memo,
-                bridge_address,
-                use_compat_address: false,
-            }
-        }
-    }
 
     #[tokio::test]
     async fn should_fail_construction_if_return_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let prefix = "different_prefix";
         let action = Ics20WithdrawalBuilder::new()
             .with_return_address(address_with_prefix([50; ADDRESS_LEN], prefix))
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -503,41 +397,44 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_timeout_time_is_zero() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new().with_timeout_time(0).build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "timeout time must be non-zero");
+        assert_error_contains(&err, "timeout time must be non-zero");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_amount_is_zero() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new().with_amount(0).build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "amount must be greater than zero");
+        assert_error_contains(&err, "amount must be greater than zero");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let prefix = "different_prefix";
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(address_with_prefix([50; ADDRESS_LEN], prefix))
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -545,76 +442,81 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_memo_fails_to_parse() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(astria_address(&[2; ADDRESS_LEN]))
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "failed to parse memo for ICS bound bridge withdrawal");
+        assert_error_contains(&err, "failed to parse memo for ICS bound bridge withdrawal");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_rollup_return_address_is_empty() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(astria_address(&[2; ADDRESS_LEN]))
             .with_rollup_return_address("")
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "rollup return address must be non-empty");
+        assert_error_contains(&err, "rollup return address must be non-empty");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_rollup_return_address_is_too_long() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(astria_address(&[2; ADDRESS_LEN]))
             .with_rollup_return_address(iter::repeat_n('a', 257).collect::<String>())
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "rollup return address must be no more than 256 bytes");
+        assert_error_contains(&err, "rollup return address must be no more than 256 bytes");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_rollup_withdrawal_event_id_is_empty() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(astria_address(&[2; ADDRESS_LEN]))
             .with_rollup_withdrawal_event_id("")
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "rollup withdrawal event id must be non-empty");
+        assert_error_contains(&err, "rollup withdrawal event id must be non-empty");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_rollup_withdrawal_event_id_is_too_long() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(astria_address(&[2; ADDRESS_LEN]))
             .with_rollup_withdrawal_event_id(iter::repeat_n('a', 257).collect::<String>())
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "rollup withdrawal event id must be no more than 256 bytes",
         );
@@ -622,39 +524,41 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_rollup_block_number_is_zero() {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(astria_address(&[2; ADDRESS_LEN]))
             .with_rollup_block_number(0)
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(&err, "rollup block number must be non-zero");
+        assert_error_contains(&err, "rollup block number must be non-zero");
     }
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_account_withdrawer_is_not_tx_signer() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
         let bridge_address = astria_address(&[2; ADDRESS_LEN]);
         let withdrawer_address = astria_address(&[3; ADDRESS_LEN]);
-        assert_ne!(withdrawer_address.bytes(), fixture.tx_signer);
         fixture
-            .state
-            .put_bridge_account_withdrawer_address(&bridge_address, withdrawer_address)
-            .unwrap();
+            .bridge_initializer(bridge_address)
+            .with_withdrawer_address(withdrawer_address.bytes())
+            .init();
+        assert_ne!(withdrawer_address.bytes(), *SUDO_ADDRESS_BYTES);
 
         let action = Ics20WithdrawalBuilder::new()
             .with_bridge_address(bridge_address)
             .with_default_rollup_withdrawal()
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to perform ics20 bridge withdrawal",
         );
@@ -662,16 +566,13 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_account_withdrawal_event_already_processed() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
         let bridge_address = astria_address(&[2; ADDRESS_LEN]);
-        fixture
-            .state
-            .put_bridge_account_withdrawer_address(&bridge_address, fixture.tx_signer)
-            .unwrap();
+        fixture.bridge_initializer(bridge_address).init();
         let event_id = "event-1".to_string();
         let block_number = 2;
         fixture
-            .state
+            .state_mut()
             .put_withdrawal_event_block_for_bridge_account(&bridge_address, &event_id, block_number)
             .unwrap();
 
@@ -679,11 +580,12 @@ mod tests {
             .with_bridge_address(bridge_address)
             .with_rollup_withdrawal_event_id(&event_id)
             .build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("withdrawal event ID `{event_id}` used by block number {block_number}"),
         );
@@ -691,18 +593,16 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_bridge_account_unset_and_tx_signer_is_bridge_account() {
-        let mut fixture = Fixture::new().await;
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&fixture.tx_signer, RollupId::new([99; 32]))
-            .unwrap();
+        let mut fixture = Fixture::default_initialized().await;
+        fixture.bridge_initializer(*SUDO_ADDRESS).init();
 
         let action = Ics20WithdrawalBuilder::new().build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "signer cannot be a bridge address if bridge address is not set",
         );
@@ -710,18 +610,11 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_execution_if_bridge_account_withdrawer_is_not_tx_signer() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
-        // Store the tx signer as the bridge account sudo and withdrawer address.
+        // Store `SUDO_ADDRESS` as the bridge account sudo and withdrawer address.
         let bridge_address = astria_address(&[2; ADDRESS_LEN]);
-        fixture
-            .state
-            .put_bridge_account_withdrawer_address(&bridge_address, fixture.tx_signer)
-            .unwrap();
-        fixture
-            .state
-            .put_bridge_account_sudo_address(&bridge_address, fixture.tx_signer)
-            .unwrap();
+        fixture.bridge_initializer(bridge_address).init();
 
         // Construct the checked ICS20 withdrawal action while the withdrawal address is still the
         // tx signer so construction succeeds.
@@ -729,38 +622,38 @@ mod tests {
             .with_bridge_address(bridge_address)
             .with_default_rollup_withdrawal()
             .build();
-        let checked_action = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, &fixture.state)
+        let checked_action: CheckedIcs20Withdrawal = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
-            .unwrap();
+            .unwrap()
+            .into();
 
         // Change the bridge account withdrawer address to one different from the tx signer address.
         let new_withdrawer_address = astria_address(&[3; ADDRESS_LEN]);
-        assert_ne!(new_withdrawer_address.bytes(), fixture.tx_signer);
+        assert_ne!(new_withdrawer_address.bytes(), *SUDO_ADDRESS_BYTES);
         let bridge_sudo_change = BridgeSudoChange {
             bridge_address,
             new_sudo_address: None,
             new_withdrawer_address: Some(new_withdrawer_address),
             fee_asset: "test".parse().unwrap(),
         };
-        let checked_bridge_sudo_change = CheckedAction::new_bridge_sudo_change(
-            bridge_sudo_change,
-            fixture.tx_signer,
-            &fixture.state,
-        )
-        .await
-        .unwrap();
+        let checked_bridge_sudo_change: CheckedBridgeSudoChange = fixture
+            .new_checked_action(bridge_sudo_change, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
         checked_bridge_sudo_change
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
 
         // Try to execute checked ICS20 withdrawal action now - should fail due to signer no longer
         // being authorized.
         let err = checked_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to perform ics20 bridge withdrawal",
         );
@@ -768,18 +661,39 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_execution_if_bridge_account_unset_and_tx_signer_is_bridge_account() {
-        let mut fixture = Fixture::new().await;
-        fixture
-            .state
-            .put_bridge_account_rollup_id(&fixture.tx_signer, RollupId::new([99; 32]))
-            .unwrap();
+        let mut fixture = Fixture::default_initialized().await;
 
         let action = Ics20WithdrawalBuilder::new().build();
-        let err = CheckedIcs20Withdrawal::new(action, fixture.tx_signer, fixture.state)
+        let checked_action: CheckedIcs20Withdrawal = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
+
+        // Initialize the signer's account as a bridge account.
+        let init_bridge_account = InitBridgeAccount {
+            rollup_id: RollupId::new([1; 32]),
+            asset: "test".parse().unwrap(),
+            fee_asset: "test".parse().unwrap(),
+            sudo_address: Some(*SUDO_ADDRESS),
+            withdrawer_address: Some(*SUDO_ADDRESS),
+        };
+        let checked_init_bridge_account: CheckedInitBridgeAccount = fixture
+            .new_checked_action(init_bridge_account, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
+        checked_init_bridge_account
+            .execute(fixture.state_mut())
+            .await
+            .unwrap();
+
+        // Should now fail to execute as the withdrawal action does not have the bridge account set.
+        let err = checked_action
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "signer cannot be a bridge address if bridge address is not set",
         );

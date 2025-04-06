@@ -202,6 +202,12 @@ impl From<Transfer> for Action {
     }
 }
 
+impl From<ValidatorUpdate> for Action {
+    fn from(value: ValidatorUpdate) -> Self {
+        Self::ValidatorUpdate(value)
+    }
+}
+
 impl From<SudoAddressChange> for Action {
     fn from(value: SudoAddressChange) -> Self {
         Self::SudoAddressChange(value)

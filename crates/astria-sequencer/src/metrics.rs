@@ -20,17 +20,16 @@ pub struct Metrics {
     proposal_deposits: Histogram,
     proposal_transactions: Histogram,
     process_proposal_skipped_proposal: Counter,
-    check_tx_removed_too_large: Counter,
+    check_tx_failed_tx_too_large: Counter,  // USED
+    check_tx_failed_action_checks: Counter, // USED
     check_tx_removed_expired: Counter,
     check_tx_removed_failed_execution: Counter,
-    check_tx_removed_failed_stateless: Counter,
     check_tx_duration_seconds_parse_tx: Histogram,
-    check_tx_duration_seconds_check_stateless: Histogram,
+    check_tx_duration_seconds_check_actions: Histogram,
     check_tx_duration_seconds_fetch_nonce: Histogram,
     check_tx_duration_seconds_check_tracked: Histogram,
     check_tx_duration_seconds_check_chain_id: Histogram,
-    check_tx_duration_seconds_check_removed: Histogram,
-    check_tx_duration_seconds_convert_address: Histogram,
+    check_tx_duration_seconds_recheck: Histogram,
     check_tx_duration_seconds_fetch_balances: Histogram,
     check_tx_duration_seconds_fetch_tx_cost: Histogram,
     check_tx_duration_seconds_insert_to_app_mempool: Histogram,
@@ -74,8 +73,12 @@ impl Metrics {
         self.process_proposal_skipped_proposal.increment(1);
     }
 
-    pub(crate) fn increment_check_tx_removed_too_large(&self) {
-        self.check_tx_removed_too_large.increment(1);
+    pub(crate) fn increment_check_tx_failed_tx_too_large(&self) {
+        self.check_tx_failed_tx_too_large.increment(1);
+    }
+
+    pub(crate) fn increment_check_tx_failed_action_checks(&self) {
+        self.check_tx_failed_action_checks.increment(1);
     }
 
     pub(crate) fn increment_check_tx_removed_expired(&self) {
@@ -86,16 +89,12 @@ impl Metrics {
         self.check_tx_removed_failed_execution.increment(1);
     }
 
-    pub(crate) fn increment_check_tx_removed_failed_stateless(&self) {
-        self.check_tx_removed_failed_stateless.increment(1);
-    }
-
     pub(crate) fn record_check_tx_duration_seconds_parse_tx(&self, duration: Duration) {
         self.check_tx_duration_seconds_parse_tx.record(duration);
     }
 
-    pub(crate) fn record_check_tx_duration_seconds_check_stateless(&self, duration: Duration) {
-        self.check_tx_duration_seconds_check_stateless
+    pub(crate) fn record_check_tx_duration_seconds_check_actions(&self, duration: Duration) {
+        self.check_tx_duration_seconds_check_actions
             .record(duration);
     }
 
@@ -113,14 +112,8 @@ impl Metrics {
             .record(duration);
     }
 
-    pub(crate) fn record_check_tx_duration_seconds_check_removed(&self, duration: Duration) {
-        self.check_tx_duration_seconds_check_removed
-            .record(duration);
-    }
-
-    pub(crate) fn record_check_tx_duration_seconds_convert_address(&self, duration: Duration) {
-        self.check_tx_duration_seconds_convert_address
-            .record(duration);
+    pub(crate) fn record_check_tx_duration_seconds_recheck(&self, duration: Duration) {
+        self.check_tx_duration_seconds_recheck.record(duration);
     }
 
     pub(crate) fn record_check_tx_duration_seconds_fetch_balances(&self, duration: Duration) {
@@ -228,11 +221,17 @@ impl telemetry::Metrics for Metrics {
             )?
             .register()?;
 
-        let check_tx_removed_too_large = builder
+        let check_tx_failed_tx_too_large = builder
             .new_counter_factory(
-                CHECK_TX_REMOVED_TOO_LARGE,
-                "The number of transactions that have been removed from the mempool due to being \
-                 too large",
+                CHECK_TX_FAILED_TX_TOO_LARGE,
+                "The number of transactions that have failed checks due to being too large",
+            )?
+            .register()?;
+
+        let check_tx_failed_action_checks = builder
+            .new_counter_factory(
+                CHECK_TX_FAILED_ACTION_CHECKS,
+                "The number of transactions that have failed action checks",
             )?
             .register()?;
 
@@ -249,13 +248,6 @@ impl telemetry::Metrics for Metrics {
                 CHECK_TX_REMOVED_FAILED_EXECUTION,
                 "The number of transactions that have been removed from the mempool due to \
                  failing execution in prepare_proposal",
-            )?
-            .register()?;
-
-        let check_tx_duration_seconds_convert_address = builder
-            .new_histogram_factory(
-                CHECK_TX_DURATION_SECONDS_CONVERT_ADDRESS,
-                "The amount of time taken in seconds to convert an address",
             )?
             .register()?;
 
@@ -288,13 +280,6 @@ impl telemetry::Metrics for Metrics {
             )?
             .register()?;
 
-        let check_tx_removed_failed_stateless = builder
-            .new_counter_factory(
-                CHECK_TX_REMOVED_FAILED_STATELESS,
-                "The number of transactions that have been removed from the mempool due to \
-                 failing the stateless check",
-            )?
-            .register()?;
         let mut check_tx_duration_factory = builder.new_histogram_factory(
             CHECK_TX_DURATION_SECONDS,
             "The amount of time taken in seconds to successfully complete the various stages of \
@@ -303,12 +288,12 @@ impl telemetry::Metrics for Metrics {
         let check_tx_duration_seconds_parse_tx = check_tx_duration_factory.register_with_labels(
             &[(CHECK_TX_STAGE, "length check and parse raw tx".to_string())],
         )?;
-        let check_tx_duration_seconds_check_stateless = check_tx_duration_factory
-            .register_with_labels(&[(CHECK_TX_STAGE, "stateless check".to_string())])?;
+        let check_tx_duration_seconds_check_actions = check_tx_duration_factory
+            .register_with_labels(&[(CHECK_TX_STAGE, "actions check".to_string())])?;
         let check_tx_duration_seconds_check_chain_id = check_tx_duration_factory
             .register_with_labels(&[(CHECK_TX_STAGE, "chain id check".to_string())])?;
-        let check_tx_duration_seconds_check_removed = check_tx_duration_factory
-            .register_with_labels(&[(CHECK_TX_STAGE, "check for removal".to_string())])?;
+        let check_tx_duration_seconds_recheck = check_tx_duration_factory
+            .register_with_labels(&[(CHECK_TX_STAGE, "recheck".to_string())])?;
         let check_tx_duration_seconds_insert_to_app_mempool = check_tx_duration_factory
             .register_with_labels(&[(CHECK_TX_STAGE, "insert to app mempool".to_string())])?;
 
@@ -363,17 +348,16 @@ impl telemetry::Metrics for Metrics {
             proposal_deposits,
             proposal_transactions,
             process_proposal_skipped_proposal,
-            check_tx_removed_too_large,
+            check_tx_failed_tx_too_large,
+            check_tx_failed_action_checks,
             check_tx_removed_expired,
             check_tx_removed_failed_execution,
-            check_tx_removed_failed_stateless,
             check_tx_duration_seconds_parse_tx,
-            check_tx_duration_seconds_check_stateless,
+            check_tx_duration_seconds_check_actions,
             check_tx_duration_seconds_fetch_nonce,
             check_tx_duration_seconds_check_tracked,
             check_tx_duration_seconds_check_chain_id,
-            check_tx_duration_seconds_check_removed,
-            check_tx_duration_seconds_convert_address,
+            check_tx_duration_seconds_recheck,
             check_tx_duration_seconds_fetch_balances,
             check_tx_duration_seconds_fetch_tx_cost,
             check_tx_duration_seconds_insert_to_app_mempool,
@@ -395,13 +379,11 @@ metric_names!(const METRICS_NAMES:
     PROPOSAL_DEPOSITS,
     PROPOSAL_TRANSACTIONS,
     PROCESS_PROPOSAL_SKIPPED_PROPOSAL,
-    CHECK_TX_REMOVED_TOO_LARGE,
+    CHECK_TX_FAILED_TX_TOO_LARGE,
+    CHECK_TX_FAILED_ACTION_CHECKS,
     CHECK_TX_REMOVED_EXPIRED,
     CHECK_TX_REMOVED_FAILED_EXECUTION,
-    CHECK_TX_REMOVED_FAILED_STATELESS,
-    CHECK_TX_REMOVED_ACCOUNT_BALANCE,
     CHECK_TX_DURATION_SECONDS,
-    CHECK_TX_DURATION_SECONDS_CONVERT_ADDRESS,
     CHECK_TX_DURATION_SECONDS_FETCH_BALANCES,
     CHECK_TX_DURATION_SECONDS_FETCH_NONCE,
     CHECK_TX_DURATION_SECONDS_FETCH_TX_COST,
@@ -419,11 +401,10 @@ mod tests {
     use super::{
         ACTIONS_PER_TRANSACTION_IN_MEMPOOL,
         CHECK_TX_DURATION_SECONDS,
-        CHECK_TX_REMOVED_ACCOUNT_BALANCE,
+        CHECK_TX_FAILED_ACTION_CHECKS,
+        CHECK_TX_FAILED_TX_TOO_LARGE,
         CHECK_TX_REMOVED_EXPIRED,
         CHECK_TX_REMOVED_FAILED_EXECUTION,
-        CHECK_TX_REMOVED_FAILED_STATELESS,
-        CHECK_TX_REMOVED_TOO_LARGE,
         INTERNAL_LOGIC_ERROR,
         MEMPOOL_RECOSTED,
         PREPARE_PROPOSAL_EXCLUDED_TRANSACTIONS,
@@ -448,6 +429,9 @@ mod tests {
 
     #[test]
     fn metrics_are_as_expected() {
+        todo!("remove unused metrics");
+        todo!("check metrics names");
+
         assert_const(
             PREPARE_PROPOSAL_EXCLUDED_TRANSACTIONS_COMETBFT_SPACE,
             "prepare_proposal_excluded_transactions_cometbft_space",
@@ -470,19 +454,15 @@ mod tests {
             PROCESS_PROPOSAL_SKIPPED_PROPOSAL,
             "process_proposal_skipped_proposal",
         );
-        assert_const(CHECK_TX_REMOVED_TOO_LARGE, "check_tx_removed_too_large");
+        assert_const(CHECK_TX_FAILED_TX_TOO_LARGE, "check_tx_removed_too_large");
         assert_const(CHECK_TX_REMOVED_EXPIRED, "check_tx_removed_expired");
         assert_const(
             CHECK_TX_REMOVED_FAILED_EXECUTION,
             "check_tx_removed_failed_execution",
         );
         assert_const(
-            CHECK_TX_REMOVED_FAILED_STATELESS,
-            "check_tx_removed_failed_stateless",
-        );
-        assert_const(
-            CHECK_TX_REMOVED_ACCOUNT_BALANCE,
-            "check_tx_removed_account_balance",
+            CHECK_TX_FAILED_ACTION_CHECKS,
+            "check_tx_failed_action_checks",
         );
         assert_const(CHECK_TX_DURATION_SECONDS, "check_tx_duration_seconds");
         assert_const(

@@ -11,7 +11,10 @@ use std::{
 };
 
 use astria_core::{
-    primitive::v1::asset::IbcPrefixed,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        TransactionId,
+    },
     protocol::transaction::v1::{
         action::group::Group,
         Transaction,
@@ -20,6 +23,7 @@ use astria_core::{
 use astria_eyre::eyre::{
     eyre,
     Result,
+    WrapErr,
 };
 use tokio::time::{
     Duration,
@@ -29,47 +33,47 @@ use tracing::{
     error,
     instrument,
 };
-
 use super::RemovalReason;
 use crate::{
     accounts,
+    accounts::AddressBytes as _,
+    checked_transaction::CheckedTransaction,
     transaction,
 };
 
-/// `TimemarkedTransaction` is a wrapper around a signed transaction used to keep track of when that
-/// transaction was first seen in the mempool.
+/// `TimemarkedTransaction` is a wrapper around a checked transaction used to keep track of when
+/// that transaction was first seen in the mempool and its total cost to execute.
 #[derive(Clone, Debug)]
 pub(super) struct TimemarkedTransaction {
-    signed_tx: Arc<Transaction>,
-    tx_hash: [u8; 32],
+    checked_tx: Arc<CheckedTransaction>,
     time_first_seen: Instant,
-    address: [u8; 20],
-    cost: HashMap<IbcPrefixed, u128>,
+    costs: HashMap<IbcPrefixed, u128>,
 }
 
 impl TimemarkedTransaction {
-    pub(super) fn new(signed_tx: Arc<Transaction>, cost: HashMap<IbcPrefixed, u128>) -> Self {
+    pub(super) fn new(
+        checked_tx: Arc<CheckedTransaction>,
+        costs: HashMap<IbcPrefixed, u128>,
+    ) -> Self {
         Self {
-            tx_hash: signed_tx.id().get(),
-            address: *signed_tx.verification_key().address_bytes(),
-            signed_tx,
+            checked_tx,
             time_first_seen: Instant::now(),
-            cost,
+            costs,
         }
     }
 
     fn priority(&self, current_account_nonce: u32) -> Result<TransactionPriority> {
-        let Some(nonce_diff) = self.signed_tx.nonce().checked_sub(current_account_nonce) else {
+        let Some(nonce_diff) = self.checked_tx.nonce().checked_sub(current_account_nonce) else {
             return Err(eyre!(
                 "transaction nonce {} is less than current account nonce {current_account_nonce}",
-                self.signed_tx.nonce()
+                self.checked_tx.nonce()
             ));
         };
 
         Ok(TransactionPriority {
             nonce_diff,
             time_first_seen: self.time_first_seen,
-            group: self.signed_tx.group(),
+            group: self.checked_tx.group(),
         })
     }
 
@@ -77,7 +81,7 @@ impl TimemarkedTransaction {
         &self,
         available_balances: &mut HashMap<IbcPrefixed, u128>,
     ) -> Result<()> {
-        self.cost.iter().try_for_each(|(denom, cost)| {
+        self.costs.iter().try_for_each(|(denom, cost)| {
             if *cost == 0 {
                 return Ok(());
             }
@@ -92,28 +96,33 @@ impl TimemarkedTransaction {
         })
     }
 
-    fn set_cost_map(&mut self, cost_map: HashMap<IbcPrefixed, u128>) {
-        self.cost = cost_map;
+    async fn recalculate_costs<S: accounts::StateReadExt>(&mut self, state: &S) -> Result<()> {
+        self.costs = self
+            .checked_tx
+            .total_costs(state)
+            .await
+            .wrap_err("failed to recalculate tx costs")?;
+        Ok(())
     }
 
     fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
         now.saturating_duration_since(self.time_first_seen) > ttl
     }
 
+    pub(super) fn id(&self) -> &TransactionId {
+        self.checked_tx.id()
+    }
+
     pub(super) fn nonce(&self) -> u32 {
-        self.signed_tx.nonce()
+        self.checked_tx.nonce()
     }
 
-    pub(super) fn address(&self) -> &[u8; 20] {
-        &self.address
+    pub(super) fn address_bytes(&self) -> &[u8; 20] {
+        self.checked_tx.address_bytes()
     }
 
-    pub(super) fn cost(&self) -> &HashMap<IbcPrefixed, u128> {
-        &self.cost
-    }
-
-    pub(super) fn id(&self) -> [u8; 32] {
-        self.tx_hash
+    pub(super) fn costs(&self) -> &HashMap<IbcPrefixed, u128> {
+        &self.costs
     }
 }
 
@@ -121,13 +130,13 @@ impl fmt::Display for TimemarkedTransaction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "tx_hash: {}, address: {}, signer: {}, nonce: {}, chain ID: {}, group: {}",
-            telemetry::display::base64(&self.tx_hash),
-            telemetry::display::base64(&self.address),
-            self.signed_tx.verification_key(),
-            self.signed_tx.nonce(),
-            self.signed_tx.chain_id(),
-            self.signed_tx.group(),
+            "tx_id: {}, address: {}, signer: {}, nonce: {}, chain ID: {}, group: {}",
+            self.id(),
+            telemetry::display::base64(self.address_bytes()),
+            self.checked_tx.verification_key(),
+            self.checked_tx.nonce(),
+            self.checked_tx.chain_id(),
+            self.checked_tx.group(),
         )
     }
 }
@@ -232,7 +241,7 @@ impl PendingTransactionsForAccount {
 
         'outer: for (nonce, tx) in &self.txs {
             // ensure we have enough balance to cover inclusion
-            for (denom, cost) in tx.cost() {
+            for (denom, cost) in tx.costs() {
                 if *cost == 0 {
                     continue;
                 }
@@ -267,7 +276,7 @@ impl PendingTransactionsForAccount {
     fn subtract_contained_costs(&self, account_balances: &mut HashMap<IbcPrefixed, u128>) {
         // deduct costs from current account balances
         self.txs.values().for_each(|tx| {
-            tx.cost.iter().for_each(|(denom, cost)| {
+            tx.costs.iter().for_each(|(denom, cost)| {
                 if *cost == 0 {
                     return;
                 }
@@ -305,13 +314,13 @@ impl TransactionsForAccount for PendingTransactionsForAccount {
     ) -> bool {
         // If the `ttx` nonce is 0, precondition is met iff the current account nonce is also at
         // zero
-        let Some(previous_nonce) = ttx.signed_tx.nonce().checked_sub(1) else {
+        let Some(previous_nonce) = ttx.nonce().checked_sub(1) else {
             return current_account_nonce == 0;
         };
 
         // Precondition is met if the previous nonce is in the existing txs, or if the tx's nonce
         // is equal to the account nonce
-        self.txs().contains_key(&previous_nonce) || ttx.signed_tx.nonce() == current_account_nonce
+        self.txs().contains_key(&previous_nonce) || ttx.nonce() == current_account_nonce
     }
 
     fn has_balance_to_cover(
@@ -456,8 +465,8 @@ pub(super) trait TransactionsForAccount: Default {
             return Err(InsertionError::NonceTooLow);
         }
 
-        if let Some(existing_ttx) = self.txs().get(&ttx.signed_tx.nonce()) {
-            return Err(if existing_ttx.tx_hash == ttx.tx_hash {
+        if let Some(existing_ttx) = self.txs().get(&ttx.nonce()) {
+            return Err(if existing_ttx.id() == ttx.id() {
                 InsertionError::AlreadyPresent
             } else {
                 InsertionError::NonceTaken
@@ -472,7 +481,7 @@ pub(super) trait TransactionsForAccount: Default {
             return Err(InsertionError::AccountBalanceTooLow);
         }
 
-        self.txs_mut().insert(ttx.signed_tx.nonce(), ttx);
+        self.txs_mut().insert(ttx.nonce(), ttx);
 
         Ok(())
     }
@@ -482,8 +491,8 @@ pub(super) trait TransactionsForAccount: Default {
     /// Note: the given nonce is expected to be present. If it's absent, an error is logged and no
     /// transactions are removed.
     ///
-    /// Returns the hashes of the removed transactions.
-    fn remove(&mut self, nonce: u32) -> Vec<[u8; 32]> {
+    /// Returns the IDs of the removed transactions.
+    fn remove(&mut self, nonce: u32) -> Vec<TransactionId> {
         if !self.txs().contains_key(&nonce) {
             error!(nonce, "transaction with given nonce not found");
             return Vec::new();
@@ -492,13 +501,13 @@ pub(super) trait TransactionsForAccount: Default {
         self.txs_mut()
             .split_off(&nonce)
             .values()
-            .map(|ttx| ttx.tx_hash)
+            .map(|ttx| *ttx.id())
             .collect()
     }
 
     #[cfg(test)]
-    fn contains_tx(&self, tx_hash: &[u8; 32]) -> bool {
-        self.txs().values().any(|ttx| ttx.tx_hash == *tx_hash)
+    fn contains_tx(&self, tx_id: &TransactionId) -> bool {
+        self.txs().values().any(|ttx| ttx.id() == tx_id)
     }
 }
 
@@ -582,31 +591,24 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     /// Recosts transactions for an account.
     ///
     /// Logs an error if fails to recost a transaction.
-    #[instrument(skip_all, fields(address = %telemetry::display::base64(address)))]
+    #[instrument(skip_all, fields(address = %telemetry::display::base64(address_bytes)))]
     async fn recost_transactions<S: accounts::StateReadExt>(
         &mut self,
-        address: &[u8; 20],
+        address_bytes: &[u8; 20],
         state: &S,
     ) {
-        let Some(account) = self.txs_mut().get_mut(address) else {
+        let Some(account) = self.txs_mut().get_mut(address_bytes) else {
             return;
         };
 
-        for tx in account.txs_mut().values_mut() {
-            let new_cost = match transaction::get_total_transaction_cost(&tx.signed_tx, &state)
-                .await
-            {
-                Ok(res) => res,
-                Err(error) => {
-                    error!(
-                        address = %telemetry::display::base64(address),
-                        "failed to calculate new transaction cost when cleaning accounts: {error:#}"
-                    );
-                    continue;
-                }
-            };
-
-            tx.set_cost_map(new_cost);
+        for ttx in account.txs_mut().values_mut() {
+            if let Err(error) = ttx.recalculate_costs(state).await {
+                error!(
+                    address = %telemetry::display::base64(address_bytes),
+                    "failed to calculate new transaction cost when cleaning accounts: {error:#}"
+                );
+                continue;
+            }
         }
     }
 
@@ -623,7 +625,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     ) -> Result<(), InsertionError> {
         self.check_total_tx_count()?;
 
-        match self.txs_mut().entry(*ttx.address()) {
+        match self.txs_mut().entry(*ttx.address_bytes()) {
             hash_map::Entry::Occupied(entry) => {
                 entry
                     .into_mut()
@@ -641,68 +643,71 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     /// Removes the given transaction and any transactions with higher nonces for the relevant
     /// account.
     ///
-    /// If `signed_tx` existed, returns `Ok` with the hashes of the removed transactions. If
-    /// `signed_tx` was not in the collection, it is returned via `Err`.
-    fn remove(&mut self, signed_tx: Arc<Transaction>) -> Result<Vec<[u8; 32]>, Arc<Transaction>> {
-        let address = signed_tx.verification_key().address_bytes();
+    /// If `checked_tx` existed, returns `Ok` with the IDs of the removed transactions. If
+    /// `checked_tx` was not in the collection, it is returned via `Err`.
+    fn remove(
+        &mut self,
+        checked_tx: Arc<CheckedTransaction>,
+    ) -> Result<Vec<TransactionId>, Arc<CheckedTransaction>> {
+        let address_bytes = checked_tx.address_bytes();
 
         // Take the collection for this account out of `self` temporarily.
-        let Some(mut account_txs) = self.txs_mut().remove(address) else {
-            return Err(signed_tx);
+        let Some(mut account_txs) = self.txs_mut().remove(address_bytes) else {
+            return Err(checked_tx);
         };
 
-        let removed = account_txs.remove(signed_tx.nonce());
+        let removed = account_txs.remove(checked_tx.nonce());
 
         // Re-add the collection to `self` if it's not empty.
         if !account_txs.txs().is_empty() {
-            let _ = self.txs_mut().insert(*address, account_txs);
+            let _ = self.txs_mut().insert(*address_bytes, account_txs);
         }
 
         if removed.is_empty() {
-            return Err(signed_tx);
+            return Err(checked_tx);
         }
 
         Ok(removed)
     }
 
-    /// Removes all of the transactions for the given account and returns the hashes of the removed
+    /// Removes all of the transactions for the given account and returns the IDs of the removed
     /// transactions.
-    fn clear_account(&mut self, address: &[u8; 20]) -> Vec<[u8; 32]> {
+    fn clear_account(&mut self, address_bytes: &[u8; 20]) -> Vec<TransactionId> {
         self.txs_mut()
-            .remove(address)
-            .map(|account_txs| account_txs.txs().values().map(|ttx| ttx.tx_hash).collect())
+            .remove(address_bytes)
+            .map(|account_txs| account_txs.txs().values().map(|ttx| *ttx.id()).collect())
             .unwrap_or_default()
     }
 
     /// Cleans the specified account of stale and expired transactions.
     fn clean_account_stale_expired(
         &mut self,
-        address: &[u8; 20],
+        address_bytes: &[u8; 20],
         current_account_nonce: u32,
-    ) -> Vec<([u8; 32], RemovalReason)> {
+    ) -> Vec<(TransactionId, RemovalReason)> {
         // Take the collection for this account out of `self` temporarily if it exists.
-        let Some(mut account_txs) = self.txs_mut().remove(address) else {
+        let Some(mut account_txs) = self.txs_mut().remove(address_bytes) else {
             return Vec::new();
         };
 
         // clear out stale nonces
         let mut split_off = account_txs.txs_mut().split_off(&current_account_nonce);
         mem::swap(&mut split_off, account_txs.txs_mut());
-        let mut removed_txs: Vec<([u8; 32], RemovalReason)> = split_off
+        let mut removed_txs: Vec<_> = split_off
             .into_values()
-            .map(|ttx| (ttx.tx_hash, RemovalReason::NonceStale))
+            .map(|ttx| (*ttx.id(), RemovalReason::NonceStale))
             .collect();
 
         // check for expired transactions
         if let Some(first_tx) = account_txs.txs_mut().first_entry() {
             if first_tx.get().is_expired(Instant::now(), self.tx_ttl()) {
-                removed_txs.push((first_tx.get().tx_hash, RemovalReason::Expired));
+                removed_txs.push((*first_tx.get().id(), RemovalReason::Expired));
                 removed_txs.extend(
                     account_txs
                         .txs()
                         .values()
                         .skip(1)
-                        .map(|ttx| (ttx.tx_hash, RemovalReason::LowerNonceInvalidated)),
+                        .map(|ttx| (*ttx.id(), RemovalReason::LowerNonceInvalidated)),
                 );
                 account_txs.txs_mut().clear();
             }
@@ -710,7 +715,7 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
 
         // Re-add the collection to `self` if it's not empty.
         if !account_txs.txs().is_empty() {
-            let _ = self.txs_mut().insert(*address, account_txs);
+            let _ = self.txs_mut().insert(*address_bytes, account_txs);
         }
 
         removed_txs
@@ -725,10 +730,10 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     }
 
     #[cfg(test)]
-    fn contains_tx(&self, tx_hash: &[u8; 32]) -> bool {
+    fn contains_tx(&self, tx_id: &TransactionId) -> bool {
         self.txs()
             .values()
-            .any(|account_txs| account_txs.contains_tx(tx_hash))
+            .any(|account_txs| account_txs.contains_tx(tx_id))
     }
 }
 
@@ -744,11 +749,11 @@ impl PendingTransactions {
     /// based on the specified account's current balances.
     pub(super) fn find_demotables(
         &mut self,
-        address: &[u8; 20],
+        address_bytes: &[u8; 20],
         current_balances: &HashMap<IbcPrefixed, u128>,
     ) -> Vec<TimemarkedTransaction> {
         // Take the collection for this account out of `self` temporarily if it exists.
-        let Some(mut account) = self.txs.remove(address) else {
+        let Some(mut account) = self.txs.remove(address_bytes) else {
             return Vec::new();
         };
 
@@ -756,7 +761,7 @@ impl PendingTransactions {
 
         // Re-add the collection to `self` if it's not empty.
         if !account.txs().is_empty() {
-            let _ = self.txs.insert(*address, account);
+            let _ = self.txs.insert(*address_bytes, account);
         }
 
         demoted
@@ -766,29 +771,28 @@ impl PendingTransactions {
     /// transactions' costs.
     pub(super) fn subtract_contained_costs(
         &self,
-        address: &[u8; 20],
+        address_bytes: &[u8; 20],
         mut current_balances: HashMap<IbcPrefixed, u128>,
     ) -> HashMap<IbcPrefixed, u128> {
-        if let Some(account) = self.txs.get(address) {
+        if let Some(account) = self.txs.get(address_bytes) {
             account.subtract_contained_costs(&mut current_balances);
         };
         current_balances
     }
 
     /// Returns the highest nonce for an account.
-    pub(super) fn pending_nonce(&self, address: &[u8; 20]) -> Option<u32> {
+    pub(super) fn pending_nonce(&self, address_bytes: &[u8; 20]) -> Option<u32> {
         self.txs
-            .get(address)
+            .get(address_bytes)
             .and_then(PendingTransactionsForAccount::pending_account_nonce)
     }
 
     /// Returns a copy of transactions and their hashes sorted by nonce difference and then time
     /// first seen.
-    pub(super) fn builder_queue(&self) -> Vec<([u8; 32], Arc<Transaction>)> {
+    pub(super) fn builder_queue(&self) -> Vec<(TransactionId, Arc<CheckedTransaction>)> {
         // Used to hold the values in Vec for sorting.
         struct QueueEntry {
-            tx: Arc<Transaction>,
-            tx_hash: [u8; 32],
+            checked_tx: Arc<CheckedTransaction>,
             priority: TransactionPriority,
         }
 
@@ -809,15 +813,14 @@ impl PendingTransactions {
                     Err(error) => {
                         // mempool could be off due to node connectivity issues
                         error!(
-                            tx_hash = %telemetry::display::base64(&ttx.tx_hash),
+                            tx_id = %ttx.id(),
                             "failed to add pending tx to builder queue: {error:#}"
                         );
                         continue;
                     }
                 };
                 queue.push(QueueEntry {
-                    tx: ttx.signed_tx.clone(),
-                    tx_hash: ttx.tx_hash,
+                    checked_tx: ttx.checked_tx.clone(),
                     priority,
                 });
             }
@@ -829,7 +832,7 @@ impl PendingTransactions {
         queue
             .into_iter()
             .rev()
-            .map(|entry| (entry.tx_hash, entry.tx))
+            .map(|entry| (*entry.checked_tx.id(), entry.checked_tx))
             .collect()
     }
 }
@@ -848,12 +851,12 @@ impl<const MAX_PARKED_TXS_PER_ACCOUNT: usize> ParkedTransactions<MAX_PARKED_TXS_
     /// covered by the `available_balance`.
     pub(super) fn find_promotables(
         &mut self,
-        account: &[u8; 20],
+        address_bytes: &[u8; 20],
         target_nonce: u32,
         available_balance: &HashMap<IbcPrefixed, u128>,
     ) -> Vec<TimemarkedTransaction> {
         // Take the collection for this account out of `self` temporarily.
-        let Some(mut account_txs) = self.txs.remove(account) else {
+        let Some(mut account_txs) = self.txs.remove(address_bytes) else {
             return Vec::new();
         };
 
@@ -861,7 +864,7 @@ impl<const MAX_PARKED_TXS_PER_ACCOUNT: usize> ParkedTransactions<MAX_PARKED_TXS_
 
         // Re-add the collection to `self` if it's not empty.
         if !account_txs.txs().is_empty() {
-            let _ = self.txs.insert(*account, account_txs);
+            let _ = self.txs.insert(*address_bytes, account_txs);
         }
 
         removed.collect()

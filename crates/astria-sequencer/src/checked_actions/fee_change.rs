@@ -1,5 +1,8 @@
 use astria_core::{
-    primitive::v1::ADDRESS_LEN,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        ADDRESS_LEN,
+    },
     protocol::transaction::v1::action::FeeChange,
 };
 use astria_eyre::{
@@ -18,7 +21,10 @@ use tracing::{
     Level,
 };
 
-use super::TransactionSignerAddressBytes;
+use super::{
+    AssetTransfer,
+    TransactionSignerAddressBytes,
+};
 use crate::{
     authority::StateReadExt as _,
     fees::StateWriteExt as _,
@@ -44,6 +50,20 @@ impl CheckedFeeChange {
         checked_action.run_mutable_checks(state).await?;
 
         Ok(checked_action)
+    }
+
+    #[instrument(skip_all, err(level = Level::DEBUG))]
+    pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
+        // Ensure the tx signer is the current sudo address.
+        let sudo_address = state
+            .get_sudo_address()
+            .await
+            .wrap_err("failed to read sudo address from storage")?;
+        ensure!(
+            &sudo_address == self.tx_signer.as_bytes(),
+            "transaction signer not authorized to change fees"
+        );
+        Ok(())
     }
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
@@ -102,17 +122,14 @@ impl CheckedFeeChange {
         }
     }
 
-    async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
-        // Ensure the tx signer is the current sudo address.
-        let sudo_address = state
-            .get_sudo_address()
-            .await
-            .wrap_err("failed to read sudo address from storage")?;
-        ensure!(
-            &sudo_address == self.tx_signer.as_bytes(),
-            "transaction signer not authorized to change fees"
-        );
-        Ok(())
+    pub(super) fn action(&self) -> &FeeChange {
+        &self.action
+    }
+}
+
+impl AssetTransfer for CheckedFeeChange {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        None
     }
 }
 
@@ -130,78 +147,73 @@ mod tests {
     use astria_eyre::eyre::Report;
     use penumbra_ibc::IbcRelay;
 
-    use super::{
-        super::{
-            test_utils::Fixture,
-            CheckedAction,
-        },
-        *,
-    };
+    use super::*;
     use crate::{
-        authority::StateWriteExt as _,
-        benchmark_and_test_utils::{
-            assert_eyre_error,
-            astria_address,
-        },
+        benchmark_and_test_utils::astria_address,
+        checked_actions::CheckedSudoAddressChange,
         fees::{
             FeeHandler,
             StateReadExt as _,
         },
         storage::StoredValue,
+        test_utils::{
+            assert_error_contains,
+            Fixture,
+            SUDO_ADDRESS_BYTES,
+        },
     };
 
     #[tokio::test]
     async fn should_fail_construction_if_signer_is_not_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
 
-        // Store a sudo address different from the tx signer address.
-        let sudo_address = [2; ADDRESS_LEN];
-        assert_ne!(fixture.tx_signer, sudo_address);
-        fixture.state.put_sudo_address(sudo_address).unwrap();
+        let tx_signer = [2; ADDRESS_LEN];
+        assert_ne!(*SUDO_ADDRESS_BYTES, tx_signer);
 
         let action = FeeChange::Transfer(FeeComponents::<Transfer>::new(1, 2));
-        let err = CheckedFeeChange::new(action, fixture.tx_signer, &fixture.state)
+        let err = fixture
+            .new_checked_action(action, tx_signer)
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "transaction signer not authorized to change fees");
+        assert_error_contains(&err, "transaction signer not authorized to change fees");
     }
 
     #[tokio::test]
     async fn should_fail_execution_if_signer_is_not_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
 
         // Construct the checked action while the sudo address is still the tx signer so
         // construction succeeds.
         let action = FeeChange::Transfer(FeeComponents::<Transfer>::new(1, 2));
-        let checked_action = CheckedFeeChange::new(action, fixture.tx_signer, &fixture.state)
+        let checked_action: CheckedFeeChange = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
-            .unwrap();
+            .unwrap()
+            .into();
 
         // Change the sudo address to something other than the tx signer.
         let sudo_address_change = SudoAddressChange {
             new_address: astria_address(&[2; ADDRESS_LEN]),
         };
-        let checked_sudo_address_change = CheckedAction::new_sudo_address_change(
-            sudo_address_change,
-            fixture.tx_signer,
-            &fixture.state,
-        )
-        .await
-        .unwrap();
+        let checked_sudo_address_change: CheckedSudoAddressChange = fixture
+            .new_checked_action(sudo_address_change, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
         checked_sudo_address_change
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
-        let new_sudo_address = fixture.state.get_sudo_address().await.unwrap();
-        assert_ne!(fixture.tx_signer, new_sudo_address);
+        let new_sudo_address = fixture.state().get_sudo_address().await.unwrap();
+        assert_ne!(*SUDO_ADDRESS_BYTES, new_sudo_address);
 
         // Try to execute the checked action now - should fail due to signer no longer being
         // authorized.
         let err = checked_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(&err, "transaction signer not authorized to change fees");
+        assert_error_contains(&err, "transaction signer not authorized to change fees");
     }
 
     #[tokio::test]
@@ -290,27 +302,31 @@ mod tests {
         FeeComponents<F>: TryFrom<StoredValue<'a>, Error = Report> + Debug,
         FeeChange: From<FeeComponents<F>>,
     {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::uninitialized().await;
+        fixture.chain_initializer().with_no_fees().init().await;
 
-        assert!(fixture
-            .state
-            .get_fees::<F>()
-            .await
-            .expect("should not error fetching unstored action fees")
-            .is_none());
+        // Any fee component except for `FeeChange` can be uninitialized.
+        if F::snake_case_name() != "fee_change" {
+            assert!(fixture
+                .state()
+                .get_fees::<F>()
+                .await
+                .expect("should not error fetching unstored action fees")
+                .is_none());
+        }
 
         // Execute an initial fee change tx to store the first version of the fees.
         let initial_fees = FeeComponents::<F>::new(1, 2);
         let action = FeeChange::from(initial_fees);
-        CheckedFeeChange::new(action, fixture.tx_signer, &fixture.state)
+        let checked_action: CheckedFeeChange = fixture
+            .new_checked_action(action, *SUDO_ADDRESS_BYTES)
             .await
-            .expect("should construct checked fee change action")
-            .execute(&mut fixture.state)
-            .await
-            .expect("should execute checked fee change action");
+            .unwrap()
+            .into();
+        checked_action.execute(fixture.state_mut()).await.unwrap();
 
         let retrieved_fees = fixture
-            .state
+            .state()
             .get_fees::<F>()
             .await
             .expect("should not error fetching initial action fees")
@@ -320,15 +336,15 @@ mod tests {
         // Execute a second fee change tx to overwrite the fees.
         let new_fees = FeeComponents::<F>::new(3, 4);
         let new_action = FeeChange::from(new_fees);
-        CheckedFeeChange::new(new_action, fixture.tx_signer, &fixture.state)
+        let checked_action: CheckedFeeChange = fixture
+            .new_checked_action(new_action, *SUDO_ADDRESS_BYTES)
             .await
-            .expect("should construct checked fee change action")
-            .execute(&mut fixture.state)
-            .await
-            .expect("should execute checked fee change action");
+            .unwrap()
+            .into();
+        checked_action.execute(fixture.state_mut()).await.unwrap();
 
         let retrieved_fees = fixture
-            .state
+            .state()
             .get_fees::<F>()
             .await
             .expect("should not error fetching new action fees")

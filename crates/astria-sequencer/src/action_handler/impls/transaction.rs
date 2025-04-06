@@ -302,6 +302,6 @@ where
     S: StateWrite,
 {
     action.check_and_execute(&mut state).await?;
-    action.check_and_pay_fees(&mut state).await?;
+    // action.check_and_pay_fees(&mut state).await?;
     Ok(())
 }

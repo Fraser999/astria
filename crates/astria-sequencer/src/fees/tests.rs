@@ -20,15 +20,20 @@ use astria_core::{
                 RollupDataSubmission,
                 Transfer,
             },
+            Action,
             TransactionBody,
         },
     },
     sequencerblock::v1::block::Deposit,
-    Protobuf as _,
+    Protobuf,
 };
 use cnidarium::StateDelta;
+use prost::Name as _;
 
-use super::base_deposit_fee;
+use super::{
+    fee_handler::base_deposit_fee,
+    FeeHandler,
+};
 use crate::{
     accounts::StateWriteExt as _,
     action_handler::ActionHandler as _,
@@ -52,9 +57,9 @@ use crate::{
     },
     bridge::StateWriteExt as _,
     fees::{
+        fee_handler::DEPOSIT_BASE_FEE,
         StateReadExt as _,
         StateWriteExt as _,
-        DEPOSIT_BASE_FEE,
     },
     test_utils::calculate_rollup_data_submission_fee_from_state,
     transaction::{
@@ -433,6 +438,43 @@ fn reference_deposit() -> Deposit {
         destination_chain_address: "someaddress".to_string(),
         source_transaction_id: TransactionId::new([0; 32]),
         source_action_index: 0,
+    }
+}
+
+#[test]
+fn ensure_fee_handler_consts_valid() {
+    fn check_names<F: FeeHandler + Protobuf>(action: &F) {
+        assert_eq!(action.name(), F::Raw::NAME);
+        assert_eq!(<F as FeeHandler>::full_name(), <F as Protobuf>::full_name());
+        let mut chars_iter = action.name().chars();
+        let mut snake_case_name = String::from(chars_iter.next().unwrap().to_ascii_lowercase());
+        while let Some(char) = chars_iter.next() {
+            if char.is_ascii_uppercase() {
+                snake_case_name.push('_');
+            }
+            snake_case_name.push(char.to_ascii_lowercase());
+        }
+        assert_eq!(F::snake_case_name(), snake_case_name);
+    }
+    for action in &crate::checked_actions::test_utils::dummy_actions() {
+        match action {
+            Action::RollupDataSubmission(action) => check_names(action),
+            Action::Transfer(action) => check_names(action),
+            Action::ValidatorUpdate(action) => check_names(action),
+            Action::SudoAddressChange(action) => check_names(action),
+            Action::Ibc(_action) => (), // check_names(action),
+            Action::IbcSudoChange(action) => check_names(action),
+            Action::Ics20Withdrawal(action) => check_names(action),
+            Action::IbcRelayerChange(action) => check_names(action),
+            Action::FeeAssetChange(action) => check_names(action),
+            Action::InitBridgeAccount(action) => check_names(action),
+            Action::BridgeLock(action) => check_names(action),
+            Action::BridgeUnlock(action) => check_names(action),
+            Action::BridgeSudoChange(action) => check_names(action),
+            Action::BridgeTransfer(action) => check_names(action),
+            Action::FeeChange(action) => check_names(action),
+            Action::RecoverIbcClient(action) => check_names(action),
+        }
     }
 }
 

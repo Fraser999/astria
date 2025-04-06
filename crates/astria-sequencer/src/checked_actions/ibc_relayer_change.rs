@@ -1,5 +1,8 @@
 use astria_core::{
-    primitive::v1::ADDRESS_LEN,
+    primitive::v1::{
+        asset::IbcPrefixed,
+        ADDRESS_LEN,
+    },
     protocol::transaction::v1::action::IbcRelayerChange,
 };
 use astria_eyre::eyre::{
@@ -16,7 +19,10 @@ use tracing::{
     Level,
 };
 
-use super::TransactionSignerAddressBytes;
+use super::{
+    AssetTransfer,
+    TransactionSignerAddressBytes,
+};
 use crate::{
     address::StateReadExt as _,
     ibc::{
@@ -58,6 +64,21 @@ impl CheckedIbcRelayerChange {
     }
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
+    pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
+        // Check that the signer of this tx is the authorized IBC sudo address.
+        let ibc_sudo_address = state
+            .get_ibc_sudo_address()
+            .await
+            .wrap_err("failed to read ibc sudo address from storage")?;
+        ensure!(
+            &ibc_sudo_address == self.tx_signer.as_bytes(),
+            "transaction signer not authorized to change ibc relayer",
+        );
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
 
@@ -75,18 +96,14 @@ impl CheckedIbcRelayerChange {
         Ok(())
     }
 
-    async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
-        // Check that the signer of this tx is the authorized IBC sudo address.
-        let ibc_sudo_address = state
-            .get_ibc_sudo_address()
-            .await
-            .wrap_err("failed to read ibc sudo address from storage")?;
-        ensure!(
-            &ibc_sudo_address == self.tx_signer.as_bytes(),
-            "transaction signer not authorized to change ibc relayer",
-        );
+    pub(super) fn action(&self) -> &IbcRelayerChange {
+        &self.action
+    }
+}
 
-        Ok(())
+impl AssetTransfer for CheckedIbcRelayerChange {
+    fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
+        None
     }
 }
 
@@ -95,43 +112,49 @@ mod tests {
     use astria_core::protocol::transaction::v1::action::IbcSudoChange;
 
     use super::{
-        super::test_utils::{
-            address_with_prefix,
-            Fixture,
-        },
+        super::test_utils::address_with_prefix,
         *,
     };
     use crate::{
         benchmark_and_test_utils::{
-            assert_eyre_error,
             astria_address,
             ASTRIA_PREFIX,
         },
-        checked_actions::CheckedAction,
+        checked_actions::CheckedIbcSudoChange,
+        test_utils::{
+            assert_error_contains,
+            Fixture,
+            IBC_SUDO_ADDRESS_BYTES,
+            SUDO_ADDRESS_BYTES,
+        },
     };
 
     #[tokio::test]
     async fn should_fail_construction_if_address_not_base_prefixed() {
-        let fixture = Fixture::new().await;
+        // `IBC_SUDO` initialized as the IBC sudo address.
+        let fixture = Fixture::default_initialized().await;
+        let tx_signer = *IBC_SUDO_ADDRESS_BYTES;
 
         let prefix = "different_prefix";
         let address = address_with_prefix([50; ADDRESS_LEN], prefix);
         let action = IbcRelayerChange::Addition(address);
-        let err = CheckedIbcRelayerChange::new(action, fixture.tx_signer, &fixture.state)
+        let err = fixture
+            .new_checked_action(action, tx_signer)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
 
         let action = IbcRelayerChange::Removal(address);
-        let err = CheckedIbcRelayerChange::new(action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(action, tx_signer)
             .await
             .unwrap_err();
 
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             &format!("address has prefix `{prefix}` but only `{ASTRIA_PREFIX}` is permitted"),
         );
@@ -139,28 +162,29 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_signer_is_not_ibc_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let fixture = Fixture::default_initialized().await;
+        // Use a signer address different from the IBC sudo address.
+        let tx_signer = [2; ADDRESS_LEN];
+        assert_ne!(*IBC_SUDO_ADDRESS_BYTES, tx_signer);
 
         let address = astria_address(&[50; ADDRESS_LEN]);
         let addition_action = IbcRelayerChange::Addition(address);
         let removal_action = IbcRelayerChange::Removal(address);
-        // Store a sudo address different from the tx signer address.
-        let sudo_address = [2; ADDRESS_LEN];
-        assert_ne!(fixture.tx_signer, sudo_address);
-        fixture.state.put_ibc_sudo_address(sudo_address).unwrap();
 
-        let err = CheckedIbcRelayerChange::new(addition_action, fixture.tx_signer, &fixture.state)
+        let err = fixture
+            .new_checked_action(addition_action, tx_signer)
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to change ibc relayer",
         );
 
-        let err = CheckedIbcRelayerChange::new(removal_action, fixture.tx_signer, fixture.state)
+        let err = fixture
+            .new_checked_action(removal_action, tx_signer)
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to change ibc relayer",
         );
@@ -168,59 +192,58 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_execution_if_signer_is_not_bridge_sudo_address() {
-        let mut fixture = Fixture::new().await;
+        let mut fixture = Fixture::default_initialized().await;
+        let tx_signer = *IBC_SUDO_ADDRESS_BYTES;
 
         let address = astria_address(&[50; ADDRESS_LEN]);
         let addition_action = IbcRelayerChange::Addition(address);
         let removal_action = IbcRelayerChange::Removal(address);
-        // Store the tx signer address as the sudo address.
-        fixture
-            .state
-            .put_ibc_sudo_address(fixture.tx_signer)
-            .unwrap();
 
         // Construct checked IBC relayer change actions while the sudo address is still the
         // tx signer so construction succeeds.
-        let checked_addition_action =
-            CheckedIbcRelayerChange::new(addition_action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
-        let checked_removal_action =
-            CheckedIbcRelayerChange::new(removal_action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        let checked_addition_action: CheckedIbcRelayerChange = fixture
+            .new_checked_action(addition_action, tx_signer)
+            .await
+            .unwrap()
+            .into();
+        let checked_removal_action: CheckedIbcRelayerChange = fixture
+            .new_checked_action(removal_action, tx_signer)
+            .await
+            .unwrap()
+            .into();
 
         // Change the IBC sudo address to something other than the tx signer.
         let ibc_sudo_change = IbcSudoChange {
             new_address: astria_address(&[2; ADDRESS_LEN]),
         };
-        let checked_ibc_sudo_change =
-            CheckedAction::new_ibc_sudo_change(ibc_sudo_change, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        let checked_ibc_sudo_change: CheckedIbcSudoChange = fixture
+            .new_checked_action(ibc_sudo_change, *SUDO_ADDRESS_BYTES)
+            .await
+            .unwrap()
+            .into();
         checked_ibc_sudo_change
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
-        let new_ibc_sudo_address = fixture.state.get_ibc_sudo_address().await.unwrap();
-        assert_ne!(fixture.tx_signer, new_ibc_sudo_address);
+        let new_ibc_sudo_address = fixture.state().get_ibc_sudo_address().await.unwrap();
+        assert_ne!(tx_signer, new_ibc_sudo_address);
 
         // Try to execute the checked actions now - should fail due to signer no longer being
         // authorized.
         let err = checked_addition_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to change ibc relayer",
         );
 
         let err = checked_removal_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap_err();
-        assert_eyre_error(
+        assert_error_contains(
             &err,
             "transaction signer not authorized to change ibc relayer",
         );
@@ -228,35 +251,34 @@ mod tests {
 
     #[tokio::test]
     async fn should_execute() {
-        let mut fixture = Fixture::new().await;
-        fixture
-            .state
-            .put_ibc_sudo_address(fixture.tx_signer)
-            .unwrap();
+        let mut fixture = Fixture::default_initialized().await;
+        let tx_signer = *IBC_SUDO_ADDRESS_BYTES;
 
         let address = astria_address(&[50; ADDRESS_LEN]);
-        assert!(!fixture.state.is_ibc_relayer(&address).await.unwrap());
+        assert!(!fixture.state().is_ibc_relayer(&address).await.unwrap());
 
         let addition_action = IbcRelayerChange::Addition(address);
-        let checked_addition_action =
-            CheckedIbcRelayerChange::new(addition_action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        let checked_addition_action: CheckedIbcRelayerChange = fixture
+            .new_checked_action(addition_action, tx_signer)
+            .await
+            .unwrap()
+            .into();
         checked_addition_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
-        assert!(fixture.state.is_ibc_relayer(&address).await.unwrap());
+        assert!(fixture.state().is_ibc_relayer(&address).await.unwrap());
 
         let removal_action = IbcRelayerChange::Removal(address);
-        let checked_removal_action =
-            CheckedIbcRelayerChange::new(removal_action, fixture.tx_signer, &fixture.state)
-                .await
-                .unwrap();
+        let checked_removal_action: CheckedIbcRelayerChange = fixture
+            .new_checked_action(removal_action, tx_signer)
+            .await
+            .unwrap()
+            .into();
         checked_removal_action
-            .execute(&mut fixture.state)
+            .execute(fixture.state_mut())
             .await
             .unwrap();
-        assert!(!fixture.state.is_ibc_relayer(&address).await.unwrap());
+        assert!(!fixture.state().is_ibc_relayer(&address).await.unwrap());
     }
 }

@@ -1181,6 +1181,44 @@ impl App {
 
         events
     }
+
+    #[cfg(test)]
+    pub(crate) fn state(&self) -> &StateDelta<Snapshot> {
+        &*self.state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_mut(&mut self) -> &mut StateDelta<Snapshot> {
+        Arc::get_mut(&mut self.state).unwrap()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn metrics(&self) -> &'static Metrics {
+        self.metrics
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_events(self) -> Vec<Event> {
+        Arc::into_inner(self.state)
+            .unwrap()
+            .flatten()
+            .1
+            .take_events()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn authority_component_end_block(&mut self) {
+        let state_tx = StateDelta::new(self.state.clone());
+        let mut arc_state_tx = Arc::new(state_tx);
+        let end_block = abci::request::EndBlock {
+            height: 1,
+        };
+        AuthorityComponent::end_block(&mut arc_state_tx, &end_block)
+            .await
+            .unwrap();
+        let state_tx = Arc::try_unwrap(arc_state_tx).unwrap();
+        let _ = self.apply(state_tx);
+    }
 }
 
 // updates the mempool to reflect current state
@@ -1344,7 +1382,7 @@ async fn proposal_checks_and_tx_execution(
 
     // check sequencer size constraints
     let tx_sequence_data_bytes = tx
-        .unsigned_transaction()
+        .body()
         .actions()
         .iter()
         .filter_map(Action::as_rollup_data_submission)
