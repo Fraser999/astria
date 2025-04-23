@@ -298,9 +298,8 @@ async fn recheck_tx(
 ) -> response::CheckTx {
     let start = Instant::now();
 
-    let rsp = match mempool.check_tx(tx_id).await {
-        Ok(()) => response::CheckTx::default(),
-        Err(Some(removal_reason)) => {
+    let rsp = match mempool.check_removed_comet_bft(tx_id).await {
+        Some(removal_reason) => {
             match removal_reason {
                 RemovalReason::Expired => {
                     metrics.increment_check_tx_removed_expired();
@@ -312,10 +311,16 @@ async fn recheck_tx(
             }
             response::CheckTx::from(removal_reason)
         }
-        Err(None) => error_response(
-            AbciErrorCode::VALUE_NOT_FOUND,
-            format!("transaction {tx_id} not found in mempool to re-check"),
-        ),
+        None => {
+            if mempool.is_tracked(tx_id).await {
+                response::CheckTx::default()
+            } else {
+                error_response(
+                    AbciErrorCode::VALUE_NOT_FOUND,
+                    format!("transaction {tx_id} not found in mempool to re-check"),
+                )
+            }
+        }
     };
 
     metrics.record_check_tx_duration_seconds_recheck(start.elapsed());

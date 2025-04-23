@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-
+use std::sync::Arc;
 use astria_core::{
     primitive::v1::RollupId,
     protocol::{
@@ -12,6 +12,8 @@ use astria_core::{
     },
 };
 use bytes::Bytes;
+
+use crate::checked_transaction::CheckedTransaction;
 
 /// Wrapper for values returned by [`generate_rollup_datas_commitment`].
 pub(crate) struct GeneratedCommitments {
@@ -55,13 +57,18 @@ impl GeneratedCommitments {
 /// This is somewhat arbitrary, but could be useful for proof of an action within the rollup datas
 /// tree.
 pub(crate) fn generate_rollup_datas_commitment(
-    signed_txs: &[Transaction],
+    checked_txs: &[Arc<CheckedTransaction>],
     deposits: HashMap<RollupId, Vec<Deposit>>,
 ) -> GeneratedCommitments {
     use prost::Message as _;
 
+    let rollup_data_bytes = checked_txs
+        .iter()
+        .flat_map(CheckedTransaction::rollup_data_bytes);
     let mut rollup_ids_to_txs =
-        group_rollup_data_submissions_in_signed_transaction_transactions_by_rollup_id(signed_txs);
+        group_rollup_data_submissions_in_signed_transaction_transactions_by_rollup_id(
+            rollup_data_bytes,
+        );
 
     for (rollup_id, deposit) in deposits {
         rollup_ids_to_txs

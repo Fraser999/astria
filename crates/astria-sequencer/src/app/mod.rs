@@ -123,6 +123,8 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    checked_actions::CheckedAction,
+    checked_transaction::CheckedTransaction,
     component::Component as _,
     fees::{
         component::FeesComponent,
@@ -361,20 +363,25 @@ impl App {
             .wrap_err("failed to prepare for executing block")?;
 
         // ignore the txs passed by cometbft in favour of our app-side mempool
-        let (included_tx_bytes, signed_txs_included) = self
+        let included_txs = self
             .prepare_proposal_tx_execution(&mut block_size_constraints)
             .await
             .wrap_err("failed to execute transactions")?;
         self.metrics
-            .record_proposal_transactions(signed_txs_included.len());
+            .record_proposal_transactions(included_txs.len());
 
         let deposits = self.state.get_cached_block_deposits();
         self.metrics.record_proposal_deposits(deposits.len());
 
         // generate commitment to sequence::Actions and deposits and commitment to the rollup IDs
         // included in the block
-        let res = generate_rollup_datas_commitment(&signed_txs_included, deposits);
-        let txs = res.into_transactions(included_tx_bytes);
+        let res = generate_rollup_datas_commitment(&included_txs, deposits);
+        let txs = res.into_transactions(
+            included_txs
+                .iter()
+                .map(|tx| tx.encoded_bytes().clone())
+                .collect(),
+        );
 
         let response = abci::response::PrepareProposal {
             txs,
@@ -581,16 +588,15 @@ impl App {
     async fn prepare_proposal_tx_execution(
         &mut self,
         block_size_constraints: &mut BlockSizeConstraints,
-    ) -> Result<(Vec<bytes::Bytes>, Vec<Transaction>)> {
+    ) -> Result<Vec<Arc<CheckedTransaction>>> {
         let mempool_len = self.mempool.len().await;
         debug!(mempool_len, "executing transactions from mempool");
 
         let mut proposal_info = Proposal::Prepare {
-            validated_txs: Vec::new(),
-            included_signed_txs: Vec::new(),
+            included_txs: Vec::new(),
             failed_tx_count: 0,
             execution_results: Vec::new(),
-            excluded_txs: 0,
+            excluded_tx_count: 0,
             current_tx_group: Group::BundleableGeneral,
             mempool: self.mempool.clone(),
             metrics: self.metrics,
@@ -600,14 +606,13 @@ impl App {
         let pending_txs = self.mempool.builder_queue().await;
 
         let mut unused_count = pending_txs.len();
-        for (tx_hash, tx) in pending_txs {
+        for (tx_id, tx) in pending_txs {
             unused_count = unused_count.saturating_sub(1);
 
             if BreakOrContinue::Break
                 == proposal_checks_and_tx_execution(
                     self,
                     tx,
-                    Some(tx_hash),
                     block_size_constraints,
                     &mut proposal_info,
                 )
@@ -618,11 +623,10 @@ impl App {
         }
 
         let Proposal::Prepare {
-            validated_txs,
-            included_signed_txs,
+            included_txs,
             failed_tx_count,
             execution_results,
-            excluded_txs,
+            excluded_tx_count,
             ..
         } = proposal_info
         else {
@@ -631,13 +635,13 @@ impl App {
 
         if failed_tx_count > 0 {
             info!(
-                failed_tx_count = failed_tx_count,
-                included_tx_count = validated_txs.len(),
+                failed_tx_count,
+                included_tx_count = included_txs.len(),
                 "excluded transactions from block due to execution failure"
             );
         }
         self.metrics.set_prepare_proposal_excluded_transactions(
-            excluded_txs.saturating_add(failed_tx_count),
+            excluded_tx_count.saturating_add(failed_tx_count),
         );
 
         debug!("{unused_count} leftover pending transactions");
@@ -653,7 +657,7 @@ impl App {
         state_tx.object_put(EXECUTION_RESULTS_KEY, execution_results);
         let _ = state_tx.apply();
 
-        Ok((validated_txs, included_signed_txs))
+        Ok(included_txs)
     }
 
     /// Executes the given transactions, writing to the app's `StateDelta`.
@@ -1033,29 +1037,29 @@ impl App {
 
     /// Executes a signed transaction.
     #[instrument(name = "App::execute_transaction", skip_all, err(level = Level::DEBUG))]
-    async fn execute_transaction(&mut self, signed_tx: Arc<Transaction>) -> Result<Vec<Event>> {
-        signed_tx
-            .check_stateless()
-            .await
-            .wrap_err("stateless check failed")?;
-
+    async fn execute_transaction(
+        &mut self,
+        checked_tx: Arc<CheckedTransaction>,
+    ) -> Result<Vec<Event>> {
         let mut state_tx = self
             .state
             .try_begin_transaction()
             .expect("state Arc should be present and unique");
 
-        signed_tx
-            .check_and_execute(&mut state_tx)
+        checked_tx
+            .execute(&mut state_tx)
             .await
             .wrap_err("failed executing transaction")?;
 
         // flag mempool for cleaning if we ran a fee change action
-        self.recost_mempool = self.recost_mempool
-            || signed_tx.is_bundleable_sudo_action_group()
-                && signed_tx
-                    .actions()
-                    .iter()
-                    .any(|act| act.is_fee_asset_change() || act.is_fee_change());
+        let changes_fees = |action: &CheckedAction| {
+            matches!(
+                action,
+                CheckedAction::FeeChange(_) | CheckedAction::FeeAssetChange(_)
+            )
+        };
+        self.recost_mempool =
+            self.recost_mempool || checked_tx.checked_actions().iter().any(changes_fees);
 
         // index all event attributes
         let mut events = state_tx.apply().1;
@@ -1271,11 +1275,10 @@ enum BreakOrContinue {
 
 enum Proposal {
     Prepare {
-        validated_txs: Vec<bytes::Bytes>,
-        included_signed_txs: Vec<Transaction>,
+        included_txs: Vec<Arc<CheckedTransaction>>,
         failed_tx_count: usize,
         execution_results: Vec<ExecTxResult>,
-        excluded_txs: usize,
+        excluded_tx_count: usize,
         current_tx_group: Group,
         mempool: Mempool,
         metrics: &'static Metrics,
@@ -1335,36 +1338,29 @@ impl Proposal {
 #[instrument(skip_all)]
 async fn proposal_checks_and_tx_execution(
     app: &mut App,
-    tx: Arc<Transaction>,
-    // `prepare_proposal_tx_execution` already has the tx hash, so we pass it in here
-    tx_hash: Option<[u8; TRANSACTION_ID_LEN]>,
+    tx: Arc<CheckedTransaction>,
     block_size_constraints: &mut BlockSizeConstraints,
     proposal_info: &mut Proposal,
 ) -> Result<BreakOrContinue> {
-    let tx_bytes = tx.to_raw().encode_to_vec();
-    let tx_hash_base_64 =
-        telemetry::display::base64(tx_hash.unwrap_or_else(|| Sha256::digest(&tx_bytes).into()))
-            .to_string();
-    let tx_len = tx_bytes.len();
-
-    info!(transaction_hash = %tx_hash_base_64, "executing transaction");
+    info!(tx_id = %tx.id(), "executing transaction");
+    let tx_len = tx.encoded_bytes_len();
 
     // check CometBFT size constraints for `prepare_proposal`
     if let Proposal::Prepare {
         metrics,
-        excluded_txs,
+        excluded_tx_count,
         ..
     } = proposal_info
     {
         if !block_size_constraints.cometbft_has_space(tx_len) {
             metrics.increment_prepare_proposal_excluded_transactions_cometbft_space();
             debug!(
-                transaction_hash = %tx_hash_base_64,
+                tx_id = %tx.id(),
                 block_size_constraints = %json(&block_size_constraints),
                 tx_data_bytes = tx_len,
                 "excluding remaining transactions: max cometBFT data limit reached"
             );
-            *excluded_txs = excluded_txs.saturating_add(1);
+            *excluded_tx_count = excluded_tx_count.saturating_add(1);
 
             // break from calling loop, as the block is full
             return Ok(BreakOrContinue::Break);
@@ -1381,27 +1377,22 @@ async fn proposal_checks_and_tx_execution(
     };
 
     // check sequencer size constraints
-    let tx_sequence_data_bytes = tx
-        .body()
-        .actions()
-        .iter()
-        .filter_map(Action::as_rollup_data_submission)
-        .fold(0usize, |acc, seq| acc.saturating_add(seq.data.len()));
+    let tx_sequence_data_bytes = tx.rollup_data_bytes_total();
     if !block_size_constraints.sequencer_has_space(tx_sequence_data_bytes) {
         debug!(
-            transaction_hash = %tx_hash_base_64,
+            tx_id = %tx.id(),
             block_size_constraints = %json(&block_size_constraints),
-            tx_data_bytes = tx_sequence_data_bytes,
+            tx_sequence_data_bytes,
             "{debug_msg}: max block sequenced data limit reached"
         );
         match proposal_info {
             Proposal::Prepare {
                 metrics,
-                excluded_txs,
+                excluded_tx_count,
                 ..
             } => {
                 metrics.increment_prepare_proposal_excluded_transactions_sequencer_space();
-                *excluded_txs = excluded_txs.saturating_add(1);
+                *excluded_tx_count = excluded_tx_count.saturating_add(1);
 
                 // continue as there might be non-sequence txs that can fit
                 return Ok(BreakOrContinue::Continue);
@@ -1416,14 +1407,14 @@ async fn proposal_checks_and_tx_execution(
     let tx_group = tx.group();
     if tx_group > proposal_info.current_tx_group() {
         debug!(
-            transaction_hash = %tx_hash_base_64,
+            tx_id = %tx.id(),
             "{debug_msg}: group is higher priority than previously included transactions"
         );
         match proposal_info {
             Proposal::Prepare {
-                excluded_txs, ..
+                excluded_tx_count, ..
             } => {
-                *excluded_txs = excluded_txs.saturating_add(1);
+                *excluded_tx_count = excluded_tx_count.saturating_add(1);
                 return Ok(BreakOrContinue::Continue);
             }
             Proposal::Process {
@@ -1448,18 +1439,15 @@ async fn proposal_checks_and_tx_execution(
                 .cometbft_checked_add(tx_len)
                 .wrap_err("error growing cometBFT block size")?;
             if let Proposal::Prepare {
-                validated_txs,
-                included_signed_txs,
-                ..
+                included_txs, ..
             } = proposal_info
             {
-                validated_txs.push(tx_bytes.into());
-                included_signed_txs.push((*tx).clone());
+                included_txs.push(tx);
             }
         }
         Err(e) => {
             debug!(
-                transaction_hash = %tx_hash_base_64,
+                tx_id = %tx.id(),
                 error = AsRef::<dyn std::error::Error>::as_ref(&e),
                 "{debug_msg}: failed to execute transaction"
             );

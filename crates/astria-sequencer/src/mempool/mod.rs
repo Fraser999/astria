@@ -13,12 +13,9 @@ use std::{
     sync::Arc,
 };
 
-use astria_core::{
-    primitive::v1::{
-        asset::IbcPrefixed,
-        TransactionId,
-    },
-    protocol::transaction::v1::Transaction,
+use astria_core::primitive::v1::{
+    asset::IbcPrefixed,
+    TransactionId,
 };
 use astria_eyre::eyre::Result;
 pub(crate) use mempool_state::get_account_balances;
@@ -45,13 +42,10 @@ use transactions_container::{
 
 use crate::{
     accounts,
-    checked_transaction::{
-        CheckedTransaction,
-        CheckedTransactionError,
-    },
+    accounts::AddressBytes as _,
+    checked_transaction::CheckedTransaction,
     Metrics,
 };
-use crate::accounts::AddressBytes as _;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) enum RemovalReason {
@@ -59,7 +53,6 @@ pub(crate) enum RemovalReason {
     NonceStale,
     LowerNonceInvalidated,
     FailedPrepareProposal(String),
-    FailedCheckTx(String),
 }
 
 /// How long transactions are considered valid in the mempool.
@@ -278,21 +271,18 @@ impl Mempool {
                     .nonce()
                     .checked_add(1)
                     .expect("failed to increment nonce in promotion");
-                let available_balances = pending.subtract_contained_costs(
-                    address_bytes,
-                    current_account_balances.clone(),
-                );
-                let promotables = parked.find_promotables(
-                    address_bytes,
-                    target_nonce,
-                    &available_balances,
-                );
+                let available_balances = pending
+                    .subtract_contained_costs(address_bytes, current_account_balances.clone());
+                let promotables =
+                    parked.find_promotables(address_bytes, target_nonce, &available_balances);
                 // promote the transactions
                 for ttx_to_promote in promotables {
                     let tx_id_to_promote = *ttx_to_promote.id();
-                    if let Err(error) =
-                        pending.add(ttx_to_promote, current_account_nonce, &current_account_balances)
-                    {
+                    if let Err(error) = pending.add(
+                        ttx_to_promote,
+                        current_account_nonce,
+                        &current_account_balances,
+                    ) {
                         // NOTE: this branch is not expected to be hit so grabbing the lock inside
                         // of the loop is more performant.
                         self.lock_contained_txs().await.remove(&tx_id_to_promote);
@@ -311,19 +301,6 @@ impl Mempool {
                 Ok(())
             }
         }
-    }
-
-    /// Calls `CheckedTransaction::run_mutable_checks` on the given transaction.
-    ///
-    /// Returns `Ok` if the transaction is found in pending or parked and passes the mutable checks.
-    /// Returns `Err(None)` if the transaction is not found. Returns `Err(Some)` if the transaction
-    /// is held in the `comet_bft_removal_cache` or if it fails the mutable checks. In this case,
-    /// the transaction is also removed from the mempool entirely.
-    pub(crate) async fn check_tx(
-        &self,
-        tx_id: &TransactionId,
-    ) -> Result<(), Option<RemovalReason>> {
-        todo!();
     }
 
     /// Returns a copy of all transactions and their IDs ready for execution, sorted first by the
@@ -379,7 +356,10 @@ impl Mempool {
     /// Checks if a transaction was flagged to be removed from the `CometBFT` mempool. Will
     /// remove the transaction from the cache if it is present.
     #[instrument(skip_all, fields(%tx_id))]
-    pub(crate) async fn check_removed_comet_bft(&self, tx_id: &TransactionId) -> Option<RemovalReason> {
+    pub(crate) async fn check_removed_comet_bft(
+        &self,
+        tx_id: &TransactionId,
+    ) -> Option<RemovalReason> {
         self.comet_bft_removal_cache.write().await.remove(tx_id)
     }
 
@@ -463,9 +443,10 @@ impl Mempool {
                 let promotion_txs =
                     parked.find_promotables(address_bytes, pending_nonce, &remaining_balances);
 
-                for tx in promotion_txs {
-                    let tx_id = tx.id();
-                    if let Err(error) = pending.add(tx, current_nonce, &current_balances) {
+                for promotion_tx in promotion_txs {
+                    let tx_id = *promotion_tx.id();
+                    if let Err(error) = pending.add(promotion_tx, current_nonce, &current_balances)
+                    {
                         // NOTE: this shouldn't happen. Promotions should never fail. This also
                         // means grabbing the lock inside the loop is more
                         // performant.
@@ -474,7 +455,7 @@ impl Mempool {
                         error!(
                             address = %telemetry::display::base64(&address_bytes),
                             current_nonce,
-                            tx_hash = %telemetry::display::hex(&tx_id),
+                            %tx_id,
                             %error,
                             "failed to promote transaction during maintenance"
                         );
@@ -482,9 +463,9 @@ impl Mempool {
                 }
             } else {
                 // add demoted transactions to parked
-                for tx in demotion_txs {
-                    let tx_id = tx.id();
-                    if let Err(error) = parked.add(tx, current_nonce, &current_balances) {
+                for demotion_tx in demotion_txs {
+                    let tx_id = demotion_tx.id();
+                    if let Err(error) = parked.add(demotion_tx, current_nonce, &current_balances) {
                         // NOTE: this shouldn't happen normally but could on the edge case of
                         // the parked queue being full for the account or globally.
                         // Grabbing the lock inside the loop should be more performant.
@@ -493,7 +474,7 @@ impl Mempool {
                         error!(
                             address = %telemetry::display::base64(&address_bytes),
                             current_nonce,
-                            tx_hash = %telemetry::display::hex(&tx_id),
+                            %tx_id,
                             %error,
                             "failed to demote transaction during maintenance"
                         );
@@ -508,9 +489,9 @@ impl Mempool {
         // add to removal cache for cometbft and remove from the tracked set
         let mut removal_cache = self.comet_bft_removal_cache.write().await;
         let mut contained_lock = self.lock_contained_txs().await;
-        for (tx_hash, reason) in removed_txs {
-            removal_cache.add(tx_hash, reason);
-            contained_lock.remove(tx_hash);
+        for (tx_id, reason) in removed_txs {
+            removal_cache.add(tx_id, reason);
+            contained_lock.remove(&tx_id);
         }
     }
 
@@ -518,9 +499,9 @@ impl Mempool {
     /// does not take into account gapped nonces in the parked queue. For example, if the
     /// pending queue for an account has nonces [0,1] and the parked queue has [3], [1] will be
     /// returned.
-    #[instrument(skip_all, fields(address = %telemetry::display::base64(address)))]
-    pub(crate) async fn pending_nonce(&self, address: &[u8; 20]) -> Option<u32> {
-        self.pending.read().await.pending_nonce(address)
+    #[instrument(skip_all, fields(address = %telemetry::display::base64(address_bytes)))]
+    pub(crate) async fn pending_nonce(&self, address_bytes: &[u8; 20]) -> Option<u32> {
+        self.pending.read().await.pending_nonce(address_bytes)
     }
 
     async fn acquire_both_locks(

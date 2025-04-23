@@ -33,7 +33,7 @@ impl CheckedRollupDataSubmission {
         Ok(checked_action)
     }
 
-    pub(super) fn action(&self) -> &RollupDataSubmission {
+    pub(crate) fn action(&self) -> &RollupDataSubmission {
         &self.action
     }
 }

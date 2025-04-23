@@ -125,8 +125,19 @@ impl ConfigureSequencerBlock {
             }
         }
 
+        let rollup_data_bytes = txs.iter().flat_map(|tx| {
+            tx.actions().iter().filter_map(|action| {
+                if let Action::RollupDataSubmission(rollup_submission) = action {
+                    Some((&rollup_submission.rollup_id, &rollup_submission.data))
+                } else {
+                    None
+                }
+            })
+        });
         let mut rollup_transactions =
-            group_rollup_data_submissions_in_signed_transaction_transactions_by_rollup_id(&txs);
+            group_rollup_data_submissions_in_signed_transaction_transactions_by_rollup_id(
+                rollup_data_bytes,
+            );
         for (rollup_id, deposit) in deposits_map.clone() {
             rollup_transactions
                 .entry(rollup_id)

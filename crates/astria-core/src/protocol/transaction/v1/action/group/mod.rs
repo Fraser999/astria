@@ -103,7 +103,7 @@ impl Group {
         matches!(self, Group::BundleableGeneral | Group::BundleableSudo)
     }
 
-    pub(crate) fn is_bundleable_sudo(self) -> bool {
+    pub fn is_bundleable_sudo(self) -> bool {
         matches!(self, Group::BundleableSudo)
     }
 }

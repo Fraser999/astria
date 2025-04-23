@@ -12,6 +12,7 @@ use astria_core::{
     generated::astria::protocol::transaction::v1 as raw,
     primitive::v1::{
         asset::IbcPrefixed,
+        RollupId,
         TransactionId,
         ADDRESS_LEN,
     },
@@ -173,6 +174,27 @@ impl CheckedTransaction {
 
     pub(crate) fn verification_key(&self) -> &VerificationKey {
         &self.verification_key
+    }
+
+    /// Returns the bytes of the encoded `Transaction` from which this `CheckedTransaction` is
+    /// constructed.
+    pub(crate) fn encoded_bytes(&self) -> &Bytes {
+        &self.tx_bytes
+    }
+
+    /// Returns an iterator over the rollup ID and data bytes of all `RollupDataSubmission`s in this
+    /// transaction's actions, in the order in which they occur in the transaction.
+    pub(crate) fn rollup_data_bytes(&self) -> impl Iterator<Item = (&RollupId, &Bytes)> {
+        self.actions.iter().filter_map(|checked_action| {
+            if let CheckedAction::RollupDataSubmission(rollup_submission) = checked_action {
+                Some((
+                    &rollup_submission.action().rollup_id,
+                    &rollup_submission.action().data,
+                ))
+            } else {
+                None
+            }
+        })
     }
 
     pub(crate) async fn total_costs<S: StateRead>(
