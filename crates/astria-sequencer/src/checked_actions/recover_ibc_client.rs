@@ -62,10 +62,10 @@ impl CheckedRecoverIbcClient {
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
-        self.exec_mutable_checks(state).await.map(|_| ())
+        self.do_run_mutable_checks(state).await.map(|_| ())
     }
 
-    async fn exec_mutable_checks<S: StateRead>(&self, state: S) -> Result<ClientStates> {
+    async fn do_run_mutable_checks<S: StateRead>(&self, state: S) -> Result<ClientStates> {
         // Ensure the tx signer is the current sudo address.
         let sudo_address = state
             .get_sudo_address()
@@ -137,7 +137,7 @@ impl CheckedRecoverIbcClient {
         let ClientStates {
             mut client_state,
             replacement_client_state,
-        } = self.exec_mutable_checks(&state).await?;
+        } = self.do_run_mutable_checks(&state).await?;
 
         let substitute_consensus_state = state
             .get_verified_consensus_state(

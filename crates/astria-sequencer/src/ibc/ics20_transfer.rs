@@ -25,6 +25,10 @@ use astria_core::{
         Ics20WithdrawalFromRollup,
     },
     sequencerblock::v1::block::Deposit,
+    upgrades::v1::aspen::{
+        Aspen,
+        IbcAcknowledgementFailureChange,
+    },
 };
 use astria_eyre::{
     anyhow::{
@@ -91,7 +95,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
-    transaction::StateReadExt as _,
+    upgrades::StateReadExt as _,
     utils::create_deposit_event,
 };
 
@@ -365,14 +369,25 @@ impl AppHandlerExecute for Ics20Transfer {
     ) -> anyhow::Result<()> {
         use penumbra_ibc::component::packet::WriteAcknowledgement as _;
 
+        let use_new_error_format = state
+            .get_upgrade_change_info(&Aspen::NAME, &IbcAcknowledgementFailureChange::NAME)
+            .await
+            .map_err(|err| eyre_to_anyhow(err).context("failed to read upgrade info"))?
+            .is_some();
+
         let ack = match receive_tokens(&mut state, &msg.packet).await {
             Ok(()) => TokenTransferAcknowledgement::success(),
             Err(e) => {
-                tracing::debug!(
+                tracing::warn!(
                     error = AsRef::<dyn std::error::Error>::as_ref(&e),
                     "failed to execute ics20 transfer"
                 );
-                TokenTransferAcknowledgement::Error(format!("{e:#}"))
+                let error_message = if use_new_error_format {
+                    "ics20 transfer failed".to_string()
+                } else {
+                    format!("{e:#}")
+                };
+                TokenTransferAcknowledgement::Error(error_message)
             }
         };
 
@@ -733,11 +748,11 @@ async fn emit_deposit<S: StateWrite>(
         asset.to_ibc_prefixed(),
     );
 
-    let transaction_context = state
-        .get_transaction_context()
-        .ok_or_eyre("transaction source should be present in state when executing an action")?;
-    let source_transaction_id = transaction_context.transaction_id;
-    let source_action_index = transaction_context.position_in_transaction;
+    let context = state
+        .ephemeral_get_ibc_context()
+        .ok_or_eyre("failed to get the ibc context from ephemeral store")?;
+    let source_transaction_id = context.tx_id;
+    let source_action_index = context.source_action_index;
 
     let deposit = Deposit {
         bridge_address: *bridge_address,
@@ -804,10 +819,6 @@ mod tests {
             StateWriteExt,
         },
         test_utils::astria_compat_address,
-        transaction::{
-            StateWriteExt as _,
-            TransactionContext,
-        },
     };
 
     fn packet() -> Packet {
@@ -944,11 +955,7 @@ mod tests {
         state_tx
             .put_ibc_compat_prefix(ASTRIA_COMPAT_PREFIX.to_string())
             .unwrap();
-        state_tx.put_transaction_context(TransactionContext {
-            address_bytes: bridge_address.bytes(),
-            transaction_id: TransactionId::new([0; 32]),
-            position_in_transaction: 0,
-        });
+        state_tx.ephemeral_put_ibc_context(TransactionId::new([0; 32]), 0);
 
         let rollup_deposit_address = "rollupaddress";
         let amount = 100;
@@ -1026,11 +1033,7 @@ mod tests {
         state_tx
             .put_ibc_compat_prefix(ASTRIA_COMPAT_PREFIX.to_string())
             .unwrap();
-        state_tx.put_transaction_context(TransactionContext {
-            address_bytes: bridge_address.bytes(),
-            transaction_id: TransactionId::new([0; 32]),
-            position_in_transaction: 0,
-        });
+        state_tx.ephemeral_put_ibc_context(TransactionId::new([0; 32]), 0);
 
         let rollup_deposit_address = "rollupaddress";
         let amount = 100;
@@ -1276,11 +1279,7 @@ mod tests {
 
         let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
-        state_tx.put_transaction_context(TransactionContext {
-            address_bytes: bridge_address.bytes(),
-            transaction_id: TransactionId::new([0; 32]),
-            position_in_transaction: 0,
-        });
+        state_tx.ephemeral_put_ibc_context(TransactionId::new([0; 32]), 0);
 
         state_tx
             .put_bridge_account_rollup_id(&bridge_address, rollup_id)
@@ -1360,11 +1359,7 @@ mod tests {
         let destination_chain_address = "rollup-defined";
         let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
 
-        state_tx.put_transaction_context(TransactionContext {
-            address_bytes: bridge_address.bytes(),
-            transaction_id: TransactionId::new([0; 32]),
-            position_in_transaction: 0,
-        });
+        state_tx.ephemeral_put_ibc_context(TransactionId::new([0; 32]), 0);
 
         state_tx
             .put_bridge_account_rollup_id(&bridge_address, rollup_id)
@@ -1465,12 +1460,7 @@ mod tests {
             .unwrap(),
         };
 
-        let transaction_context = TransactionContext {
-            address_bytes: bridge_address.bytes(),
-            transaction_id: TransactionId::new([0; 32]),
-            position_in_transaction: 0,
-        };
-        state_tx.put_transaction_context(transaction_context);
+        state_tx.ephemeral_put_ibc_context(TransactionId::new([0; 32]), 0);
 
         refund_tokens(
             &mut state_tx,

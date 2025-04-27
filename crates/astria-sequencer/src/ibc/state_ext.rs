@@ -5,6 +5,7 @@ use std::{
 
 use astria_core::primitive::v1::{
     asset,
+    TransactionId,
     ADDRESS_LEN,
 };
 use astria_eyre::{
@@ -88,6 +89,10 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("failed to read ibc relayer key from state")?
             .is_some())
     }
+
+    fn ephemeral_get_ibc_context(&mut self) -> Option<Context> {
+        self.object_get(keys::CONTEXT_EPHEMERAL)
+    }
 }
 
 impl<T: StateRead + ?Sized> StateReadExt for T {}
@@ -158,9 +163,25 @@ pub(crate) trait StateWriteExt: StateWrite {
     fn delete_ibc_relayer_address<T: AddressBytes>(&mut self, address: &T) {
         self.delete(keys::ibc_relayer(address));
     }
+
+    fn ephemeral_put_ibc_context(&mut self, tx_id: TransactionId, position_in_tx: u64) {
+        self.object_put(
+            keys::CONTEXT_EPHEMERAL,
+            Context {
+                tx_id,
+                source_action_index: position_in_tx,
+            },
+        )
+    }
 }
 
 impl<T: StateWrite> StateWriteExt for T {}
+
+#[derive(Clone)]
+pub(crate) struct Context {
+    pub(crate) tx_id: TransactionId,
+    pub(crate) source_action_index: u64,
+}
 
 #[cfg(test)]
 mod tests {

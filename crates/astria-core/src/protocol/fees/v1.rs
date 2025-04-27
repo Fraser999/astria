@@ -18,12 +18,14 @@ use crate::{
         BridgeSudoChange,
         BridgeTransfer,
         BridgeUnlock,
+        CurrencyPairsChange,
         FeeAssetChange,
         FeeChange,
         IbcRelayerChange,
         IbcSudoChange,
         Ics20Withdrawal,
         InitBridgeAccount,
+        MarketsChange,
         RecoverIbcClient,
         RollupDataSubmission,
         SudoAddressChange,
@@ -112,6 +114,8 @@ impl_protobuf_for_fee_components!(
     FeeComponents<SudoAddressChange> => raw::SudoAddressChangeFeeComponents,
     FeeComponents<IbcSudoChange> => raw::IbcSudoChangeFeeComponents,
     FeeComponents<RecoverIbcClient> => raw::RecoverIbcClientFeeComponents,
+    FeeComponents<CurrencyPairsChange> => raw::CurrencyPairsChangeFeeComponents,
+    FeeComponents<MarketsChange> => raw::MarketsChangeFeeComponents,
 );
 
 pub struct FeeComponents<T: ?Sized> {
@@ -173,13 +177,7 @@ impl<T: ?Sized> PartialEq for FeeComponents<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RecoverIbcClientFeeComponents {
-    pub base: u128,
-    pub multiplier: u128,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionFeeResponse {
     pub height: u64,
     pub fees: Vec<(asset::Denom, u128)>,

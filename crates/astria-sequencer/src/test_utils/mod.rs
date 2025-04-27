@@ -1,6 +1,10 @@
 use std::{
+    collections::HashMap,
     fmt::Debug,
-    sync::LazyLock,
+    sync::{
+        Arc,
+        LazyLock,
+    },
     time::Duration,
 };
 
@@ -9,21 +13,39 @@ use astria_core::{
         SigningKey,
         ADDRESS_LENGTH,
     },
+    oracles::price_feed::market_map::v2::{
+        Market,
+        ProviderConfig,
+        Ticker,
+    },
     primitive::v1::{
+        asset::{
+            Denom,
+            IbcPrefixed,
+        },
         Address,
         Bech32,
         RollupId,
     },
-    protocol::transaction::v1::action::{
-        BridgeLock,
-        BridgeSudoChange,
-        BridgeTransfer,
-        BridgeUnlock,
-        Ics20Withdrawal,
-        InitBridgeAccount,
-        RecoverIbcClient,
-        RollupDataSubmission,
-        Transfer,
+    protocol::{
+        price_feed::v1::ExtendedCommitInfoWithCurrencyPairMapping,
+        transaction::v1::action::{
+            BridgeLock,
+            BridgeSudoChange,
+            BridgeTransfer,
+            BridgeUnlock,
+            CurrencyPairsChange,
+            Ics20Withdrawal,
+            InitBridgeAccount,
+            MarketsChange,
+            RecoverIbcClient,
+            RollupDataSubmission,
+            Transfer,
+        },
+    },
+    sequencerblock::v1::{
+        block::Deposit,
+        DataItem,
     },
 };
 use bytes::Bytes;
@@ -45,53 +67,89 @@ use ibc_types::{
 };
 use penumbra_ibc::IbcRelay;
 use prost::Message as _;
+use tendermint::block::Height;
 
 pub(crate) use self::{
     bridge_initializer::BridgeInitializer,
     chain_initializer::ChainInitializer,
+    checked_tx_builder::CheckedTxBuilder,
     fixture::Fixture,
     ics20_withdrawal_builder::Ics20WithdrawalBuilder,
 };
-use crate::benchmark_and_test_utils::{
-    astria_address,
-    nria,
-    ASTRIA_COMPAT_PREFIX,
+use crate::{
+    benchmark_and_test_utils::{
+        astria_address,
+        nria,
+        ASTRIA_COMPAT_PREFIX,
+    },
+    checked_transaction::CheckedTransaction,
+    proposal::commitment::generate_rollup_datas_commitment,
 };
 
 mod bridge_initializer;
 mod chain_initializer;
+mod checked_tx_builder;
 mod fixture;
 mod ics20_withdrawal_builder;
 
-pub(crate) static ALICE: LazyLock<SigningKey> = LazyLock::new(|| SigningKey::from([1; 32]));
+pub(crate) static ALICE: LazyLock<SigningKey> = LazyLock::new(|| {
+    signing_key_from_hex_seed("2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90")
+});
 pub(crate) static ALICE_ADDRESS_BYTES: LazyLock<[u8; ADDRESS_LENGTH]> =
     LazyLock::new(|| ALICE.address_bytes());
 pub(crate) static ALICE_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| astria_address(&*ALICE_ADDRESS_BYTES));
 
-pub(crate) static BOB: LazyLock<SigningKey> = LazyLock::new(|| SigningKey::from([2; 32]));
+pub(crate) static BOB: LazyLock<SigningKey> = LazyLock::new(|| {
+    signing_key_from_hex_seed("b70fd3b99cab2d98dbd73602deb026b9cdc9bb7b85d35f0bbb81b17c78923dd0")
+});
 pub(crate) static BOB_ADDRESS_BYTES: LazyLock<[u8; ADDRESS_LENGTH]> =
     LazyLock::new(|| BOB.address_bytes());
 pub(crate) static BOB_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| astria_address(&*BOB_ADDRESS_BYTES));
 
-pub(crate) static CAROL: LazyLock<SigningKey> = LazyLock::new(|| SigningKey::from([3; 32]));
+pub(crate) static CAROL: LazyLock<SigningKey> = LazyLock::new(|| {
+    signing_key_from_hex_seed("0e951afdcbefc420fe6f71b82b0c28c11eb6ee5d95be0886ce9dbf6fa512debc")
+});
 pub(crate) static CAROL_ADDRESS_BYTES: LazyLock<[u8; ADDRESS_LENGTH]> =
     LazyLock::new(|| CAROL.address_bytes());
 pub(crate) static CAROL_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| astria_address(&*CAROL_ADDRESS_BYTES));
 
-pub(crate) static SUDO: LazyLock<SigningKey> = LazyLock::new(|| SigningKey::from([100; 32]));
+pub(crate) static SUDO: LazyLock<SigningKey> = LazyLock::new(|| {
+    signing_key_from_hex_seed("3b2a05a2168952a102dcc07f39b9e385a45b9c2a9b6e3d06acf46fb39fd14019")
+});
 pub(crate) static SUDO_ADDRESS_BYTES: LazyLock<[u8; ADDRESS_LENGTH]> =
     LazyLock::new(|| SUDO.address_bytes());
 pub(crate) static SUDO_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| astria_address(&*SUDO_ADDRESS_BYTES));
 
-pub(crate) static IBC_SUDO: LazyLock<SigningKey> = LazyLock::new(|| SigningKey::from([101; 32]));
+pub(crate) static IBC_SUDO: LazyLock<SigningKey> = LazyLock::new(|| {
+    signing_key_from_hex_seed("db4982e01f3eba9e74ac35422fcd49aa2b47c3c535345c7e7da5220fe3a0ce79")
+});
 pub(crate) static IBC_SUDO_ADDRESS_BYTES: LazyLock<[u8; ADDRESS_LENGTH]> =
     LazyLock::new(|| IBC_SUDO.address_bytes());
 pub(crate) static IBC_SUDO_ADDRESS: LazyLock<Address> =
     LazyLock::new(|| astria_address(&*IBC_SUDO_ADDRESS_BYTES));
+
+fn signing_key_from_hex_seed(hex_seed: &str) -> SigningKey {
+    let seed = hex::decode(hex_seed).unwrap();
+    SigningKey::try_from(seed.as_slice()).unwrap()
+}
+
+#[test]
+fn keeyyyyyyyyyyyyyyyyys() {
+    println!("ALICE_ADDRESS: {}", *ALICE_ADDRESS);
+    println!(
+        "ALICE_ADDRESS_BYTES: {}",
+        hex::encode(&*ALICE_ADDRESS_BYTES)
+    );
+    println!("ALICE_ADDRESS: {}", *ALICE_ADDRESS);
+    println!(
+        "ALICE_ADDRESS_BYTES: {}",
+        hex::encode(&*ALICE_ADDRESS_BYTES)
+    );
+}
 
 #[expect(
     clippy::allow_attributes,
@@ -107,34 +165,33 @@ pub(crate) fn astria_compat_address(bytes: &[u8]) -> Address<Bech32> {
         .unwrap()
 }
 
-/// Calculates the fee for a sequence `Action` based on the length of the `data`.
-#[cfg(test)]
-pub(crate) async fn calculate_rollup_data_submission_fee_from_state<
-    S: crate::fees::StateReadExt,
->(
-    data: &[u8],
-    state: &S,
-) -> u128 {
-    let fees = state
-        .get_fees::<RollupDataSubmission>()
-        .await
-        .expect("should not error fetching rollup data submission fees")
-        .expect("rollup data submission fees should be stored");
-    fees.base()
-        .checked_add(
-            fees.multiplier()
-                .checked_mul(
-                    data.len()
-                        .try_into()
-                        .expect("a usize should always convert to a u128"),
-                )
-                .expect("fee multiplication should not overflow"),
-        )
-        .expect("fee addition should not overflow")
-}
-
 pub(crate) fn borsh_then_hex<T: borsh::BorshSerialize>(item: &T) -> String {
     hex::encode(borsh::to_vec(item).unwrap())
+}
+
+pub(crate) fn transactions_with_extended_commit_info_and_commitments(
+    block_height: Height,
+    txs: &[Arc<CheckedTransaction>],
+    deposits: Option<HashMap<RollupId, Vec<Deposit>>>,
+) -> Vec<Bytes> {
+    // If vote extensions are enabled at block height 1 (the minimum possible), then the first
+    // block to include extended commit info is at height 2.
+    assert!(
+        block_height > tendermint::block::Height::from(1_u8),
+        "extended commit info can only be applied to block height 2 or greater"
+    );
+
+    let extended_commit_info = ExtendedCommitInfoWithCurrencyPairMapping::empty(0u16.into());
+    let encoded_extended_commit_info =
+        DataItem::ExtendedCommitInfo(extended_commit_info.into_raw().encode_to_vec().into())
+            .encode();
+    let commitments = generate_rollup_datas_commitment::<true>(txs, deposits.unwrap_or_default());
+    let txs_with_commit_info: Vec<Bytes> = commitments
+        .into_iter()
+        .chain(std::iter::once(encoded_extended_commit_info))
+        .chain(txs.iter().map(|tx| tx.encoded_bytes().clone()))
+        .collect();
+    txs_with_commit_info
 }
 
 pub(crate) fn dummy_bridge_lock() -> BridgeLock {
@@ -178,6 +235,10 @@ pub(crate) fn dummy_bridge_unlock() -> BridgeUnlock {
         rollup_block_number: 10,
         rollup_withdrawal_event_id: "a-rollup-defined-hash".to_string(),
     }
+}
+
+pub(crate) fn dummy_currency_pairs_change() -> CurrencyPairsChange {
+    CurrencyPairsChange::Addition(vec!["TIA/USD".parse().unwrap(), "ETH/USD".parse().unwrap()])
 }
 
 pub(crate) fn dummy_ibc_relay() -> IbcRelay {
@@ -258,6 +319,19 @@ pub(crate) fn dummy_init_bridge_account() -> InitBridgeAccount {
     }
 }
 
+pub(crate) fn dummy_markets_change() -> MarketsChange {
+    MarketsChange::Creation(vec![Market {
+        ticker: dummy_ticker("TIA/USD", "dummy ticker"),
+        provider_configs: vec![ProviderConfig {
+            name: "coingecko_api".to_string(),
+            off_chain_ticker: "celestia/usd".to_string(),
+            normalize_by_pair: None,
+            invert: false,
+            metadata_json: "dummy provider".to_string(),
+        }],
+    }])
+}
+
 pub(crate) fn dummy_recover_ibc_client() -> RecoverIbcClient {
     use ibc_types::core::client::{
         ClientId,
@@ -278,6 +352,16 @@ pub(crate) fn dummy_rollup_data_submission() -> RollupDataSubmission {
     }
 }
 
+pub(crate) fn dummy_ticker(currency_pair: &str, metadata: &str) -> Ticker {
+    Ticker {
+        currency_pair: currency_pair.parse().unwrap(),
+        decimals: 9,
+        min_provider_count: 2,
+        enabled: true,
+        metadata_json: metadata.to_string(),
+    }
+}
+
 pub(crate) fn dummy_transfer() -> Transfer {
     Transfer {
         to: astria_address(&[50; ADDRESS_LENGTH]),
@@ -285,6 +369,70 @@ pub(crate) fn dummy_transfer() -> Transfer {
         asset: nria().into(),
         amount: 100,
     }
+}
+
+pub(crate) fn denom_0() -> Denom {
+    nria().into()
+}
+
+pub(crate) fn denom_1() -> Denom {
+    "denom_1".parse().unwrap()
+}
+
+pub(crate) fn denom_2() -> Denom {
+    "denom_2".parse().unwrap()
+}
+
+pub(crate) fn denom_3() -> Denom {
+    "denom_3".parse().unwrap()
+}
+
+pub(crate) fn denom_4() -> Denom {
+    "denom_4".parse().unwrap()
+}
+
+pub(crate) fn denom_5() -> Denom {
+    "denom_5".parse().unwrap()
+}
+
+pub(crate) fn denom_6() -> Denom {
+    "denom_6".parse().unwrap()
+}
+
+pub(crate) fn dummy_tx_costs(
+    denom_0_cost: u128,
+    denom_1_cost: u128,
+    denom_2_cost: u128,
+) -> HashMap<IbcPrefixed, u128> {
+    let mut costs: HashMap<IbcPrefixed, u128> = HashMap::<IbcPrefixed, u128>::new();
+    costs.insert(denom_0().to_ibc_prefixed(), denom_0_cost);
+    costs.insert(denom_1().to_ibc_prefixed(), denom_1_cost);
+    costs.insert(denom_2().to_ibc_prefixed(), denom_2_cost); // not present in balances
+
+    // we don't sanitize the cost inputs
+    costs.insert(denom_5().to_ibc_prefixed(), 0); // zero in balances also
+    costs.insert(denom_6().to_ibc_prefixed(), 0); // not present in balances
+
+    costs
+}
+
+pub(crate) fn dummy_balances(
+    denom_0_balance: u128,
+    denom_1_balance: u128,
+) -> HashMap<IbcPrefixed, u128> {
+    let mut balances = HashMap::<IbcPrefixed, u128>::new();
+    if denom_0_balance != 0 {
+        balances.insert(denom_0().to_ibc_prefixed(), denom_0_balance);
+    }
+    if denom_1_balance != 0 {
+        balances.insert(denom_1().to_ibc_prefixed(), denom_1_balance);
+    }
+    // we don't sanitize the balance inputs
+    balances.insert(denom_3().to_ibc_prefixed(), 100); // balance transaction costs won't have entry for
+    balances.insert(denom_4().to_ibc_prefixed(), 0); // zero balance not in transaction
+    balances.insert(denom_5().to_ibc_prefixed(), 0); // zero balance with corresponding zero cost
+
+    balances
 }
 
 #[track_caller]

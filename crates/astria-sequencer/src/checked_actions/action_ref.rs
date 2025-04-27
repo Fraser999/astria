@@ -4,12 +4,14 @@ use astria_core::protocol::transaction::v1::{
         BridgeSudoChange,
         BridgeTransfer,
         BridgeUnlock,
+        CurrencyPairsChange,
         FeeAssetChange,
         FeeChange,
         IbcRelayerChange,
         IbcSudoChange,
         Ics20Withdrawal,
         InitBridgeAccount,
+        MarketsChange,
         RecoverIbcClient,
         RollupDataSubmission,
         SudoAddressChange,
@@ -39,6 +41,8 @@ pub(crate) enum ActionRef<'a> {
     BridgeTransfer(&'a BridgeTransfer),
     FeeChange(&'a FeeChange),
     RecoverIbcClient(&'a RecoverIbcClient),
+    CurrencyPairsChange(&'a CurrencyPairsChange),
+    MarketsChange(&'a MarketsChange),
 }
 
 impl<'a> From<&'a Action> for ActionRef<'a> {
@@ -60,6 +64,8 @@ impl<'a> From<&'a Action> for ActionRef<'a> {
             Action::BridgeTransfer(action) => ActionRef::BridgeTransfer(action),
             Action::FeeChange(action) => ActionRef::FeeChange(action),
             Action::RecoverIbcClient(action) => ActionRef::RecoverIbcClient(action),
+            Action::CurrencyPairsChange(action) => ActionRef::CurrencyPairsChange(action),
+            Action::MarketsChange(action) => ActionRef::MarketsChange(action),
         }
     }
 }
@@ -110,6 +116,12 @@ impl<'a> From<&'a CheckedAction> for ActionRef<'a> {
             }
             CheckedAction::RecoverIbcClient(checked_action) => {
                 ActionRef::RecoverIbcClient(checked_action.action())
+            }
+            CheckedAction::CurrencyPairsChange(checked_action) => {
+                ActionRef::CurrencyPairsChange(checked_action.action())
+            }
+            CheckedAction::MarketsChange(checked_action) => {
+                ActionRef::MarketsChange(checked_action.action())
             }
         }
     }

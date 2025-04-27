@@ -6,15 +6,6 @@ use astria_core::primitive::v1::{
 pub(crate) const ASTRIA_PREFIX: &str = "astria";
 pub(crate) const ASTRIA_COMPAT_PREFIX: &str = "astriacompat";
 
-pub(crate) fn astria_address_from_hex_string(s: &str) -> Address {
-    let bytes = hex::decode(s).unwrap();
-    Address::builder()
-        .prefix(ASTRIA_PREFIX)
-        .slice(bytes)
-        .try_build()
-        .unwrap()
-}
-
 pub(crate) fn nria() -> TracePrefixed {
     "nria".parse().unwrap()
 }

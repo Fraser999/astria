@@ -25,6 +25,7 @@ mod bridge_sudo_change;
 mod bridge_transfer;
 mod bridge_unlock;
 mod checked_action;
+mod currency_pairs_change;
 mod error;
 mod fee_asset_change;
 mod fee_change;
@@ -33,6 +34,7 @@ mod ibc_relayer_change;
 mod ibc_sudo_change;
 mod ics20_withdrawal;
 mod init_bridge_account;
+mod markets_change;
 mod recover_ibc_client;
 mod rollup_data_submission;
 mod sudo_address_change;
@@ -58,6 +60,7 @@ pub(crate) use bridge_sudo_change::CheckedBridgeSudoChange;
 pub(crate) use bridge_transfer::CheckedBridgeTransfer;
 pub(crate) use bridge_unlock::CheckedBridgeUnlock;
 pub(crate) use checked_action::CheckedAction;
+pub(crate) use currency_pairs_change::CheckedCurrencyPairsChange;
 pub(crate) use error::CheckedActionError;
 pub(crate) use fee_asset_change::CheckedFeeAssetChange;
 pub(crate) use fee_change::CheckedFeeChange;
@@ -66,11 +69,15 @@ pub(crate) use ibc_relayer_change::CheckedIbcRelayerChange;
 pub(crate) use ibc_sudo_change::CheckedIbcSudoChange;
 pub(crate) use ics20_withdrawal::CheckedIcs20Withdrawal;
 pub(crate) use init_bridge_account::CheckedInitBridgeAccount;
+pub(crate) use markets_change::CheckedMarketsChange;
 pub(crate) use recover_ibc_client::CheckedRecoverIbcClient;
 pub(crate) use rollup_data_submission::CheckedRollupDataSubmission;
 pub(crate) use sudo_address_change::CheckedSudoAddressChange;
 pub(crate) use transfer::CheckedTransfer;
-pub(crate) use validator_update::CheckedValidatorUpdate;
+pub(crate) use validator_update::{
+    use_pre_aspen_validator_updates,
+    CheckedValidatorUpdate,
+};
 
 use crate::accounts::AddressBytes;
 

@@ -4,6 +4,10 @@ use astria_core::{
         ADDRESS_LEN,
     },
     protocol::transaction::v1::action::ValidatorUpdate,
+    upgrades::v1::{
+        aspen::ValidatorUpdateActionChange,
+        Aspen,
+    },
 };
 use astria_eyre::eyre::{
     bail,
@@ -16,6 +20,7 @@ use cnidarium::{
     StateWrite,
 };
 use tracing::{
+    debug,
     instrument,
     Level,
 };
@@ -24,9 +29,13 @@ use super::{
     AssetTransfer,
     TransactionSignerAddressBytes,
 };
-use crate::authority::{
-    StateReadExt as _,
-    StateWriteExt as _,
+use crate::{
+    accounts::AddressBytes as _,
+    authority::{
+        StateReadExt as _,
+        StateWriteExt as _,
+    },
+    upgrades::StateReadExt as _,
 };
 
 #[derive(Debug)]
@@ -53,6 +62,10 @@ impl CheckedValidatorUpdate {
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
+        self.do_run_mutable_checks(state).await.map(|_| ())
+    }
+
+    async fn do_run_mutable_checks<S: StateRead>(&self, state: S) -> Result<Option<Metadata>> {
         // Check that the signer of this tx is the authorized sudo address.
         let sudo_address = state
             .get_sudo_address()
@@ -63,36 +76,93 @@ impl CheckedValidatorUpdate {
             "transaction signer not authorized to update validator set",
         );
 
-        // Ensure that we're not removing the last validator or a validator that doesn't exist;
-        // these both cause issues in CometBFT.
-        if self.action.power == 0 {
-            let validator_set = state
-                .get_validator_set()
-                .await
-                .wrap_err("failed to read validator set from storage")?;
-            // Check that validator exists.
-            if validator_set.get(&self.action.verification_key).is_none() {
-                bail!("cannot remove a non-existing validator");
+        if use_pre_aspen_validator_updates(&state)
+            .await
+            .wrap_err("failed to get upgrade status")?
+        {
+            // Ensure that we're not removing the last validator or a validator that doesn't exist;
+            // these both cause issues in CometBFT.
+            if self.action.power == 0 {
+                let validator_set = state
+                    .pre_aspen_get_validator_set()
+                    .await
+                    .wrap_err("failed to read validator set from storage")?;
+                // Check that validator exists.
+                if validator_set.get(&self.action.verification_key).is_none() {
+                    bail!("cannot remove a non-existing validator");
+                }
+                // Check that this is not the only validator, cannot remove the last one.
+                ensure!(validator_set.len() != 1, "cannot remove the only validator");
             }
-            // Check that this is not the only validator, cannot remove the last one.
-            ensure!(validator_set.len() != 1, "cannot remove the only validator");
+            return Ok(None);
         }
 
-        Ok(())
+        let current_validator_count = state
+            .get_validator_count()
+            .await
+            .wrap_err("failed to read validator count from storage")?;
+        let validator_already_exists = state
+            .get_validator(&self.action.verification_key)
+            .await
+            .wrap_err("failed to read validator info from storage")?
+            .is_some();
+        if self.action.power == 0 {
+            ensure!(
+                current_validator_count > 1,
+                "cannot remove the only validator"
+            );
+            ensure!(
+                validator_already_exists,
+                "cannot remove a non-existing validator"
+            );
+        }
+
+        Ok(Some(Metadata {
+            current_validator_count,
+            validator_already_exists,
+        }))
     }
 
     #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
-        self.run_mutable_checks(&state).await?;
+        if let Some(metadata) = self.do_run_mutable_checks(&state).await? {
+            if self.action.power == 0 {
+                state.remove_validator(&self.action.verification_key).await;
+                state
+                    .put_validator_count(metadata.current_validator_count.saturating_sub(1))
+                    .wrap_err("failed to write validator count to storage")?;
+                debug!(
+                    address = %self.action.verification_key.display_address(),
+                    "removed validator"
+                );
+            } else {
+                let log_msg = if metadata.validator_already_exists {
+                    "updated validator"
+                } else {
+                    state
+                        .put_validator_count(metadata.current_validator_count.saturating_add(1))
+                        .wrap_err("failed to write validator count to storage")?;
+                    "added validator"
+                };
+                state
+                    .put_validator(&self.action)
+                    .wrap_err("failed to write validator info to storage")?;
+                debug!(
+                    address = %self.action.verification_key.display_address(),
+                    power = self.action.power,
+                    log_msg,
+                );
+            }
+        }
 
         // Add validator update in nonverifiable state to be used in end_block.
         let mut validator_updates = state
-            .get_validator_updates()
+            .get_block_validator_updates()
             .await
             .wrap_err("failed to read validator updates from storage")?;
-        validator_updates.push_update(self.action.clone());
+        validator_updates.insert(self.action.clone());
         state
-            .put_validator_updates(validator_updates)
+            .put_block_validator_updates(validator_updates)
             .wrap_err("failed to write validator updates to storage")?;
         Ok(())
     }
@@ -106,6 +176,22 @@ impl AssetTransfer for CheckedValidatorUpdate {
     fn transfer_asset_and_amount(&self) -> Option<(IbcPrefixed, u128)> {
         None
     }
+}
+
+struct Metadata {
+    current_validator_count: u64,
+    validator_already_exists: bool,
+}
+
+pub(crate) async fn use_pre_aspen_validator_updates<S: StateRead>(state: &S) -> Result<bool> {
+    let pre_aspen_upgrade = state
+        .get_upgrade_change_info(&Aspen::NAME, &ValidatorUpdateActionChange::NAME)
+        .await
+        .wrap_err(
+            "failed to read upgrade change info for validator update action change from storage",
+        )?
+        .is_none();
+    Ok(pre_aspen_upgrade)
 }
 
 #[cfg(test)]
@@ -136,6 +222,7 @@ mod tests {
         ValidatorUpdate {
             power,
             verification_key: VerificationKey::try_from(verification_key_bytes).unwrap(),
+            name: "validator name".parse().unwrap(),
         }
     }
 
@@ -172,7 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_construction_if_removing_only_validator() {
-        let mut fixture = Fixture::uninitialized().await;
+        let mut fixture = Fixture::uninitialized(None).await;
         fixture
             .chain_initializer()
             .with_genesis_validators(Some((ALICE.verification_key(), 100)))
@@ -263,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_execution_if_removing_only_validator() {
-        let mut fixture = Fixture::uninitialized().await;
+        let mut fixture = Fixture::uninitialized(None).await;
 
         // Construct two checked actions to remove the only two validators while they are still
         // validators so construction succeeds.
@@ -316,7 +403,7 @@ mod tests {
             .into();
         checked_action.execute(fixture.state_mut()).await.unwrap();
 
-        let validator_updates = fixture.state().get_validator_updates().await.unwrap();
+        let validator_updates = fixture.state().get_block_validator_updates().await.unwrap();
         assert_eq!(validator_updates.len(), 1);
         let retrieved_update = validator_updates.get(&action.verification_key).unwrap();
         assert_eq!(*retrieved_update, action);

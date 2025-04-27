@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    time::Instant,
-};
+use std::collections::HashMap;
 
 use astria_core::{
     crypto::{
@@ -54,7 +51,6 @@ use crate::{
         ActionRef,
         CheckedAction,
     },
-    Metrics,
 };
 
 mod error;
@@ -80,13 +76,9 @@ impl CheckedTransaction {
     pub(crate) async fn new<S: StateRead>(
         tx_bytes: Bytes,
         state: &S,
-        metrics: &'static Metrics,
     ) -> Result<Self, CheckedTransactionError> {
-        let start_parsing = Instant::now();
-
         let tx_len = tx_bytes.len();
         if tx_len > MAX_TX_BYTES {
-            metrics.increment_check_tx_failed_tx_too_large();
             return Err(CheckedTransactionError::TooLarge {
                 tx_len,
             });
@@ -95,11 +87,6 @@ impl CheckedTransaction {
         let raw_tx =
             raw::Transaction::decode(tx_bytes.clone()).map_err(CheckedTransactionError::Decode)?;
         let tx = Transaction::try_from_raw(raw_tx).map_err(CheckedTransactionError::Convert)?;
-
-        let finished_parsing = Instant::now();
-        metrics.record_check_tx_duration_seconds_parse_tx(
-            finished_parsing.saturating_duration_since(start_parsing),
-        );
 
         if tx.actions().is_empty() {
             return Err(CheckedTransactionError::NoActions);
@@ -115,15 +102,9 @@ impl CheckedTransaction {
             match convert_actions(unchecked_actions, tx_signer, tx_id, state).await {
                 Ok(checked_actions) => checked_actions,
                 Err(error) => {
-                    metrics.increment_check_tx_failed_action_checks();
                     return Err(error);
                 }
             };
-
-        let finished_check_actions = Instant::now();
-        metrics.record_check_tx_duration_seconds_check_actions(
-            finished_check_actions.saturating_duration_since(finished_parsing),
-        );
 
         let chain_id = state.get_chain_id().await.map_err(|source| {
             CheckedTransactionError::internal("failed to get chain id from storage", source)
@@ -134,10 +115,6 @@ impl CheckedTransaction {
                 tx_chain_id,
             });
         }
-        metrics.record_check_tx_duration_seconds_check_chain_id(finished_check_actions.elapsed());
-
-        // NOTE: decide if worth moving to post-insertion, would have to recalculate cost
-        metrics.record_transaction_in_mempool_size_bytes(tx_len);
 
         Ok(Self {
             tx_id,
@@ -279,7 +256,7 @@ impl CheckedTransaction {
             let index =
                 u64::try_from(index).map_err(|_| CheckedTransactionError::ActionIndexOverflowed)?;
             action
-                .execute_and_pay_fees(&mut state, &tx_signer, index)
+                .execute_and_pay_fees(&mut state, &tx_signer, &self.tx_id, index)
                 .await?;
         }
         Ok(())
@@ -369,6 +346,12 @@ async fn convert_actions<S: StateRead>(
                     }
                     Action::RecoverIbcClient(action) => {
                         CheckedAction::new_recover_ibc_client(action, tx_signer, state).await
+                    }
+                    Action::CurrencyPairsChange(action) => {
+                        CheckedAction::new_currency_pairs_change(action, tx_signer, state).await
+                    }
+                    Action::MarketsChange(action) => {
+                        CheckedAction::new_markets_change(action, tx_signer, state).await
                     }
                 }
             });

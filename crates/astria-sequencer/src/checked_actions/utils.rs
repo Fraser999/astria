@@ -49,6 +49,8 @@ pub(crate) async fn total_fees<'a, I: Iterator<Item = ActionRef<'a>>, S: StateRe
             ActionRef::BridgeTransfer(action) => fee(action, state).await,
             ActionRef::FeeChange(action) => fee(action, state).await,
             ActionRef::RecoverIbcClient(action) => fee(action, state).await,
+            ActionRef::CurrencyPairsChange(action) => fee(action, state).await,
+            ActionRef::MarketsChange(action) => fee(action, state).await,
         }?;
         let Some((fee_asset, fee_amount)) = maybe_fee else {
             // If there's no fee asset, we don't charge fees.

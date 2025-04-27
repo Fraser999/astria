@@ -1,5 +1,4 @@
 pub(crate) mod accounts;
-pub(crate) mod action_handler;
 pub(crate) mod address;
 pub(crate) mod app;
 pub(crate) mod assets;
@@ -19,13 +18,14 @@ pub(crate) mod grpc;
 pub(crate) mod ibc;
 mod mempool;
 pub(crate) mod metrics;
+pub(crate) mod oracles;
 pub(crate) mod proposal;
 mod sequencer;
 pub(crate) mod service;
 pub(crate) mod storage;
-#[cfg(test)]
+#[cfg(any(test, feature = "benchmark"))]
 pub(crate) mod test_utils;
-pub(crate) mod transaction;
+pub(crate) mod upgrades;
 mod utils;
 
 pub use build_info::BUILD_INFO;

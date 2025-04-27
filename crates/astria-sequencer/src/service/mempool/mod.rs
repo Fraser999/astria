@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     pin::Pin,
     sync::Arc,
     task::{
@@ -10,23 +9,13 @@ use std::{
 };
 
 use astria_core::{
-    generated::astria::protocol::transaction::v1 as raw,
-    primitive::v1::{
-        asset::IbcPrefixed,
-        TransactionId,
-    },
-    protocol::{
-        abci::AbciErrorCode,
-        transaction::v1::Transaction,
-    },
-    Protobuf as _,
+    primitive::v1::TransactionId,
+    protocol::abci::AbciErrorCode,
 };
-use astria_eyre::eyre::WrapErr as _;
 use base64::{
     prelude::BASE64_STANDARD,
     Engine as _,
 };
-use bytes::Bytes;
 use cnidarium::{
     StateRead,
     Storage,
@@ -34,10 +23,6 @@ use cnidarium::{
 use futures::{
     Future,
     FutureExt,
-};
-use prost::{
-    Message as _,
-    Name as _,
 };
 use tendermint::{
     abci::{
@@ -63,7 +48,6 @@ use crate::{
         AddressBytes as _,
         StateReadExt as _,
     },
-    action_handler::ActionHandler as _,
     checked_actions::CheckedActionError,
     checked_transaction::{
         CheckedTransaction,
@@ -76,13 +60,10 @@ use crate::{
         RemovalReason,
     },
     metrics::Metrics,
-    transaction,
 };
 
 #[cfg(test)]
 mod tests;
-
-const MAX_TX_SIZE: usize = 256_000; // 256 KB
 
 impl From<RemovalReason> for response::CheckTx {
     fn from(removal_reason: RemovalReason) -> Self {
@@ -102,10 +83,6 @@ impl From<RemovalReason> for response::CheckTx {
             RemovalReason::LowerNonceInvalidated => error_response(
                 AbciErrorCode::LOWER_NONCE_INVALIDATED,
                 "transaction removed from app mempool due to lower nonce being invalidated",
-            ),
-            RemovalReason::FailedCheckTx(err) => error_response(
-                AbciErrorCode::TRANSACTION_FAILED_CHECK_TX,
-                format!("transaction failed re-check: {err}"),
             ),
         }
     }
@@ -266,12 +243,17 @@ async fn handle_check_tx<S: StateRead>(
 
     if check_tx_kind == CheckTxKind::Recheck {
         let tx_id = TransactionId::new(sha2::Sha256::digest(&tx_bytes).into());
-        return recheck_tx(&tx_id, mempool, metrics).await;
+        if let Some(response) = recheck_tx(&tx_id, mempool, metrics).await {
+            return response;
+        }
     }
 
-    let checked_tx = match CheckedTransaction::new(tx_bytes, &state, metrics).await {
+    let checked_tx = match CheckedTransaction::new(tx_bytes, &state).await {
         Ok(checked_tx) => checked_tx,
-        Err(error) => return response::CheckTx::from(error),
+        Err(error) => {
+            todo!("metrics");
+            return response::CheckTx::from(error);
+        }
     };
 
     if let Err(rsp) = insert_into_mempool(mempool, &state, checked_tx, metrics).await {
@@ -287,15 +269,15 @@ async fn handle_check_tx<S: StateRead>(
 ///
 /// Returns a successful response if the given tx passes `CheckedTransaction::run_mutable_checks`.
 /// Returns a failure response if:
-///   - the tx is not in the mempool
 ///   - the tx is scheduled to be removed from the mempool
 ///   - the tx returns an error from `run_mutable_checks`.
+/// Returns `None` if the tx is not in the mempool.
 #[instrument(skip_all, fields(%tx_id))]
 async fn recheck_tx(
     tx_id: &TransactionId,
     mempool: &AppMempool,
     metrics: &Metrics,
-) -> response::CheckTx {
+) -> Option<response::CheckTx> {
     let start = Instant::now();
 
     let rsp = match mempool.check_removed_comet_bft(tx_id).await {
@@ -309,16 +291,13 @@ async fn recheck_tx(
                 }
                 _ => (),
             }
-            response::CheckTx::from(removal_reason)
+            Some(response::CheckTx::from(removal_reason))
         }
         None => {
             if mempool.is_tracked(tx_id).await {
-                response::CheckTx::default()
+                Some(response::CheckTx::default())
             } else {
-                error_response(
-                    AbciErrorCode::VALUE_NOT_FOUND,
-                    format!("transaction {tx_id} not found in mempool to re-check"),
-                )
+                None
             }
         }
     };

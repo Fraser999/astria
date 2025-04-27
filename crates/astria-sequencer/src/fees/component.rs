@@ -54,6 +54,8 @@ impl Component for FeesComponent {
             sudo_address_change,
             ibc_sudo_change,
             recover_ibc_client,
+            currency_pairs_change,
+            markets_change,
         } = app_state.fees().clone();
 
         if let Some(transfer_fees) = transfer {
@@ -148,6 +150,18 @@ impl Component for FeesComponent {
             state
                 .put_fees(recover_ibc_client_fees)
                 .wrap_err("failed to store recover ibc client fee components")?;
+        }
+
+        if let Some(currency_pairs_change_fees) = currency_pairs_change {
+            state
+                .put_fees(currency_pairs_change_fees)
+                .wrap_err("failed to store currency pairs change fee components")?;
+        }
+
+        if let Some(markets_change_fees) = markets_change {
+            state
+                .put_fees(markets_change_fees)
+                .wrap_err("failed to store markets change fee components")?;
         }
 
         Ok(())

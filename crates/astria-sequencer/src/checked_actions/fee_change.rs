@@ -119,6 +119,12 @@ impl CheckedFeeChange {
             FeeChange::RecoverIbcClient(fees) => state
                 .put_fees(*fees)
                 .wrap_err("failed to write recover ibc client fees to storage"),
+            FeeChange::CurrencyPairsChange(fees) => state
+                .put_fees(*fees)
+                .wrap_err("failed to write currency pairs change fees to storage"),
+            FeeChange::MarketsChange(fees) => state
+                .put_fees(*fees)
+                .wrap_err("failed to write markets change fees to storage"),
         }
     }
 
@@ -296,13 +302,23 @@ mod tests {
         test_fee_change_action::<RecoverIbcClient>().await;
     }
 
+    #[tokio::test]
+    async fn should_execute_currency_pairs_change_fee_change() {
+        test_fee_change_action::<CurrencyPairsChange>().await;
+    }
+
+    #[tokio::test]
+    async fn should_execute_markets_change_fee_change() {
+        test_fee_change_action::<MarketsChange>().await;
+    }
+
     async fn test_fee_change_action<'a, F>()
     where
         F: FeeHandler,
         FeeComponents<F>: TryFrom<StoredValue<'a>, Error = Report> + Debug,
         FeeChange: From<FeeComponents<F>>,
     {
-        let mut fixture = Fixture::uninitialized().await;
+        let mut fixture = Fixture::uninitialized(None).await;
         fixture.chain_initializer().with_no_fees().init().await;
 
         // Any fee component except for `FeeChange` can be uninitialized.

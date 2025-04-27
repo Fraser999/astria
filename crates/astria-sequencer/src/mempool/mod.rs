@@ -303,10 +303,10 @@ impl Mempool {
         }
     }
 
-    /// Returns a copy of all transactions and their IDs ready for execution, sorted first by the
-    /// difference between a transaction and the account's current nonce and then by the time that
-    /// the transaction was first seen by the appside mempool.
-    pub(crate) async fn builder_queue(&self) -> Vec<(TransactionId, Arc<CheckedTransaction>)> {
+    /// Returns a copy of all transactions ready for execution, sorted first by the difference
+    /// between a transaction and the account's current nonce and then by the time that the
+    /// transaction was first seen by the appside mempool.
+    pub(crate) async fn builder_queue(&self) -> Vec<Arc<CheckedTransaction>> {
         self.pending.read().await.builder_queue()
     }
 
@@ -450,7 +450,7 @@ impl Mempool {
                         // NOTE: this shouldn't happen. Promotions should never fail. This also
                         // means grabbing the lock inside the loop is more
                         // performant.
-                        self.lock_contained_txs().await.remove(tx_id);
+                        self.lock_contained_txs().await.remove(&tx_id);
                         self.metrics.increment_internal_logic_error();
                         error!(
                             address = %telemetry::display::base64(&address_bytes),
@@ -464,12 +464,12 @@ impl Mempool {
             } else {
                 // add demoted transactions to parked
                 for demotion_tx in demotion_txs {
-                    let tx_id = demotion_tx.id();
+                    let tx_id = *demotion_tx.id();
                     if let Err(error) = parked.add(demotion_tx, current_nonce, &current_balances) {
                         // NOTE: this shouldn't happen normally but could on the edge case of
                         // the parked queue being full for the account or globally.
                         // Grabbing the lock inside the loop should be more performant.
-                        self.lock_contained_txs().await.remove(tx_id);
+                        self.lock_contained_txs().await.remove(&tx_id);
                         self.metrics.increment_internal_logic_error();
                         error!(
                             address = %telemetry::display::base64(&address_bytes),
@@ -518,41 +518,80 @@ impl Mempool {
 
 #[cfg(test)]
 mod tests {
-    use telemetry::Metrics;
-
     use super::*;
     use crate::{
-        app::{
-            benchmark_and_test_utils::{
-                mock_balances,
-                mock_state_getter,
-                mock_state_put_account_balances,
-                mock_state_put_account_nonce,
-                mock_tx_cost,
-                ALICE_ADDRESS,
-                BOB_ADDRESS,
-                CAROL_ADDRESS,
-            },
-            test_utils::{
-                get_bob_signing_key,
-                MockTxBuilder,
-            },
+        accounts::StateWriteExt as _,
+        assets::StateWriteExt as _,
+        test_utils::{
+            denom_0,
+            denom_1,
+            denom_2,
+            denom_3,
+            denom_4,
+            denom_5,
+            denom_6,
+            dummy_balances,
+            dummy_tx_costs,
+            Fixture,
+            ALICE_ADDRESS_BYTES,
+            BOB,
+            BOB_ADDRESS_BYTES,
+            CAROL_ADDRESS_BYTES,
         },
-        benchmark_and_test_utils::astria_address_from_hex_string,
     };
+
+    fn put_ibc_assets(fixture: &mut Fixture) {
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_0().unwrap_trace_prefixed())
+            .unwrap();
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_1().unwrap_trace_prefixed())
+            .unwrap();
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_2().unwrap_trace_prefixed())
+            .unwrap();
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_3().unwrap_trace_prefixed())
+            .unwrap();
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_4().unwrap_trace_prefixed())
+            .unwrap();
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_5().unwrap_trace_prefixed())
+            .unwrap();
+        fixture
+            .state_mut()
+            .put_ibc_asset(denom_6().unwrap_trace_prefixed())
+            .unwrap();
+    }
+
+    fn put_alice_balances(fixture: &mut Fixture, account_balances: HashMap<IbcPrefixed, u128>) {
+        for (denom, balance) in account_balances {
+            fixture
+                .state_mut()
+                .put_account_balance(&*ALICE_ADDRESS_BYTES, &denom, balance)
+                .unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn insert() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
         // sign and insert nonce 1
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
         assert!(
             mempool
-                .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 1 transaction into mempool"
@@ -562,7 +601,7 @@ mod tests {
         // try to insert again
         assert_eq!(
             mempool
-                .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .unwrap_err(),
             InsertionError::AlreadyPresent,
@@ -570,17 +609,19 @@ mod tests {
         );
 
         // try to replace nonce
-        let tx1_replacement = MockTxBuilder::new()
-            .nonce(1)
-            .chain_id("test-chain-id")
-            .build();
+        let tx1_replacement = fixture
+            .checked_tx_builder()
+            .with_nonce(1)
+            .with_rollup_data_submission(vec![2, 3, 4])
+            .build()
+            .await;
         assert_eq!(
             mempool
                 .insert(
                     tx1_replacement.clone(),
                     0,
                     account_balances.clone(),
-                    tx_cost.clone(),
+                    tx_costs.clone(),
                 )
                 .await
                 .unwrap_err(),
@@ -589,10 +630,10 @@ mod tests {
         );
 
         // add too low nonce
-        let tx0 = MockTxBuilder::new().nonce(0).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
         assert_eq!(
             mempool
-                .insert(tx0.clone(), 1, account_balances, tx_cost)
+                .insert(tx0.clone(), 1, account_balances, tx_costs)
                 .await
                 .unwrap_err(),
             InsertionError::NonceTooLow,
@@ -606,47 +647,47 @@ mod tests {
         // The test adds the nonces [1,2,0,4], creates a builder queue, and then cleans the pool to
         // nonce 4. This tests some of the odder edge cases that can be hit if a node goes offline
         // or fails to see some transactions that other nodes include into their proposed blocks.
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let mut fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
         // add nonces in odd order to trigger insertion promotion logic
         // sign and insert nonce 1
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
         assert!(
             mempool
-                .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 1 transaction into mempool"
         );
 
         // sign and insert nonce 2
-        let tx2 = MockTxBuilder::new().nonce(2).build();
+        let tx2 = fixture.checked_tx_builder().with_nonce(2).build().await;
         assert!(
             mempool
-                .insert(tx2.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx2.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 2 transaction into mempool"
         );
 
         // sign and insert nonce 0
-        let tx0 = MockTxBuilder::new().nonce(0).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
         assert!(
             mempool
-                .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 0 transaction into mempool"
         );
 
         // sign and insert nonce 4
-        let tx4 = MockTxBuilder::new().nonce(4).build();
+        let tx4 = fixture.checked_tx_builder().with_nonce(4).build().await;
         assert!(
             mempool
-                .insert(tx4.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx4.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 4 transaction into mempool"
@@ -659,9 +700,9 @@ mod tests {
         let builder_queue = mempool.builder_queue().await;
 
         // see contains first two transactions that should be pending
-        assert_eq!(builder_queue[0].1.nonce(), 0, "nonce should be zero");
-        assert_eq!(builder_queue[1].1.nonce(), 1, "nonce should be one");
-        assert_eq!(builder_queue[2].1.nonce(), 2, "nonce should be two");
+        assert_eq!(builder_queue[0].nonce(), 0, "nonce should be zero");
+        assert_eq!(builder_queue[1].nonce(), 1, "nonce should be one");
+        assert_eq!(builder_queue[2].nonce(), 2, "nonce should be two");
 
         // see mempool's transactions just cloned, not consumed
         assert_eq!(mempool.len().await, 4);
@@ -670,68 +711,62 @@ mod tests {
         // to pending
 
         // setup state
-        let mut mock_state = mock_state_getter().await;
-        mock_state_put_account_nonce(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            4,
-        );
-        mock_state_put_account_balances(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            mock_balances(100, 100),
-        );
+        fixture
+            .state_mut()
+            .put_account_nonce(&*ALICE_ADDRESS_BYTES, 4)
+            .unwrap();
+        put_ibc_assets(&mut fixture);
+        put_alice_balances(&mut fixture, dummy_balances(100, 100));
 
-        mempool.run_maintenance(&mock_state, false).await;
+        mempool.run_maintenance(&fixture.state(), false).await;
 
         // assert mempool at 1
         assert_eq!(mempool.len().await, 1);
 
         // see transaction [4] properly promoted
         let mut builder_queue = mempool.builder_queue().await;
-        let (_, returned_tx) = builder_queue.pop().expect("should return last transaction");
+        let returned_tx = builder_queue.pop().expect("should return last transaction");
         assert_eq!(returned_tx.nonce(), 4, "nonce should be four");
     }
 
     #[tokio::test]
     async fn run_maintenance_promotion() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
+        let mut fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
 
         // create transaction setup to trigger promotions
         //
         // initially pending has single transaction
-        let initial_balances = mock_balances(1, 0);
-        let tx_cost = mock_tx_cost(1, 0, 0);
-        let tx1 = MockTxBuilder::new().nonce(1).build();
-        let tx2 = MockTxBuilder::new().nonce(2).build();
-        let tx3 = MockTxBuilder::new().nonce(3).build();
-        let tx4 = MockTxBuilder::new().nonce(4).build();
+        let initial_balances = dummy_balances(1, 0);
+        let tx_costs = dummy_tx_costs(1, 0, 0);
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
+        let tx2 = fixture.checked_tx_builder().with_nonce(2).build().await;
+        let tx3 = fixture.checked_tx_builder().with_nonce(3).build().await;
+        let tx4 = fixture.checked_tx_builder().with_nonce(4).build().await;
 
         mempool
-            .insert(tx1.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx2.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx2.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx3.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx3.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx4.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx4.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
         // see pending only has one transaction
-        let mut mock_state = mock_state_getter().await;
-        mock_state_put_account_nonce(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            1,
-        );
+        fixture
+            .state_mut()
+            .put_account_nonce(&*ALICE_ADDRESS_BYTES, 1)
+            .unwrap();
+        put_ibc_assets(&mut fixture);
 
         let builder_queue = mempool.builder_queue().await;
         assert_eq!(
@@ -743,13 +778,9 @@ mod tests {
         // run maintenance with account containing balance for two more transactions
 
         // setup state
-        mock_state_put_account_balances(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            mock_balances(3, 0),
-        );
+        put_alice_balances(&mut fixture, dummy_balances(3, 0));
 
-        mempool.run_maintenance(&mock_state, false).await;
+        mempool.run_maintenance(&fixture.state(), false).await;
 
         // see builder queue now contains them
         let builder_queue = mempool.builder_queue().await;
@@ -762,44 +793,43 @@ mod tests {
 
     #[tokio::test]
     async fn run_maintenance_demotion() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
+        let mut fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
 
         // create transaction setup to trigger demotions
         //
         // initially pending has four transactions
-        let initial_balances = mock_balances(4, 0);
-        let tx_cost = mock_tx_cost(1, 0, 0);
-        let tx1 = MockTxBuilder::new().nonce(1).build();
-        let tx2 = MockTxBuilder::new().nonce(2).build();
-        let tx3 = MockTxBuilder::new().nonce(3).build();
-        let tx4 = MockTxBuilder::new().nonce(4).build();
+        let initial_balances = dummy_balances(4, 0);
+        let tx_costs = dummy_tx_costs(1, 0, 0);
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
+        let tx2 = fixture.checked_tx_builder().with_nonce(2).build().await;
+        let tx3 = fixture.checked_tx_builder().with_nonce(3).build().await;
+        let tx4 = fixture.checked_tx_builder().with_nonce(4).build().await;
 
         mempool
-            .insert(tx1.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx2.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx2.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx3.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx3.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx4.clone(), 1, initial_balances.clone(), tx_cost.clone())
+            .insert(tx4.clone(), 1, initial_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
         // see pending only has all transactions
 
-        let mut mock_state = mock_state_getter().await;
-        mock_state_put_account_nonce(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            1,
-        );
+        fixture
+            .state_mut()
+            .put_account_nonce(&*ALICE_ADDRESS_BYTES, 1)
+            .unwrap();
+        put_ibc_assets(&mut fixture);
 
         let builder_queue = mempool.builder_queue().await;
         assert_eq!(
@@ -809,13 +839,9 @@ mod tests {
         );
 
         // setup state
-        mock_state_put_account_balances(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            mock_balances(1, 0),
-        );
+        put_alice_balances(&mut fixture, dummy_balances(1, 0));
 
-        mempool.run_maintenance(&mock_state, false).await;
+        mempool.run_maintenance(&fixture.state(), false).await;
 
         // see builder queue now contains single transactions
         let builder_queue = mempool.builder_queue().await;
@@ -825,18 +851,9 @@ mod tests {
             "builder queue should contain single transaction"
         );
 
-        mock_state_put_account_nonce(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            1,
-        );
-        mock_state_put_account_balances(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            mock_balances(3, 0),
-        );
+        put_alice_balances(&mut fixture, dummy_balances(3, 0));
 
-        mempool.run_maintenance(&mock_state, false).await;
+        mempool.run_maintenance(&fixture.state(), false).await;
 
         let builder_queue = mempool.builder_queue().await;
         assert_eq!(
@@ -848,48 +865,48 @@ mod tests {
 
     #[tokio::test]
     async fn remove_invalid() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 10);
+        let fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 10);
 
         // sign and insert nonces 0,1 and 3,4,5
-        let tx0 = MockTxBuilder::new().nonce(0).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
         assert!(
             mempool
-                .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 0 transaction into mempool"
         );
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
         assert!(
             mempool
-                .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 1 transaction into mempool"
         );
-        let tx3 = MockTxBuilder::new().nonce(3).build();
+        let tx3 = fixture.checked_tx_builder().with_nonce(3).build().await;
         assert!(
             mempool
-                .insert(tx3.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx3.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 3 transaction into mempool"
         );
-        let tx4 = MockTxBuilder::new().nonce(4).build();
+        let tx4 = fixture.checked_tx_builder().with_nonce(4).build().await;
         assert!(
             mempool
-                .insert(tx4.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx4.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 4 transaction into mempool"
         );
-        let tx5 = MockTxBuilder::new().nonce(5).build();
+        let tx5 = fixture.checked_tx_builder().with_nonce(5).build().await;
         assert!(
             mempool
-                .insert(tx5.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx5.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 5 transaction into mempool"
@@ -928,81 +945,85 @@ mod tests {
         // assert that all were added to the cometbft removal cache
         // and the expected reasons were tracked
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx0.id().get()).await,
+            mempool.check_removed_comet_bft(tx0.id()).await,
             Some(RemovalReason::FailedPrepareProposal(_))
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx1.id().get()).await,
+            mempool.check_removed_comet_bft(tx1.id()).await,
             Some(RemovalReason::FailedPrepareProposal(_))
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx3.id().get()).await,
+            mempool.check_removed_comet_bft(tx3.id()).await,
             Some(RemovalReason::LowerNonceInvalidated)
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx4.id().get()).await,
+            mempool.check_removed_comet_bft(tx4.id()).await,
             Some(RemovalReason::FailedPrepareProposal(_))
         ));
         assert!(matches!(
-            mempool.check_removed_comet_bft(tx5.id().get()).await,
+            mempool.check_removed_comet_bft(tx5.id()).await,
             Some(RemovalReason::LowerNonceInvalidated)
         ));
     }
 
     #[tokio::test]
     async fn should_get_pending_nonce() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
+        let fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
 
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
         // sign and insert nonces 0,1
-        let tx0 = MockTxBuilder::new().nonce(0).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
         assert!(
             mempool
-                .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 0 transaction into mempool"
         );
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
         assert!(
             mempool
-                .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .is_ok(),
             "should be able to insert nonce 1 transaction into mempool"
         );
 
         // sign and insert nonces 100, 101
-        let tx100 = MockTxBuilder::new()
-            .nonce(100)
-            .signer(get_bob_signing_key())
-            .build();
+        let tx100 = fixture
+            .checked_tx_builder()
+            .with_nonce(100)
+            .with_signer(BOB.clone())
+            .build()
+            .await;
         assert!(
             mempool
                 .insert(
                     tx100.clone(),
                     100,
                     account_balances.clone(),
-                    tx_cost.clone(),
+                    tx_costs.clone(),
                 )
                 .await
                 .is_ok(),
             "should be able to insert nonce 100 transaction into mempool"
         );
-        let tx101 = MockTxBuilder::new()
-            .nonce(101)
-            .signer(get_bob_signing_key())
-            .build();
+        let tx101 = fixture
+            .checked_tx_builder()
+            .with_nonce(101)
+            .with_signer(BOB.clone())
+            .build()
+            .await;
         assert!(
             mempool
                 .insert(
                     tx101.clone(),
                     100,
                     account_balances.clone(),
-                    tx_cost.clone(),
+                    tx_costs.clone(),
                 )
                 .await
                 .is_ok(),
@@ -1013,48 +1034,39 @@ mod tests {
 
         // Check the pending nonces
         assert_eq!(
-            mempool
-                .pending_nonce(astria_address_from_hex_string(ALICE_ADDRESS).as_bytes())
-                .await
-                .unwrap(),
+            mempool.pending_nonce(&*ALICE_ADDRESS_BYTES).await.unwrap(),
             2
         );
         assert_eq!(
-            mempool
-                .pending_nonce(astria_address_from_hex_string(BOB_ADDRESS).as_bytes())
-                .await
-                .unwrap(),
+            mempool.pending_nonce(&*BOB_ADDRESS_BYTES).await.unwrap(),
             102
         );
 
         // Check the pending nonce for an address with no txs is `None`.
-        assert!(mempool
-            .pending_nonce(astria_address_from_hex_string(CAROL_ADDRESS).as_bytes())
-            .await
-            .is_none());
+        assert!(mempool.pending_nonce(&*CAROL_ADDRESS_BYTES).await.is_none());
     }
 
     #[tokio::test]
     async fn tx_removal_cache() {
         let mut tx_cache = RemovalCache::new(NonZeroUsize::try_from(2).unwrap());
 
-        let tx_0 = [0u8; 32];
-        let tx_1 = [1u8; 32];
-        let tx_2 = [2u8; 32];
+        let tx_0 = TransactionId::new([0u8; 32]);
+        let tx_1 = TransactionId::new([1u8; 32]);
+        let tx_2 = TransactionId::new([2u8; 32]);
 
         assert!(
-            tx_cache.remove(tx_0).is_none(),
+            tx_cache.remove(&tx_0).is_none(),
             "no transaction should be cached at first"
         );
 
         tx_cache.add(tx_0, RemovalReason::Expired);
         assert!(
-            tx_cache.remove(tx_0).is_some(),
+            tx_cache.remove(&tx_0).is_some(),
             "transaction was added, should be cached"
         );
 
         assert!(
-            tx_cache.remove(tx_0).is_none(),
+            tx_cache.remove(&tx_0).is_none(),
             "transaction is cleared after reading"
         );
 
@@ -1062,15 +1074,15 @@ mod tests {
         tx_cache.add(tx_1, RemovalReason::Expired);
         tx_cache.add(tx_2, RemovalReason::Expired);
         assert!(
-            tx_cache.remove(tx_1).is_some(),
+            tx_cache.remove(&tx_1).is_some(),
             "second transaction was added, should be cached"
         );
         assert!(
-            tx_cache.remove(tx_2).is_some(),
+            tx_cache.remove(&tx_2).is_some(),
             "third transaction was added, should be cached"
         );
         assert!(
-            tx_cache.remove(tx_0).is_none(),
+            tx_cache.remove(&tx_0).is_none(),
             "first transaction should not be cached"
         );
     }
@@ -1079,40 +1091,40 @@ mod tests {
     async fn tx_removal_cache_preserves_first_reason() {
         let mut tx_cache = RemovalCache::new(NonZeroUsize::try_from(2).unwrap());
 
-        let tx_0 = [0u8; 32];
+        let tx_0 = TransactionId::new([0u8; 32]);
 
         tx_cache.add(tx_0, RemovalReason::Expired);
         tx_cache.add(tx_0, RemovalReason::LowerNonceInvalidated);
 
         assert!(
-            matches!(tx_cache.remove(tx_0), Some(RemovalReason::Expired)),
+            matches!(tx_cache.remove(&tx_0), Some(RemovalReason::Expired)),
             "first removal reason should be presenved"
         );
     }
 
     #[tokio::test]
     async fn tx_tracked_invalid_removal_removes_all() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
-        let tx0 = MockTxBuilder::new().nonce(0).build();
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
 
         // check that the parked transaction is in the tracked set
         mempool
-            .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
-        assert!(mempool.is_tracked(tx1.id().get()).await);
+        assert!(mempool.is_tracked(tx1.id()).await);
 
         // check that the pending transaction is in the tracked set
         mempool
-            .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
-        assert!(mempool.is_tracked(tx0.id().get()).await);
+        assert!(mempool.is_tracked(tx0.id()).await);
 
         // remove the transactions from the mempool, should remove both
         mempool
@@ -1120,60 +1132,58 @@ mod tests {
             .await;
 
         // check that the transactions are not in the tracked set
-        assert!(!mempool.is_tracked(tx0.id().get()).await);
-        assert!(!mempool.is_tracked(tx1.id().get()).await);
+        assert!(!mempool.is_tracked(tx0.id()).await);
+        assert!(!mempool.is_tracked(tx1.id()).await);
     }
 
     #[tokio::test]
     async fn tx_tracked_maintenance_removes_all() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let mut fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
-        let tx0 = MockTxBuilder::new().nonce(0).build();
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
 
         mempool
-            .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
-        // remove the transacitons from the mempool via maintenance
-        let mut mock_state = mock_state_getter().await;
-        mock_state_put_account_nonce(
-            &mut mock_state,
-            astria_address_from_hex_string(ALICE_ADDRESS).as_bytes(),
-            2,
-        );
-        mempool.run_maintenance(&mock_state, false).await;
+        // remove the transactions from the mempool via maintenance
+        fixture
+            .state_mut()
+            .put_account_nonce(&*ALICE_ADDRESS_BYTES, 2)
+            .unwrap();
+        mempool.run_maintenance(fixture.state(), false).await;
 
         // check that the transactions are not in the tracked set
-        assert!(!mempool.is_tracked(tx0.id().get()).await);
-        assert!(!mempool.is_tracked(tx1.id().get()).await);
+        assert!(!mempool.is_tracked(tx0.id()).await);
+        assert!(!mempool.is_tracked(tx1.id()).await);
     }
 
     #[tokio::test]
     async fn tx_tracked_reinsertion_ok() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 100);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
-        let tx0 = MockTxBuilder::new().nonce(0).build();
-        let tx1 = MockTxBuilder::new().nonce(1).build();
+        let tx0 = fixture.checked_tx_builder().build().await;
+        let tx1 = fixture.checked_tx_builder().with_nonce(1).build().await;
 
         mempool
-            .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
         mempool
-            .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
@@ -1182,43 +1192,43 @@ mod tests {
             .remove_tx_invalid(tx0.clone(), RemovalReason::Expired)
             .await;
 
-        assert!(!mempool.is_tracked(tx0.id().get()).await);
-        assert!(!mempool.is_tracked(tx1.id().get()).await);
+        assert!(!mempool.is_tracked(tx0.id()).await);
+        assert!(!mempool.is_tracked(tx1.id()).await);
 
         // re-insert the transactions into the mempool
         mempool
-            .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
         mempool
-            .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
         // check that the transactions are in the tracked set on re-insertion
-        assert!(mempool.is_tracked(tx0.id().get()).await);
-        assert!(mempool.is_tracked(tx1.id().get()).await);
+        assert!(mempool.is_tracked(tx0.id()).await);
+        assert!(mempool.is_tracked(tx1.id()).await);
     }
 
     #[tokio::test]
     async fn parked_limit_enforced() {
-        let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
-        let mempool = Mempool::new(metrics, 1);
-        let account_balances = mock_balances(100, 100);
-        let tx_cost = mock_tx_cost(10, 10, 0);
+        let fixture = Fixture::default_initialized().await;
+        let mempool = fixture.mempool();
+        let account_balances = dummy_balances(100, 100);
+        let tx_costs = dummy_tx_costs(10, 10, 0);
 
-        let tx0 = MockTxBuilder::new().nonce(1).build();
-        let tx1 = MockTxBuilder::new().nonce(2).build();
+        let tx0 = fixture.checked_tx_builder().with_nonce(1).build().await;
+        let tx1 = fixture.checked_tx_builder().with_nonce(2).build().await;
 
         mempool
-            .insert(tx1.clone(), 0, account_balances.clone(), tx_cost.clone())
+            .insert(tx1.clone(), 0, account_balances.clone(), tx_costs.clone())
             .await
             .unwrap();
 
         // size limit fails as expected
         assert_eq!(
             mempool
-                .insert(tx0.clone(), 0, account_balances.clone(), tx_cost.clone())
+                .insert(tx0.clone(), 0, account_balances.clone(), tx_costs.clone())
                 .await
                 .unwrap_err(),
             InsertionError::ParkedSizeLimit,

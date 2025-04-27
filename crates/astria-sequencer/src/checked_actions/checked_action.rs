@@ -15,12 +15,14 @@ use astria_core::{
             BridgeSudoChange,
             BridgeTransfer,
             BridgeUnlock,
+            CurrencyPairsChange,
             FeeAssetChange,
             FeeChange,
             IbcRelayerChange,
             IbcSudoChange,
             Ics20Withdrawal,
             InitBridgeAccount,
+            MarketsChange,
             RecoverIbcClient,
             RollupDataSubmission,
             SudoAddressChange,
@@ -47,6 +49,7 @@ use super::{
     CheckedBridgeSudoChange,
     CheckedBridgeTransfer,
     CheckedBridgeUnlock,
+    CheckedCurrencyPairsChange,
     CheckedFeeAssetChange,
     CheckedFeeChange,
     CheckedIbcRelay,
@@ -54,6 +57,7 @@ use super::{
     CheckedIbcSudoChange,
     CheckedIcs20Withdrawal,
     CheckedInitBridgeAccount,
+    CheckedMarketsChange,
     CheckedRecoverIbcClient,
     CheckedRollupDataSubmission,
     CheckedSudoAddressChange,
@@ -67,6 +71,7 @@ use crate::{
         StateReadExt as _,
         StateWriteExt as _,
     },
+    ibc::StateWriteExt as _,
     storage::StoredValue,
 };
 
@@ -89,6 +94,8 @@ pub(crate) enum CheckedAction {
     BridgeTransfer(CheckedBridgeTransfer),
     FeeChange(CheckedFeeChange),
     RecoverIbcClient(CheckedRecoverIbcClient),
+    CurrencyPairsChange(CheckedCurrencyPairsChange),
+    MarketsChange(CheckedMarketsChange),
 }
 
 impl CheckedAction {
@@ -287,6 +294,30 @@ impl CheckedAction {
         Ok(Self::RecoverIbcClient(checked_action))
     }
 
+    pub(crate) async fn new_currency_pairs_change<S: StateRead>(
+        action: CurrencyPairsChange,
+        tx_signer: [u8; ADDRESS_LEN],
+        state: S,
+    ) -> Result<Self, CheckedActionError> {
+        let action_name = action.name();
+        let checked_action = CheckedCurrencyPairsChange::new(action, tx_signer, state)
+            .await
+            .map_err(|source| CheckedActionError::initial_check(action_name, source))?;
+        Ok(Self::CurrencyPairsChange(checked_action))
+    }
+
+    pub(crate) async fn new_markets_change<S: StateRead>(
+        action: MarketsChange,
+        tx_signer: [u8; ADDRESS_LEN],
+        state: S,
+    ) -> Result<Self, CheckedActionError> {
+        let action_name = action.name();
+        let checked_action = CheckedMarketsChange::new(action, tx_signer, state)
+            .await
+            .map_err(|source| CheckedActionError::initial_check(action_name, source))?;
+        Ok(Self::MarketsChange(checked_action))
+    }
+
     pub(crate) async fn run_mutable_checks<S: StateRead>(
         &self,
         state: S,
@@ -318,6 +349,10 @@ impl CheckedAction {
             Self::RecoverIbcClient(checked_action) => {
                 checked_action.run_mutable_checks(state).await
             }
+            Self::CurrencyPairsChange(checked_action) => {
+                checked_action.run_mutable_checks(state).await
+            }
+            Self::MarketsChange(checked_action) => checked_action.run_mutable_checks(state).await,
         }
         .map_err(|source| CheckedActionError::MutableCheck {
             action_name: self.name(),
@@ -329,198 +364,116 @@ impl CheckedAction {
         &self,
         mut state: S,
         tx_signer: &[u8; ADDRESS_LENGTH],
-        position_in_transaction: u64,
+        tx_id: &TransactionId,
+        position_in_tx: u64,
     ) -> Result<(), CheckedActionError> {
         match self {
             Self::RollupDataSubmission(checked_action) => {
                 // Nothing to execute.
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::Transfer(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::ValidatorUpdate(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::SudoAddressChange(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::IbcRelay(checked_action) => {
+                state.ephemeral_put_ibc_context(*tx_id, position_in_tx);
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::IbcSudoChange(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::Ics20Withdrawal(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::IbcRelayerChange(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::FeeAssetChange(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::InitBridgeAccount(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::BridgeLock(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::BridgeUnlock(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::BridgeSudoChange(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::BridgeTransfer(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::FeeChange(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
             Self::RecoverIbcClient(checked_action) => {
                 checked_action.execute(&mut state).await.map_err(|source| {
                     CheckedActionError::execution(checked_action.action().name(), source)
                 })?;
-                pay_fee(
-                    checked_action.action(),
-                    tx_signer,
-                    position_in_transaction,
-                    state,
-                )
-                .await
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
+            }
+            Self::CurrencyPairsChange(checked_action) => {
+                checked_action.execute(&mut state).await.map_err(|source| {
+                    CheckedActionError::execution(checked_action.action().name(), source)
+                })?;
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
+            }
+            Self::MarketsChange(checked_action) => {
+                checked_action.execute(&mut state).await.map_err(|source| {
+                    CheckedActionError::execution(checked_action.action().name(), source)
+                })?;
+                pay_fee(checked_action.action(), tx_signer, position_in_tx, state).await
             }
         }
     }
@@ -543,6 +496,8 @@ impl CheckedAction {
             CheckedAction::BridgeTransfer(action) => action.transfer_asset_and_amount(),
             CheckedAction::FeeChange(action) => action.transfer_asset_and_amount(),
             CheckedAction::RecoverIbcClient(action) => action.transfer_asset_and_amount(),
+            CheckedAction::CurrencyPairsChange(action) => action.transfer_asset_and_amount(),
+            CheckedAction::MarketsChange(action) => action.transfer_asset_and_amount(),
         }
     }
 
@@ -564,6 +519,8 @@ impl CheckedAction {
             CheckedAction::BridgeTransfer(checked_action) => checked_action.action().name(),
             CheckedAction::FeeChange(checked_action) => checked_action.action().name(),
             CheckedAction::RecoverIbcClient(checked_action) => checked_action.action().name(),
+            CheckedAction::CurrencyPairsChange(checked_action) => checked_action.action().name(),
+            CheckedAction::MarketsChange(checked_action) => checked_action.action().name(),
         }
     }
 }
@@ -801,6 +758,26 @@ impl From<CheckedAction> for CheckedRecoverIbcClient {
     fn from(checked_action: CheckedAction) -> Self {
         let CheckedAction::RecoverIbcClient(wrapped_action) = checked_action else {
             panic!("expected RecoverIbcClient");
+        };
+        wrapped_action
+    }
+}
+
+#[cfg(test)]
+impl From<CheckedAction> for CheckedCurrencyPairsChange {
+    fn from(checked_action: CheckedAction) -> Self {
+        let CheckedAction::CurrencyPairsChange(wrapped_action) = checked_action else {
+            panic!("expected CurrencyPairsChange");
+        };
+        wrapped_action
+    }
+}
+
+#[cfg(test)]
+impl From<CheckedAction> for CheckedMarketsChange {
+    fn from(checked_action: CheckedAction) -> Self {
+        let CheckedAction::MarketsChange(wrapped_action) = checked_action else {
+            panic!("expected MarketsChange");
         };
         wrapped_action
     }

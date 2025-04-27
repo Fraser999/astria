@@ -1,8 +1,22 @@
 mod mempool;
+mod upgrades;
 
 use std::collections::HashMap;
 
 use astria_core::{
+    generated::{
+        astria::sequencerblock::v1::RollupData as RawRollupData,
+        price_feed::abci::v2::OracleVoteExtension as RawOracleVoteExtension,
+    },
+    oracles::price_feed::{
+        oracle::v2::CurrencyPairState,
+        types::v2::{
+            CurrencyPair,
+            CurrencyPairId,
+            CurrencyPairNonce,
+            Price,
+        },
+    },
     primitive::v1::{
         asset::TracePrefixed,
         RollupId,
@@ -10,27 +24,23 @@ use astria_core::{
     },
     protocol::{
         genesis::v1::Account,
-        transaction::v1::{
-            action::{
-                BridgeLock,
-                RollupDataSubmission,
-                SudoAddressChange,
-                Transfer,
-            },
-            TransactionBody,
+        price_feed::v1::{
+            CurrencyPairInfo,
+            ExtendedCommitInfoWithCurrencyPairMapping,
+        },
+        transaction::v1::action::{
+            BridgeLock,
+            RollupDataSubmission,
+            SudoAddressChange,
+            Transfer,
         },
     },
-    sequencerblock::v1::block::Deposit,
+    sequencerblock::v1::block::{
+        Deposit,
+        RollupData,
+    },
+    upgrades::test_utils::UpgradesBuilder,
 };
-use benchmark_and_test_utils::{
-    default_genesis_accounts,
-    initialize_app_with_storage,
-    mock_balances,
-    mock_tx_cost,
-    BOB_ADDRESS,
-    JUDY_ADDRESS,
-};
-use cnidarium::StateDelta;
 use prost::{
     bytes::Bytes,
     Message as _,
@@ -42,11 +52,18 @@ use tendermint::{
             PrepareProposal,
             ProcessProposal,
         },
-        types::CommitInfo,
+        types::{
+            BlockSignatureInfo,
+            CommitInfo,
+            ExtendedCommitInfo,
+            ExtendedVoteInfo,
+            Validator,
+        },
     },
     account,
     block::{
         header::Version,
+        BlockIdFlag,
         Header,
         Height,
         Round,
@@ -55,11 +72,11 @@ use tendermint::{
     Hash,
     Time,
 };
+use tendermint_proto::types::CanonicalVoteExtension;
 
 use super::*;
 use crate::{
     accounts::StateReadExt as _,
-    app::test_utils::*,
     assets::StateReadExt as _,
     authority::{
         StateReadExt as _,
@@ -68,13 +85,28 @@ use crate::{
     },
     benchmark_and_test_utils::{
         astria_address,
-        astria_address_from_hex_string,
         nria,
-        verification_key,
     },
     bridge::StateWriteExt as _,
     fees::StateReadExt as _,
+    grpc::StateReadExt as _,
+    oracles::price_feed::oracle::state_ext::StateWriteExt as _,
     proposal::commitment::generate_rollup_datas_commitment,
+    test_utils::{
+        dummy_balances,
+        dummy_tx_costs,
+        transactions_with_extended_commit_info_and_commitments,
+        Fixture,
+        ALICE,
+        ALICE_ADDRESS_BYTES,
+        BOB,
+        BOB_ADDRESS,
+        BOB_ADDRESS_BYTES,
+        CAROL,
+        CAROL_ADDRESS_BYTES,
+        SUDO,
+        SUDO_ADDRESS_BYTES,
+    },
 };
 
 fn default_tendermint_header() -> Header {
@@ -84,7 +116,7 @@ fn default_tendermint_header() -> Header {
         consensus_hash: Hash::default(),
         data_hash: Some(Hash::try_from([0u8; 32].to_vec()).unwrap()),
         evidence_hash: Some(Hash::default()),
-        height: Height::default(),
+        height: Height::from(2_u8),
         last_block_id: None,
         last_commit_hash: Some(Hash::default()),
         last_results_hash: Some(Hash::default()),
@@ -101,32 +133,28 @@ fn default_tendermint_header() -> Header {
 
 #[tokio::test]
 async fn app_genesis_and_init_chain() {
-    let app = initialize_app(None, vec![]).await;
-    assert_eq!(app.state.get_block_height().await.unwrap(), 0);
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    assert_eq!(fixture.state().get_block_height().await.unwrap(), 0);
 
     for Account {
         address,
         balance,
-    } in default_genesis_accounts()
+    } in fixture.genesis_app_state().accounts()
     {
-        assert_eq!(
-            balance,
-            app.state
-                .get_account_balance(&address, &nria())
-                .await
-                .unwrap(),
-        );
+        assert_eq!(*balance, fixture.get_nria_balance(address).await);
     }
 
     assert_eq!(
-        app.state.get_native_asset().await.unwrap(),
+        fixture.state().get_native_asset().await.unwrap(),
         Some("nria".parse::<TracePrefixed>().unwrap()),
     );
 }
 
 #[tokio::test]
 async fn app_pre_execute_transactions() {
-    let mut app = initialize_app(None, vec![]).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
 
     let block_data = BlockData {
         misbehavior: vec![],
@@ -136,12 +164,14 @@ async fn app_pre_execute_transactions() {
         proposer_address: account::Id::try_from([0u8; 20].to_vec()).unwrap(),
     };
 
-    app.pre_execute_transactions(block_data.clone())
+    fixture
+        .app
+        .pre_execute_transactions(block_data.clone())
         .await
         .unwrap();
-    assert_eq!(app.state.get_block_height().await.unwrap(), 1);
+    assert_eq!(fixture.state().get_block_height().await.unwrap(), 1);
     assert_eq!(
-        app.state.get_block_timestamp().await.unwrap(),
+        fixture.state().get_block_timestamp().await.unwrap(),
         block_data.time
     );
 }
@@ -150,28 +180,34 @@ async fn app_pre_execute_transactions() {
 async fn app_begin_block_remove_byzantine_validators() {
     use tendermint::abci::types;
 
-    let initial_validator_set = vec![
-        ValidatorUpdate {
-            power: 100u32,
-            verification_key: verification_key(1),
-        },
-        ValidatorUpdate {
-            power: 1u32,
-            verification_key: verification_key(2),
-        },
-    ];
+    let upgrades = Some(UpgradesBuilder::new().set_aspen(Some(100)).build());
+    let mut fixture = Fixture::uninitialized(upgrades).await;
+    fixture.chain_initializer().init().await;
 
-    let mut app = initialize_app(None, initial_validator_set.clone()).await;
+    let validator_set = fixture
+        .app
+        .state
+        .pre_aspen_get_validator_set()
+        .await
+        .unwrap();
+    assert_eq!(validator_set.len(), 3);
+    let mut total_voting_power = validator_set.get(&*ALICE_ADDRESS_BYTES).unwrap().power;
+    total_voting_power = total_voting_power
+        .checked_add(validator_set.get(&*BOB_ADDRESS_BYTES).unwrap().power)
+        .unwrap();
+    total_voting_power = total_voting_power
+        .checked_add(validator_set.get(&*CAROL_ADDRESS_BYTES).unwrap().power)
+        .unwrap();
 
     let misbehavior = types::Misbehavior {
         kind: types::MisbehaviorKind::Unknown,
-        validator: types::Validator {
-            address: *verification_key(1).address_bytes(),
-            power: 0u32.into(),
+        validator: Validator {
+            address: *CAROL_ADDRESS_BYTES,
+            power: 0_u32.into(),
         },
         height: Height::default(),
         time: Time::now(),
-        total_voting_power: 101u32.into(),
+        total_voting_power: total_voting_power.into(),
     };
 
     let mut begin_block = abci::request::BeginBlock {
@@ -185,139 +221,139 @@ async fn app_begin_block_remove_byzantine_validators() {
     };
     begin_block.header.height = 1u8.into();
 
-    app.begin_block(&begin_block).await.unwrap();
+    fixture.app.begin_block(&begin_block).await.unwrap();
 
-    // assert that validator with pubkey_a is removed
-    let validator_set = app.state.get_validator_set().await.unwrap();
-    assert_eq!(validator_set.len(), 1);
-    assert_eq!(validator_set.get(&verification_key(2)).unwrap().power, 1,);
+    // assert that Carol is removed
+    let validator_set = fixture
+        .app
+        .state
+        .pre_aspen_get_validator_set()
+        .await
+        .unwrap();
+    assert_eq!(validator_set.len(), 2);
+    assert!(validator_set.get(&*CAROL_ADDRESS_BYTES).is_none());
 }
 
 #[tokio::test]
 async fn app_commit() {
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-    assert_eq!(app.state.get_block_height().await.unwrap(), 0);
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
 
-    for Account {
-        address,
-        balance,
-    } in default_genesis_accounts()
-    {
-        assert_eq!(
-            balance,
-            app.state
-                .get_account_balance(&address, &nria())
-                .await
-                .unwrap()
-        );
-    }
+    assert_eq!(
+        fixture
+            .storage()
+            .latest_snapshot()
+            .get_block_height()
+            .await
+            .unwrap(),
+        0
+    );
 
-    // commit should write the changes to the underlying storage
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    // Write block height 1 to the App's state delta.
+    fixture.app.state_mut().put_block_height(1).unwrap();
+    assert_eq!(fixture.app.state().get_block_height().await.unwrap(), 1);
 
-    let snapshot = storage.latest_snapshot();
-    assert_eq!(snapshot.get_block_height().await.unwrap(), 0);
+    // The latest snapshot should still have block height 0.
+    assert_eq!(
+        fixture
+            .storage()
+            .latest_snapshot()
+            .get_block_height()
+            .await
+            .unwrap(),
+        0
+    );
 
-    for Account {
-        address,
-        balance,
-    } in default_genesis_accounts()
-    {
-        assert_eq!(
-            snapshot
-                .get_account_balance(&address, &nria())
-                .await
-                .unwrap(),
-            balance
-        );
-    }
+    // Commit should write the changes to the underlying storage.
+    fixture.app.prepare_commit(fixture.storage()).await.unwrap();
+    fixture.app.commit(fixture.storage()).await.unwrap();
+    assert_eq!(
+        fixture
+            .storage()
+            .latest_snapshot()
+            .get_block_height()
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn app_transfer_block_fees_to_sudo() {
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-
-    let alice = get_alice_signing_key();
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     // transfer funds from Alice to Bob; use native token for fee payment
-    let bob_address = astria_address_from_hex_string(BOB_ADDRESS);
     let amount = 333_333;
-    let tx = TransactionBody::builder()
-        .actions(vec![Transfer {
-            to: bob_address,
+    let tx = fixture
+        .checked_tx_builder()
+        .with_action(Transfer {
+            to: *BOB_ADDRESS,
             amount,
             asset: nria().into(),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap();
+        })
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
-    let signed_tx = tx.sign(&alice);
-
-    let proposer_address: tendermint::account::Id = [99u8; 20].to_vec().try_into().unwrap();
-
-    let commitments = generate_rollup_datas_commitment(&[signed_tx.clone()], HashMap::new());
-
+    let proposer_address: account::Id = [99u8; 20].to_vec().try_into().unwrap();
     let finalize_block = abci::request::FinalizeBlock {
         hash: Hash::try_from([0u8; 32].to_vec()).unwrap(),
-        height: 1u32.into(),
+        height,
         time: Time::now(),
         next_validators_hash: Hash::default(),
         proposer_address,
-        txs: commitments.into_transactions(vec![signed_tx.to_raw().encode_to_vec().into()]),
+        txs: transactions_with_extended_commit_info_and_commitments(height, &[tx], None),
         decided_last_commit: CommitInfo {
             votes: vec![],
             round: Round::default(),
         },
         misbehavior: vec![],
     };
-    app.finalize_block(finalize_block, storage.clone())
+    fixture
+        .app
+        .finalize_block(finalize_block, fixture.storage())
         .await
         .unwrap();
-    app.commit(storage).await;
+    fixture.app.commit(fixture.storage()).await.unwrap();
 
     // assert that transaction fees were transferred to the block proposer
-    let transfer_base_fee = app
-        .state
+    let transfer_base_fee = fixture
+        .state()
         .get_fees::<Transfer>()
         .await
         .expect("should not error fetching transfer fees")
         .expect("transfer fees should be stored")
         .base();
     assert_eq!(
-        app.state
-            .get_account_balance(&astria_address_from_hex_string(JUDY_ADDRESS), &nria())
+        fixture
+            .state()
+            .get_account_balance(&*SUDO_ADDRESS_BYTES, &nria())
             .await
             .unwrap(),
         transfer_base_fee,
     );
-    assert_eq!(app.state.get_block_fees().len(), 0);
+    assert_eq!(fixture.state().get_block_fees().len(), 0);
 }
 
 #[tokio::test]
 async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
-    use astria_core::{
-        generated::astria::sequencerblock::v1::RollupData as RawRollupData,
-        sequencerblock::v1::block::RollupData,
-    };
-
-    use crate::grpc::StateReadExt as _;
-
-    let alice = get_alice_signing_key();
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     let bridge_address = astria_address(&[99; 20]);
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
     let starting_index_of_action = 0;
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx
+    fixture
+        .state_mut()
         .put_bridge_account_rollup_id(&bridge_address, rollup_id)
         .unwrap();
-    state_tx
+    fixture
+        .state_mut()
         .put_bridge_account_ibc_asset(&bridge_address, nria())
         .unwrap();
     // Put a deposit from a previous block to ensure it is not mixed in with deposits for this
@@ -331,15 +367,15 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
         source_transaction_id: TransactionId::new([99; 32]),
         source_action_index: starting_index_of_action,
     };
-    state_tx
+    fixture
+        .state_mut()
         .put_deposits(
             &[32u8; 32],
             HashMap::from_iter([(rollup_id, vec![old_deposit])]),
         )
         .unwrap();
-    app.apply(state_tx);
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    fixture.app.prepare_commit(fixture.storage()).await.unwrap();
+    fixture.app.commit(fixture.storage()).await.unwrap();
 
     let amount = 100;
     let lock_action = BridgeLock {
@@ -355,13 +391,13 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
         fee_asset: nria().into(),
     };
 
-    let tx = TransactionBody::builder()
-        .actions(vec![lock_action.into(), rollup_data_submission.into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap();
-
-    let signed_tx = tx.sign(&alice);
+    let tx = fixture
+        .checked_tx_builder()
+        .with_action(lock_action)
+        .with_action(rollup_data_submission)
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
     let expected_deposit = Deposit {
         bridge_address,
@@ -369,31 +405,36 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
         amount,
         asset: nria().into(),
         destination_chain_address: "nootwashere".to_string(),
-        source_transaction_id: signed_tx.id(),
+        source_transaction_id: *tx.id(),
         source_action_index: starting_index_of_action,
     };
     let deposits = HashMap::from_iter(vec![(rollup_id, vec![expected_deposit.clone()])]);
-    let commitments = generate_rollup_datas_commitment(&[signed_tx.clone()], deposits.clone());
 
     let finalize_block = abci::request::FinalizeBlock {
         hash: Hash::try_from([0u8; 32].to_vec()).unwrap(),
-        height: 1u32.into(),
+        height,
         time: Time::now(),
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs: commitments.into_transactions(vec![signed_tx.to_raw().encode_to_vec().into()]),
+        txs: transactions_with_extended_commit_info_and_commitments(height, &[tx], Some(deposits)),
         decided_last_commit: CommitInfo {
             votes: vec![],
             round: Round::default(),
         },
         misbehavior: vec![],
     };
-    app.finalize_block(finalize_block, storage.clone())
+    fixture
+        .app
+        .finalize_block(finalize_block, fixture.storage())
         .await
         .unwrap();
-    app.commit(storage).await;
+    fixture.app.commit(fixture.storage()).await.unwrap();
 
-    let block = app.state.get_sequencer_block_by_height(1).await.unwrap();
+    let block = fixture
+        .state()
+        .get_sequencer_block_by_height(height.value())
+        .await
+        .unwrap();
     let mut deposits = vec![];
     for (_, rollup_data) in block.rollup_transactions() {
         for tx in rollup_data.transactions() {
@@ -414,24 +455,25 @@ async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
     reason = "it's a test, so allow a lot of lines"
 )]
 async fn app_execution_results_match_proposal_vs_after_proposal() {
-    let alice = get_alice_signing_key();
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     let bridge_address = astria_address(&[99; 20]);
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
     let asset = nria().clone();
     let starting_index_of_action = 0;
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx
+    fixture
+        .state_mut()
         .put_bridge_account_rollup_id(&bridge_address, rollup_id)
         .unwrap();
-    state_tx
+    fixture
+        .state_mut()
         .put_bridge_account_ibc_asset(&bridge_address, &asset)
         .unwrap();
-    app.apply(state_tx);
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    fixture.app.prepare_commit(fixture.storage()).await.unwrap();
+    fixture.app.commit(fixture.storage()).await.unwrap();
 
     let amount = 100;
     let lock_action = BridgeLock {
@@ -447,13 +489,13 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
         fee_asset: nria().into(),
     };
 
-    let tx = TransactionBody::builder()
-        .actions(vec![lock_action.into(), rollup_data_submission.into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap();
-
-    let signed_tx = tx.sign(&alice);
+    let tx = fixture
+        .checked_tx_builder()
+        .with_action(lock_action)
+        .with_action(rollup_data_submission)
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
     let expected_deposit = Deposit {
         bridge_address,
@@ -461,21 +503,24 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
         amount,
         asset: nria().into(),
         destination_chain_address: "nootwashere".to_string(),
-        source_transaction_id: signed_tx.id(),
+        source_transaction_id: *tx.id(),
         source_action_index: starting_index_of_action,
     };
     let deposits = HashMap::from_iter(vec![(rollup_id, vec![expected_deposit.clone()])]);
-    let commitments = generate_rollup_datas_commitment(&[signed_tx.clone()], deposits.clone());
 
     let timestamp = Time::now();
     let block_hash = Hash::Sha256([99u8; 32]);
     let finalize_block = abci::request::FinalizeBlock {
         hash: block_hash,
-        height: 1u32.into(),
+        height,
         time: timestamp,
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs: commitments.into_transactions(vec![signed_tx.to_raw().encode_to_vec().into()]),
+        txs: transactions_with_extended_commit_info_and_commitments(
+            height,
+            &[tx.clone()],
+            Some(deposits),
+        ),
         decided_last_commit: CommitInfo {
             votes: vec![],
             round: Round::default(),
@@ -485,64 +530,71 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
 
     // call finalize_block with the given block data, which simulates executing a block
     // as a full node (non-validator node).
-    let finalize_block_result = app
-        .finalize_block(finalize_block.clone(), storage.clone())
+    let finalize_block_result = fixture
+        .app
+        .finalize_block(finalize_block.clone(), fixture.storage())
         .await
         .unwrap();
 
     // don't commit the result, now call prepare_proposal with the same data.
     // this will reset the app state.
     // this simulates executing the same block as a validator (specifically the proposer).
-    app.mempool
-        .insert(
-            Arc::new(signed_tx),
-            0,
-            mock_balances(0, 0),
-            mock_tx_cost(0, 0, 0),
-        )
+    let mempool = fixture.mempool();
+    mempool
+        .insert(tx, 0, dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
         .await
         .unwrap();
 
     let proposer_address = [88u8; 20].to_vec().try_into().unwrap();
     let prepare_proposal = PrepareProposal {
-        height: 1u32.into(),
+        height,
         time: timestamp,
         next_validators_hash: Hash::default(),
         proposer_address,
         txs: vec![],
         max_tx_bytes: 1_000_000,
-        local_last_commit: None,
+        local_last_commit: Some(ExtendedCommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
     };
 
-    let prepare_proposal_result = app
-        .prepare_proposal(prepare_proposal, storage.clone())
+    let prepare_proposal_result = fixture
+        .app
+        .prepare_proposal(prepare_proposal, fixture.storage())
         .await
         .unwrap();
     assert_eq!(prepare_proposal_result.txs, finalize_block.txs);
 
-    app.mempool.run_maintenance(&app.state, false).await;
+    mempool.run_maintenance(fixture.state(), false).await;
 
-    assert_eq!(app.mempool.len().await, 0);
+    assert_eq!(mempool.len().await, 0);
 
     // call process_proposal - should not re-execute anything.
     let process_proposal = abci::request::ProcessProposal {
         hash: block_hash,
-        height: 1u32.into(),
+        height,
         time: timestamp,
         next_validators_hash: Hash::default(),
         proposer_address,
         txs: finalize_block.txs.clone(),
-        proposed_last_commit: None,
+        proposed_last_commit: Some(CommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
     };
 
-    app.process_proposal(process_proposal.clone(), storage.clone())
+    fixture
+        .app
+        .process_proposal(process_proposal.clone(), fixture.storage())
         .await
         .unwrap();
 
-    let finalize_block_after_prepare_proposal_result = app
-        .finalize_block(finalize_block.clone(), storage.clone())
+    let finalize_block_after_prepare_proposal_result = fixture
+        .app
+        .finalize_block(finalize_block.clone(), fixture.storage())
         .await
         .unwrap();
     assert_eq!(
@@ -552,12 +604,15 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
 
     // reset the app state and call process_proposal - should execute the block.
     // this simulates executing the block as a non-proposer validator.
-    app.update_state_for_new_round(&storage);
-    app.process_proposal(process_proposal, storage.clone())
+    fixture.app.update_state_for_new_round(&fixture.storage());
+    fixture
+        .app
+        .process_proposal(process_proposal, fixture.storage())
         .await
         .unwrap();
-    let finalize_block_after_process_proposal_result = app
-        .finalize_block(finalize_block, storage.clone())
+    let finalize_block_after_process_proposal_result = fixture
+        .app
+        .finalize_block(finalize_block, fixture.storage())
         .await
         .unwrap();
 
@@ -569,85 +624,82 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
 
 #[tokio::test]
 async fn app_prepare_proposal_cometbft_max_bytes_overflow_ok() {
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     // create txs which will cause cometBFT overflow
-    let alice = get_alice_signing_key();
-    let tx_pass = TransactionBody::builder()
-        .actions(vec![RollupDataSubmission {
+    let tx_pass = fixture
+        .checked_tx_builder()
+        .with_action(RollupDataSubmission {
             rollup_id: RollupId::from([1u8; 32]),
             data: Bytes::copy_from_slice(&[1u8; 100_000]),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap()
-        .sign(&alice);
+        })
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
-    let tx_overflow = TransactionBody::builder()
-        .actions(vec![RollupDataSubmission {
+    let tx_overflow = fixture
+        .checked_tx_builder()
+        .with_action(RollupDataSubmission {
             rollup_id: RollupId::from([1u8; 32]),
             data: Bytes::copy_from_slice(&[1u8; 100_000]),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .chain_id("test")
-        .nonce(1)
-        .try_build()
-        .unwrap()
-        .sign(&alice);
+        })
+        .with_nonce(1)
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
-    app.mempool
-        .insert(
-            Arc::new(tx_pass),
-            0,
-            mock_balances(0, 0),
-            mock_tx_cost(0, 0, 0),
-        )
+    let mempool = fixture.mempool();
+    mempool
+        .insert(tx_pass, 0, dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
         .await
         .unwrap();
-    app.mempool
+    mempool
         .insert(
-            Arc::new(tx_overflow),
+            tx_overflow,
             0,
-            mock_balances(0, 0),
-            mock_tx_cost(0, 0, 0),
+            dummy_balances(0, 0),
+            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
 
     // send to prepare_proposal
-    let prepare_args = abci::request::PrepareProposal {
+    let prepare_args = PrepareProposal {
         max_tx_bytes: 200_000,
         txs: vec![],
-        local_last_commit: None,
+        local_last_commit: Some(ExtendedCommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
-        height: Height::default(),
+        height,
         time: Time::now(),
         next_validators_hash: Hash::default(),
         proposer_address: account::Id::new([1u8; 20]),
     };
 
-    let result = app
-        .prepare_proposal(prepare_args, storage)
+    let result = fixture
+        .app
+        .prepare_proposal(prepare_args, fixture.storage())
         .await
         .expect("too large transactions should not cause prepare proposal to fail");
 
-    // run maintence to clear out transactions
-    app.mempool.run_maintenance(&app.state, false).await;
+    // run maintenance to clear out transactions
+    mempool.run_maintenance(fixture.state(), false).await;
 
     // see only first tx made it in
     assert_eq!(
         result.txs.len(),
-        3,
-        "total transaction length should be three, including the two commitments and the one tx \
-         that fit"
+        4,
+        "total transaction length should be four, including the extended commit info, two \
+         commitments and the one tx that fit"
     );
     assert_eq!(
-        app.mempool.len().await,
+        mempool.len().await,
         1,
         "mempool should have re-added the tx that was too large"
     );
@@ -655,84 +707,81 @@ async fn app_prepare_proposal_cometbft_max_bytes_overflow_ok() {
 
 #[tokio::test]
 async fn app_prepare_proposal_sequencer_max_bytes_overflow_ok() {
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     // create txs which will cause sequencer overflow (max is currently 256_000 bytes)
-    let alice = get_alice_signing_key();
-    let tx_pass = TransactionBody::builder()
-        .actions(vec![RollupDataSubmission {
+    let tx_pass = fixture
+        .checked_tx_builder()
+        .with_action(RollupDataSubmission {
             rollup_id: RollupId::from([1u8; 32]),
             data: Bytes::copy_from_slice(&[1u8; 200_000]),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap()
-        .sign(&alice);
-    let tx_overflow = TransactionBody::builder()
-        .actions(vec![RollupDataSubmission {
+        })
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
+    let tx_overflow = fixture
+        .checked_tx_builder()
+        .with_action(RollupDataSubmission {
             rollup_id: RollupId::from([1u8; 32]),
             data: Bytes::copy_from_slice(&[1u8; 100_000]),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .nonce(1)
-        .chain_id("test")
-        .try_build()
-        .unwrap()
-        .sign(&alice);
+        })
+        .with_nonce(1)
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
-    app.mempool
-        .insert(
-            Arc::new(tx_pass),
-            0,
-            mock_balances(0, 0),
-            mock_tx_cost(0, 0, 0),
-        )
+    let mempool = fixture.mempool();
+    mempool
+        .insert(tx_pass, 0, dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
         .await
         .unwrap();
-    app.mempool
+    mempool
         .insert(
-            Arc::new(tx_overflow),
+            tx_overflow,
             0,
-            mock_balances(0, 0),
-            mock_tx_cost(0, 0, 0),
+            dummy_balances(0, 0),
+            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
 
     // send to prepare_proposal
-    let prepare_args = abci::request::PrepareProposal {
+    let prepare_args = PrepareProposal {
         max_tx_bytes: 600_000, // make large enough to overflow sequencer bytes first
         txs: vec![],
-        local_last_commit: None,
+        local_last_commit: Some(ExtendedCommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
-        height: Height::default(),
+        height,
         time: Time::now(),
         next_validators_hash: Hash::default(),
         proposer_address: account::Id::new([1u8; 20]),
     };
 
-    let result = app
-        .prepare_proposal(prepare_args, storage)
+    let result = fixture
+        .app
+        .prepare_proposal(prepare_args, fixture.storage())
         .await
         .expect("too large transactions should not cause prepare proposal to fail");
 
-    // run maintence to clear out transactions
-    app.mempool.run_maintenance(&app.state, false).await;
+    // run maintenance to clear out transactions
+    mempool.run_maintenance(fixture.state(), false).await;
 
     // see only first tx made it in
     assert_eq!(
         result.txs.len(),
-        3,
-        "total transaction length should be three, including the two commitments and the one tx \
-         that fit"
+        4,
+        "total transaction length should be four, including the extended commit info, two \
+         commitments and the one tx that fit"
     );
     assert_eq!(
-        app.mempool.len().await,
+        mempool.len().await,
         1,
         "mempool should have re-added the tx that was too large"
     );
@@ -740,57 +789,51 @@ async fn app_prepare_proposal_sequencer_max_bytes_overflow_ok() {
 
 #[tokio::test]
 async fn app_process_proposal_sequencer_max_bytes_overflow_fail() {
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     // create txs which will cause sequencer overflow (max is currently 256_000 bytes)
-    let alice = get_alice_signing_key();
-    let tx_pass = TransactionBody::builder()
-        .actions(vec![RollupDataSubmission {
+    let tx_pass = fixture
+        .checked_tx_builder()
+        .with_action(RollupDataSubmission {
             rollup_id: RollupId::from([1u8; 32]),
             data: Bytes::copy_from_slice(&[1u8; 200_000]),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap()
-        .sign(&alice);
-    let tx_overflow = TransactionBody::builder()
-        .actions(vec![RollupDataSubmission {
+        })
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
+    let tx_overflow = fixture
+        .checked_tx_builder()
+        .with_action(RollupDataSubmission {
             rollup_id: RollupId::from([1u8; 32]),
             data: Bytes::copy_from_slice(&[1u8; 100_000]),
             fee_asset: nria().into(),
-        }
-        .into()])
-        .nonce(1)
-        .chain_id("test")
-        .try_build()
-        .unwrap()
-        .sign(&alice);
+        })
+        .with_nonce(1)
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
-    let txs: Vec<Transaction> = vec![tx_pass, tx_overflow];
-    let generated_commitment = generate_rollup_datas_commitment(&txs, HashMap::new());
-    let txs = generated_commitment.into_transactions(
-        txs.into_iter()
-            .map(|tx| tx.to_raw().encode_to_vec().into())
-            .collect(),
-    );
-
+    let txs = vec![tx_pass, tx_overflow];
     let process_proposal = ProcessProposal {
         hash: Hash::default(),
-        height: 1u32.into(),
+        height,
         time: Time::now(),
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs,
-        proposed_last_commit: None,
+        txs: transactions_with_extended_commit_info_and_commitments(height, &txs, None),
+        proposed_last_commit: Some(CommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
     };
 
-    let result = app
-        .process_proposal(process_proposal.clone(), storage.clone())
+    let result = fixture
+        .app
+        .process_proposal(process_proposal.clone(), fixture.storage())
         .await
         .expect_err("expected max sequenced data limit error");
 
@@ -802,43 +845,37 @@ async fn app_process_proposal_sequencer_max_bytes_overflow_fail() {
 
 #[tokio::test]
 async fn app_process_proposal_transaction_fails_to_execute_fails() {
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
 
     // create txs which will cause transaction execution failure
-    let alice = get_alice_signing_key();
-    let tx_fail = TransactionBody::builder()
-        .actions(vec![SudoAddressChange {
-            new_address: astria_address_from_hex_string(BOB_ADDRESS),
-        }
-        .into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap()
-        .sign(&alice);
-
-    let txs: Vec<Transaction> = vec![tx_fail];
-    let generated_commitment = generate_rollup_datas_commitment(&txs, HashMap::new());
-    let txs = generated_commitment.into_transactions(
-        txs.into_iter()
-            .map(|tx| tx.to_raw().encode_to_vec().into())
-            .collect(),
-    );
+    let tx_fail = fixture
+        .checked_tx_builder()
+        .with_action(SudoAddressChange {
+            new_address: *BOB_ADDRESS,
+        })
+        .with_signer(ALICE.clone())
+        .build()
+        .await;
 
     let process_proposal = ProcessProposal {
         hash: Hash::default(),
-        height: 1u32.into(),
+        height,
         time: Time::now(),
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs,
-        proposed_last_commit: None,
+        txs: transactions_with_extended_commit_info_and_commitments(height, &[tx_fail], None),
+        proposed_last_commit: Some(CommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
     };
 
-    let result = app
-        .process_proposal(process_proposal.clone(), storage.clone())
+    let result = fixture
+        .app
+        .process_proposal(process_proposal.clone(), fixture.storage())
         .await
         .expect_err("expected transaction execution failure");
 
@@ -850,62 +887,81 @@ async fn app_process_proposal_transaction_fails_to_execute_fails() {
 
 #[tokio::test]
 async fn app_end_block_validator_updates() {
-    let initial_validator_set = vec![
-        ValidatorUpdate {
-            power: 100,
-            verification_key: verification_key(1),
-        },
-        ValidatorUpdate {
-            power: 1,
-            verification_key: verification_key(2),
-        },
-    ];
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture
+        .chain_initializer()
+        .with_genesis_validators(vec![
+            (ALICE.verification_key(), 100),
+            (BOB.verification_key(), 1),
+            (CAROL.verification_key(), 1),
+        ])
+        .init()
+        .await;
 
-    let mut app = initialize_app(None, initial_validator_set).await;
     let proposer_address = [0u8; 20];
-
     let validator_updates = vec![
         ValidatorUpdate {
             power: 0,
-            verification_key: verification_key(0),
+            verification_key: ALICE.verification_key(),
+            name: "Alice".parse().unwrap(),
+        },
+        ValidatorUpdate {
+            power: 1,
+            verification_key: BOB.verification_key(),
+            name: "Bob".parse().unwrap(),
         },
         ValidatorUpdate {
             power: 100,
-            verification_key: verification_key(1),
+            verification_key: CAROL.verification_key(),
+            name: "Carol".parse().unwrap(),
         },
         ValidatorUpdate {
             power: 100,
-            verification_key: verification_key(2),
+            verification_key: SUDO.verification_key(),
+            name: "Sudo".parse().unwrap(),
         },
     ];
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx
-        .put_validator_updates(ValidatorSet::new_from_updates(validator_updates.clone()))
+    fixture
+        .state_mut()
+        .put_block_validator_updates(ValidatorSet::new_from_updates(validator_updates.clone()))
         .unwrap();
-    app.apply(state_tx);
 
-    let resp = app.end_block(1, &proposer_address).await.unwrap();
+    let resp = fixture.app.end_block(1, &proposer_address).await.unwrap();
     // we only assert length here as the ordering of the updates is not guaranteed
     // and validator::Update does not implement Ord
     assert_eq!(resp.validator_updates.len(), validator_updates.len());
 
-    // validator with pubkey_a should be removed (power set to 0)
-    // validator with pubkey_b should be updated
-    // validator with pubkey_c should be added
-    let validator_set = app.state.get_validator_set().await.unwrap();
-    assert_eq!(validator_set.len(), 2);
-    let validator_b = validator_set
-        .get(verification_key(1).address_bytes())
-        .unwrap();
-    assert_eq!(validator_b.verification_key, verification_key(1));
-    assert_eq!(validator_b.power, 100);
-    let validator_c = validator_set
-        .get(verification_key(2).address_bytes())
-        .unwrap();
-    assert_eq!(validator_c.verification_key, verification_key(2));
-    assert_eq!(validator_c.power, 100);
-    assert_eq!(app.state.get_validator_updates().await.unwrap().len(), 0);
+    // Alice should be removed (power set to 0)
+    // Bob should be unchanged
+    // Carol's power should be updated
+    // Sudo should be added
+    let validator_set = fixture.state().pre_aspen_get_validator_set().await.unwrap();
+    assert_eq!(validator_set.len(), 3);
+
+    assert!(validator_set.get(&*ALICE_ADDRESS_BYTES).is_none());
+
+    let bob = validator_set.get(&*BOB_ADDRESS_BYTES).unwrap();
+    assert_eq!(bob.verification_key, BOB.verification_key());
+    assert_eq!(bob.power, 1);
+
+    let carol = validator_set.get(&*CAROL_ADDRESS_BYTES).unwrap();
+    assert_eq!(carol.verification_key, CAROL.verification_key());
+    assert_eq!(carol.power, 100);
+
+    let sudo = validator_set.get(&*SUDO_ADDRESS_BYTES).unwrap();
+    assert_eq!(sudo.verification_key, SUDO.verification_key());
+    assert_eq!(sudo.power, 100);
+
+    assert_eq!(
+        fixture
+            .state()
+            .get_block_validator_updates()
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -914,27 +970,18 @@ async fn app_end_block_validator_updates() {
     reason = "it's a test, so allow a lot of lines"
 )]
 async fn app_proposal_fingerprint_triggers_update() {
-    let alice = get_alice_signing_key();
-    let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
-
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture.chain_initializer().init().await;
+    let height = fixture.run_until_aspen_applied().await;
     let bridge_address = astria_address(&[99; 20]);
     let rollup_id = RollupId::from_unhashed_bytes(b"testchainid");
-    let asset = nria().clone();
-    let starting_index_of_action = 0;
+    fixture
+        .bridge_initializer(bridge_address)
+        .with_rollup_id(rollup_id)
+        .init();
 
-    let mut state_tx = StateDelta::new(app.state.clone());
-    state_tx
-        .put_bridge_account_rollup_id(&bridge_address, rollup_id)
-        .unwrap();
-    state_tx
-        .put_bridge_account_ibc_asset(&bridge_address, &asset)
-        .unwrap();
-    app.apply(state_tx);
-    app.prepare_commit(storage.clone()).await.unwrap();
-    app.commit(storage.clone()).await;
-
-    // Commit should clear the fingerprint
-    assert_eq!(*app.execution_state.data(), ExecutionState::Unset);
+    // Commit after `chain_init` should clear the fingerprint
+    assert_eq!(*fixture.app.execution_state.data(), ExecutionState::Unset);
 
     let amount = 100;
     let lock_action = BridgeLock {
@@ -950,13 +997,12 @@ async fn app_proposal_fingerprint_triggers_update() {
         fee_asset: nria().into(),
     };
 
-    let tx = TransactionBody::builder()
-        .actions(vec![lock_action.into(), rollup_data_submission.into()])
-        .chain_id("test")
-        .try_build()
-        .unwrap();
-
-    let signed_tx = tx.sign(&alice);
+    let tx = fixture
+        .checked_tx_builder()
+        .with_action(lock_action)
+        .with_action(rollup_data_submission)
+        .build()
+        .await;
 
     let expected_deposit = Deposit {
         bridge_address,
@@ -964,62 +1010,70 @@ async fn app_proposal_fingerprint_triggers_update() {
         amount,
         asset: nria().into(),
         destination_chain_address: "nootwashere".to_string(),
-        source_transaction_id: signed_tx.id(),
-        source_action_index: starting_index_of_action,
+        source_transaction_id: *tx.id(),
+        source_action_index: 0,
     };
-    let deposits = HashMap::from_iter(vec![(rollup_id, vec![expected_deposit.clone()])]);
-    let commitments = generate_rollup_datas_commitment(&[signed_tx.clone()], deposits.clone());
+    let deposits = HashMap::from_iter(vec![(rollup_id, vec![expected_deposit])]);
 
     let timestamp = Time::now();
     let raw_hash = [99u8; 32];
     let block_hash = Hash::Sha256(raw_hash);
-    let txs = vec![signed_tx.to_raw().encode_to_vec().into()];
-    let txs_with_commitments = commitments.into_transactions(txs.clone());
+    let txs_with_commitments = transactions_with_extended_commit_info_and_commitments(
+        height,
+        &[tx.clone()],
+        Some(deposits.clone()),
+    );
 
-    // These two proposals match exactly, except for the commit info
+    // These two proposals match exactly, except for the proposer
     let prepare_proposal = PrepareProposal {
         max_tx_bytes: 1_000_000,
-        height: 1u32.into(),
+        height,
         time: timestamp,
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs: txs.clone(),
-        local_last_commit: None,
+        txs: vec![],
+        local_last_commit: Some(ExtendedCommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
+        }),
         misbehavior: vec![],
     };
     let match_process_proposal = ProcessProposal {
         hash: block_hash,
-        height: 1u32.into(),
-        time: timestamp,
-        next_validators_hash: Hash::default(),
-        proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs: txs_with_commitments.clone(),
-        proposed_last_commit: None,
-        misbehavior: vec![],
-    };
-    let non_match_process_proposal = ProcessProposal {
-        hash: block_hash,
-        height: 1u32.into(),
+        height,
         time: timestamp,
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
         txs: txs_with_commitments.clone(),
         proposed_last_commit: Some(CommitInfo {
             votes: vec![],
-            round: Round::default(),
+            round: 0u16.into(),
+        }),
+        misbehavior: vec![],
+    };
+    let non_match_process_proposal = ProcessProposal {
+        hash: block_hash,
+        height,
+        time: timestamp,
+        next_validators_hash: Hash::default(),
+        proposer_address: [1u8; 20].to_vec().try_into().unwrap(),
+        txs: txs_with_commitments.clone(),
+        proposed_last_commit: Some(CommitInfo {
+            votes: vec![],
+            round: 0u16.into(),
         }),
         misbehavior: vec![],
     };
     let finalize_block = abci::request::FinalizeBlock {
         hash: block_hash,
-        height: 1u32.into(),
+        height,
         time: timestamp,
         next_validators_hash: Hash::default(),
         proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
-        txs: txs_with_commitments.clone(),
+        txs: txs_with_commitments,
         decided_last_commit: CommitInfo {
             votes: vec![],
-            round: Round::default(),
+            round: 0u16.into(),
         },
         misbehavior: vec![],
     };
@@ -1029,66 +1083,193 @@ async fn app_proposal_fingerprint_triggers_update() {
     // - after process_proposal, fingerprint should be updated to include the block hash indicating
     //   that the proposal execution data was utilized.
     // - the finalize block fingerprint should match
-    app.mempool
-        .insert(
-            Arc::new(signed_tx.clone()),
-            0,
-            mock_balances(0, 0),
-            mock_tx_cost(0, 0, 0),
-        )
+    let mempool = fixture.mempool();
+    mempool
+        .insert(tx, 0, dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
         .await
         .unwrap();
-    app.prepare_proposal(prepare_proposal.clone(), storage.clone())
+    fixture
+        .app
+        .prepare_proposal(prepare_proposal.clone(), fixture.storage())
         .await
         .unwrap();
-    let ExecutionState::Prepared(cached_proposal) = app.execution_state.data().clone() else {
+    let ExecutionState::Prepared(cached_proposal) = fixture.app.execution_state.data().clone()
+    else {
         panic!("should be in prepared state")
     };
-    app.process_proposal(match_process_proposal.clone(), storage.clone())
+    fixture
+        .app
+        .process_proposal(match_process_proposal.clone(), fixture.storage())
         .await
         .unwrap();
     let expected_state = ExecutionState::ExecutedBlock {
         cached_block_hash: raw_hash,
         cached_proposal: Some(cached_proposal),
     };
-    assert_eq!(*app.execution_state.data(), expected_state);
-    app.finalize_block(finalize_block.clone(), storage.clone())
+    assert_eq!(*fixture.app.execution_state.data(), expected_state);
+    fixture
+        .app
+        .finalize_block(finalize_block.clone(), fixture.storage())
         .await
         .unwrap();
-    assert_eq!(*app.execution_state.data(), expected_state);
+    assert_eq!(*fixture.app.execution_state.data(), expected_state);
 
     // Call PrepareProposal, then ProcessProposal where the proposals do not match
     // - validate the prepared proposal fingerprint
     // - after process proposal should have a ExecuteBlock fingerprint w/ no prepare fingerprint
     //   data
     // - finalize block should not change the fingerprint
-    app.prepare_proposal(prepare_proposal.clone(), storage.clone())
+    fixture
+        .app
+        .prepare_proposal(prepare_proposal.clone(), fixture.storage())
         .await
         .unwrap();
-    app.process_proposal(non_match_process_proposal.clone(), storage.clone())
+    fixture
+        .app
+        .process_proposal(non_match_process_proposal.clone(), fixture.storage())
         .await
         .unwrap();
     let expected_state = ExecutionState::ExecutedBlock {
         cached_block_hash: raw_hash,
         cached_proposal: None,
     };
-    assert_eq!(*app.execution_state.data(), expected_state);
-    app.finalize_block(finalize_block.clone(), storage.clone())
+    assert_eq!(*fixture.app.execution_state.data(), expected_state);
+    fixture
+        .app
+        .finalize_block(finalize_block.clone(), fixture.storage())
         .await
         .unwrap();
-    assert_eq!(*app.execution_state.data(), expected_state);
+    assert_eq!(*fixture.app.execution_state.data(), expected_state);
 
     // Cannot use fingerprint to jump from prepare proposal straight to finalize block
     // - the fingerprint at the end of finalize block should not have the prepare proposal data
-    app.prepare_proposal(prepare_proposal.clone(), storage.clone())
+    fixture
+        .app
+        .prepare_proposal(prepare_proposal.clone(), fixture.storage())
         .await
         .unwrap();
-    app.finalize_block(finalize_block.clone(), storage.clone())
+    fixture
+        .app
+        .finalize_block(finalize_block.clone(), fixture.storage())
         .await
         .unwrap();
-    assert_eq!(*app.execution_state.data(), expected_state);
+    assert_eq!(*fixture.app.execution_state.data(), expected_state);
 
     // Calling update state for new round should reset key
-    app.update_state_for_new_round(&storage);
-    assert_eq!(*app.execution_state.data(), ExecutionState::Unset);
+    fixture.app.update_state_for_new_round(&fixture.storage());
+    assert_eq!(*fixture.app.execution_state.data(), ExecutionState::Unset);
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "it's a test, so allow a lot of lines"
+)]
+#[tokio::test]
+async fn app_oracle_price_update_events_in_finalize_block() {
+    let mut fixture = Fixture::uninitialized(None).await;
+    fixture
+        .chain_initializer()
+        .with_genesis_validators(vec![(ALICE.verification_key(), 100)])
+        .init()
+        .await;
+    let height = fixture.run_until_aspen_applied().await;
+
+    let currency_pair: CurrencyPair = "ETH/USD".parse().unwrap();
+    let id = CurrencyPairId::new(0);
+    let currency_pair_state = CurrencyPairState {
+        price: None,
+        nonce: CurrencyPairNonce::new(0),
+        id,
+    };
+    fixture
+        .state_mut()
+        .put_currency_pair_state(currency_pair.clone(), currency_pair_state)
+        .unwrap();
+    fixture.app.prepare_commit(fixture.storage()).await.unwrap();
+    fixture.app.commit(fixture.storage()).await.unwrap();
+
+    let mut prices = std::collections::BTreeMap::new();
+    let price = Price::new(10000i128);
+    let price_bytes = price.get().to_be_bytes().to_vec();
+    let id_to_currency_pair = indexmap::indexmap! {
+        id => CurrencyPairInfo{
+            currency_pair: currency_pair.clone(),
+            decimals: 0,
+        }
+    };
+    let _ = prices.insert(id.get(), price_bytes.into());
+    let extension_bytes = RawOracleVoteExtension {
+        prices,
+    }
+    .encode_to_vec();
+    let message_to_sign = CanonicalVoteExtension {
+        extension: extension_bytes.clone(),
+        height: i64::try_from(height.value()).unwrap(),
+        round: 1,
+        chain_id: "test".to_string(),
+    }
+    .encode_length_delimited_to_vec();
+
+    let vote = ExtendedVoteInfo {
+        validator: Validator {
+            address: *ALICE_ADDRESS_BYTES,
+            power: 100u32.into(),
+        },
+        sig_info: BlockSignatureInfo::Flag(BlockIdFlag::Commit),
+        vote_extension: extension_bytes.into(),
+        extension_signature: Some(
+            ALICE
+                .sign(&message_to_sign)
+                .to_bytes()
+                .to_vec()
+                .try_into()
+                .unwrap(),
+        ),
+    };
+    let extended_commit_info = ExtendedCommitInfo {
+        round: 1u16.into(),
+        votes: vec![vote],
+    };
+    let extended_commit_info = ExtendedCommitInfoWithCurrencyPairMapping {
+        extended_commit_info,
+        id_to_currency_pair,
+    };
+    let encoded_extended_commit_info =
+        DataItem::ExtendedCommitInfo(extended_commit_info.into_raw().encode_to_vec().into())
+            .encode();
+    let commitments = generate_rollup_datas_commitment::<true>(&[], HashMap::new());
+    let txs_with_commit_info: Vec<Bytes> = commitments
+        .into_iter()
+        .chain(std::iter::once(encoded_extended_commit_info))
+        .collect();
+
+    let proposer_address: account::Id = [99u8; 20].to_vec().try_into().unwrap();
+    let finalize_block = abci::request::FinalizeBlock {
+        hash: Hash::try_from([0u8; 32].to_vec()).unwrap(),
+        height: height.increment(),
+        time: Time::now(),
+        next_validators_hash: Hash::default(),
+        proposer_address,
+        txs: txs_with_commit_info,
+        decided_last_commit: CommitInfo {
+            votes: vec![],
+            round: Round::default(),
+        },
+        misbehavior: vec![],
+    };
+    let finalize_block = fixture
+        .app
+        .finalize_block(finalize_block, fixture.storage())
+        .await
+        .unwrap();
+    assert_eq!(finalize_block.events.len(), 1);
+
+    let expected_event = Event::new(
+        "price_update",
+        [
+            ("currency_pair", currency_pair.to_string()),
+            ("price", price.to_string()),
+        ],
+    );
+    assert_eq!(finalize_block.events[0], expected_event);
 }
