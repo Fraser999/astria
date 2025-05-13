@@ -32,8 +32,6 @@ use tendermint::{
 use crate::{
     checked_transaction::CheckedTransaction,
     test_utils::{
-        dummy_balances,
-        dummy_tx_costs,
         nria,
         transactions_with_extended_commit_info_and_commitments,
         Fixture,
@@ -208,9 +206,6 @@ async fn app_prepare_proposal_account_block_misordering_ok() {
     app.mempool
         .insert(
             tx_0.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -218,9 +213,6 @@ async fn app_prepare_proposal_account_block_misordering_ok() {
     app.mempool
         .insert(
             tx_1.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();

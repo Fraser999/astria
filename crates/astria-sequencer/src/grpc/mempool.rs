@@ -313,7 +313,7 @@ mod tests {
         let tx_hash_bytes: Bytes = tx.id().get().to_vec().into();
         // Should be inserted into Pending
         mempool
-            .insert(tx, nonce, &HashMap::new(), HashMap::new())
+            .insert(tx)
             .await
             .unwrap();
 
@@ -345,9 +345,7 @@ mod tests {
         mempool
             .insert(
                 tx.clone(),
-                nonce.saturating_sub(1),
-                &HashMap::default(),
-                HashMap::default(),
+
             )
             .await
             .unwrap();
@@ -374,7 +372,7 @@ mod tests {
         let tx = new_tx(&fixture, nonce).await;
         let tx_hash_bytes: Bytes = tx.id().get().to_vec().into();
         mempool
-            .insert(tx.clone(), nonce, &HashMap::default(), HashMap::default())
+            .insert(tx.clone())
             .await
             .unwrap();
 
@@ -417,7 +415,7 @@ mod tests {
         let tx = new_tx(&fixture, nonce).await;
         let tx_hash_bytes: Bytes = tx.id().get().to_vec().into();
         mempool
-            .insert(tx.clone(), nonce, &HashMap::default(), HashMap::default())
+            .insert(tx.clone())
             .await
             .unwrap();
         let height = 100;
@@ -428,7 +426,7 @@ mod tests {
         };
         execution_results.insert(*tx.id(), Arc::new(exec_tx_result.clone()));
         mempool
-            .run_maintenance(&storage.latest_snapshot(), false, execution_results, height)
+            .run_maintenance(storage.latest_snapshot(), false, execution_results, height)
             .await;
 
         let req = GetTransactionStatusRequest {
@@ -547,9 +545,6 @@ mod tests {
         mempool
             .insert(
                 checked_tx.clone(),
-                nonce,
-                &HashMap::default(),
-                HashMap::default(),
             )
             .await
             .unwrap();

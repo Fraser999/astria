@@ -91,8 +91,6 @@ use crate::{
     test_utils::{
         assert_error_contains,
         astria_address,
-        dummy_balances,
-        dummy_tx_costs,
         nria,
         transactions_with_extended_commit_info_and_commitments,
         Fixture,
@@ -547,7 +545,7 @@ async fn app_execution_results_match_proposal_vs_after_proposal() {
     // this simulates executing the same block as a validator (specifically the proposer).
     let mempool = fixture.mempool();
     mempool
-        .insert(tx, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+        .insert(tx)
         .await
         .unwrap();
 
@@ -661,15 +659,12 @@ async fn app_prepare_proposal_cometbft_max_bytes_overflow_ok() {
 
     let mempool = fixture.mempool();
     mempool
-        .insert(tx_pass, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+        .insert(tx_pass)
         .await
         .unwrap();
     mempool
         .insert(
             tx_overflow,
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -744,15 +739,12 @@ async fn app_prepare_proposal_sequencer_max_bytes_overflow_ok() {
 
     let mempool = fixture.mempool();
     mempool
-        .insert(tx_pass, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+        .insert(tx_pass)
         .await
         .unwrap();
     mempool
         .insert(
             tx_overflow,
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();

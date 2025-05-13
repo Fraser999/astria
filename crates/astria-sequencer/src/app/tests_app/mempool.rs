@@ -23,10 +23,8 @@ use crate::{
     accounts::StateReadExt as _,
     mempool::TransactionStatus,
     test_utils::{
-        dummy_balances,
         dummy_rollup_data_submission,
         dummy_transfer,
-        dummy_tx_costs,
         nria,
         Fixture,
         ALICE,
@@ -56,9 +54,6 @@ async fn trigger_cleaning() {
         .mempool()
         .insert(
             tx_trigger.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -159,7 +154,7 @@ async fn do_not_trigger_cleaning() {
 
     fixture
         .mempool()
-        .insert(tx_fail, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+        .insert(tx_fail)
         .await
         .unwrap();
 
@@ -223,7 +218,7 @@ async fn maintenance_recosting_promotes() {
     tx_cost.insert(nria().into(), 3);
     let mempool = fixture.mempool();
     mempool
-        .insert(tx_fail_recost_funds, 0, &bob_funds, tx_cost)
+        .insert(tx_fail_recost_funds)
         .await
         .unwrap();
 
@@ -239,7 +234,7 @@ async fn maintenance_recosting_promotes() {
     let mut tx_cost = HashMap::new();
     tx_cost.insert(nria().into(), 0);
     mempool
-        .insert(tx_recost, 0, &sudo_funds, tx_cost)
+        .insert(tx_recost)
         .await
         .unwrap();
     assert_eq!(mempool.len().await, 2, "two txs in mempool");
@@ -396,7 +391,7 @@ async fn maintenance_funds_added_promotes() {
     tx_cost.insert(nria().into(), 22);
     let mempool = fixture.mempool();
     mempool
-        .insert(tx_fail_transfer_funds, 0, &carol_funds, tx_cost)
+        .insert(tx_fail_transfer_funds)
         .await
         .unwrap();
 
@@ -418,7 +413,7 @@ async fn maintenance_funds_added_promotes() {
     let mut tx_cost = HashMap::new();
     tx_cost.insert(nria().into(), 13);
     mempool
-        .insert(tx_fund, 0, &alice_funds, tx_cost)
+        .insert(tx_fund)
         .await
         .unwrap();
 
@@ -598,9 +593,6 @@ async fn proposer_flow_included_transactions_sent_to_mempool() {
         .mempool()
         .insert(
             tx_1.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -608,9 +600,6 @@ async fn proposer_flow_included_transactions_sent_to_mempool() {
         .mempool()
         .insert(
             tx_2.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -786,9 +775,6 @@ async fn non_proposer_validator_flow_included_transactions_sent_to_mempool() {
         .mempool()
         .insert(
             tx_1.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -796,9 +782,6 @@ async fn non_proposer_validator_flow_included_transactions_sent_to_mempool() {
         .mempool()
         .insert(
             tx_2.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -943,9 +926,6 @@ async fn non_validator_flow_included_transactions_sent_to_mempool() {
         .mempool()
         .insert(
             tx_1.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();
@@ -953,9 +933,6 @@ async fn non_validator_flow_included_transactions_sent_to_mempool() {
         .mempool()
         .insert(
             tx_2.clone(),
-            0,
-            &dummy_balances(0, 0),
-            dummy_tx_costs(0, 0, 0),
         )
         .await
         .unwrap();

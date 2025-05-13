@@ -302,8 +302,6 @@ mod tests {
         checked_transaction::CheckedTransaction,
         test_utils::{
             assert_error_contains,
-            dummy_balances,
-            dummy_tx_costs,
             transactions_with_extended_commit_info_and_commitments,
             Fixture,
             ALICE,
@@ -366,9 +364,6 @@ mod tests {
         mempool
             .insert(
                 tx.clone(),
-                0,
-                &dummy_balances(0, 0),
-                dummy_tx_costs(0, 0, 0),
             )
             .await
             .unwrap();
@@ -501,9 +496,6 @@ mod tests {
         mempool
             .insert(
                 tx.clone(),
-                0,
-                &dummy_balances(0, 0),
-                dummy_tx_costs(0, 0, 0),
             )
             .await
             .unwrap();

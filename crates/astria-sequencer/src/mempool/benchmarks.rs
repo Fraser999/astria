@@ -34,10 +34,6 @@ use crate::{
         Mempool,
         RemovalReason,
     },
-    test_utils::{
-        dummy_balances,
-        dummy_tx_costs,
-    },
 };
 
 /// The max time for any benchmark.
@@ -118,12 +114,10 @@ fn init_mempool<T: MempoolSize>() -> Mempool {
     let init = || {
         let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
         let mempool = Mempool::new(metrics, T::size(), T::size());
-        let account_balances = dummy_balances(0, 0);
-        let tx_costs = dummy_tx_costs(0, 0, 0);
         runtime.block_on(async {
             for tx in transactions().iter().take(T::checked_size()) {
                 mempool
-                    .insert(tx.clone(), 0, &account_balances.clone(), tx_costs.clone())
+                    .insert(tx.clone())
                     .await
                     .unwrap();
             }

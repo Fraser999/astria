@@ -354,8 +354,6 @@ mod tests {
         grpc::StateWriteExt as _,
         test_utils::{
             astria_address,
-            dummy_balances,
-            dummy_tx_costs,
             Fixture,
             ALICE_ADDRESS,
             SUDO_ADDRESS,
@@ -407,7 +405,7 @@ mod tests {
             .build()
             .await;
         mempool
-            .insert(tx, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+            .insert(tx)
             .await
             .unwrap();
 
@@ -419,7 +417,7 @@ mod tests {
             .build()
             .await;
         mempool
-            .insert(tx, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+            .insert(tx)
             .await
             .unwrap();
 
@@ -431,7 +429,7 @@ mod tests {
             .build()
             .await;
         mempool
-            .insert(tx, 0, &dummy_balances(0, 0), dummy_tx_costs(0, 0, 0))
+            .insert(tx)
             .await
             .unwrap();
 
