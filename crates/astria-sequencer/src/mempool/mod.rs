@@ -1,5 +1,6 @@
 // #[cfg(feature = "benchmark")]
 // mod benchmarks;
+use futures::TryStreamExt;
 mod mempool_state;
 mod transactions_container;
 
@@ -21,10 +22,13 @@ use astria_core::{
     },
 };
 use astria_eyre::eyre::Result;
+use cnidarium::Snapshot;
+use futures::TryFutureExt as _;
 pub(crate) use mempool_state::get_account_balances;
 use tokio::{
     sync::RwLock,
     time::Duration,
+    try_join,
 };
 use tracing::{
     error,
@@ -41,8 +45,11 @@ use transactions_container::{
 };
 
 use crate::{
-    accounts,
-    accounts::AddressBytes as _,
+    accounts::{
+        AddressBytes as _,
+        AssetBalance,
+        StateReadExt as _,
+    },
     checked_transaction::CheckedTransaction,
     Metrics,
 };
@@ -172,9 +179,17 @@ pub(crate) struct Mempool {
 
 impl Mempool {
     #[must_use]
-    pub(crate) fn new(metrics: &'static Metrics, parked_max_tx_count: usize) -> Self {
+    pub(crate) fn new(
+        latest_snapshot: Snapshot,
+        metrics: &'static Metrics,
+        parked_max_tx_count: usize,
+    ) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(MempoolInner::new(metrics, parked_max_tx_count))),
+            inner: Arc::new(RwLock::new(MempoolInner::new(
+                latest_snapshot,
+                metrics,
+                parked_max_tx_count,
+            ))),
         }
     }
 
@@ -187,24 +202,12 @@ impl Mempool {
 
     /// Inserts a transaction into the mempool and does not allow for transaction replacement.
     /// Will return the reason for insertion failure if failure occurs.
-    #[instrument(
-        skip_all,
-        fields(tx_id = %checked_tx.id(), current_account_nonce),
-        err(level = Level::DEBUG)
-    )]
+    #[instrument(skip_all, fields(tx_id = %checked_tx.id()), err(level = Level::DEBUG))]
     pub(crate) async fn insert(
         &self,
         checked_tx: Arc<CheckedTransaction>,
-        current_account_nonce: u32,
-        current_account_balances: &HashMap<IbcPrefixed, u128>,
-        transaction_cost: HashMap<IbcPrefixed, u128>,
     ) -> Result<InsertionStatus, InsertionError> {
-        self.inner.write().await.insert(
-            checked_tx,
-            current_account_nonce,
-            current_account_balances,
-            transaction_cost,
-        )
+        self.inner.write().await.insert(checked_tx).await
     }
 
     /// Returns a copy of all transactions ready for execution, sorted first by the difference
@@ -245,17 +248,16 @@ impl Mempool {
     /// All removed transactions are added to the CometBFT removal cache to aid with CometBFT
     /// mempool maintenance.
     #[instrument(skip_all)]
-    pub(crate) async fn run_maintenance<S: accounts::StateReadExt>(
-        &self,
-        state: &S,
-        recost: bool,
-        txs_included_in_block: &HashSet<TransactionId>,
-        block_height: u64,
+    pub(crate) async fn run_maintenance(&self,
+                                        latest_snapshot: Snapshot,
+                                        recost: bool,
+                                        txs_included_in_block: &HashSet<TransactionId>,
+                                        block_height: u64,
     ) {
         self.inner
             .write()
             .await
-            .run_maintenance(state, recost, txs_included_in_block, block_height)
+            .run_maintenance(latest_snapshot, recost, txs_included_in_block, block_height)
             .await;
     }
 
@@ -298,12 +300,17 @@ struct MempoolInner {
     parked: ParkedTransactions<MAX_PARKED_TXS_PER_ACCOUNT>,
     comet_bft_removal_cache: RemovalCache,
     contained_txs: HashSet<TransactionId>,
+    latest_snapshot: Snapshot,
     metrics: &'static Metrics,
 }
 
 impl MempoolInner {
     #[must_use]
-    fn new(metrics: &'static Metrics, parked_max_tx_count: usize) -> Self {
+    fn new(
+        latest_snapshot: Snapshot,
+        metrics: &'static Metrics,
+        parked_max_tx_count: usize,
+    ) -> Self {
         Self {
             pending: PendingTransactions::new(TX_TTL),
             parked: ParkedTransactions::new(TX_TTL, parked_max_tx_count),
@@ -312,6 +319,7 @@ impl MempoolInner {
                     .expect("Removal cache cannot be zero sized"),
             ),
             contained_txs: HashSet::new(),
+            latest_snapshot,
             metrics,
         }
     }
@@ -321,28 +329,52 @@ impl MempoolInner {
         self.contained_txs.len()
     }
 
-    fn insert(
+    async fn insert(
         &mut self,
         checked_tx: Arc<CheckedTransaction>,
-        current_account_nonce: u32,
-        current_account_balances: &HashMap<IbcPrefixed, u128>,
-        transaction_costs: HashMap<IbcPrefixed, u128>,
     ) -> Result<InsertionStatus, InsertionError> {
-        let ttx_to_insert = TimemarkedTransaction::new(checked_tx, transaction_costs);
+        let address_bytes = *checked_tx.address_bytes();
+        let current_account_nonce_fut = self
+            .latest_snapshot
+            .get_account_nonce(&address_bytes)
+            .map_err(|error| InsertionError::Internal(error.to_string()));
+        let current_account_balances_fut = self
+            .latest_snapshot
+            .account_asset_balances(&address_bytes)
+            .map_ok(
+                |AssetBalance {
+                     asset,
+                     balance,
+                 }| (asset, balance),
+            )
+            // note: this relies on the IBC prefixed assets coming out of the stream to be unique
+            .try_collect::<HashMap<IbcPrefixed, u128>>()
+            .map_err(|error| InsertionError::Internal(error.to_string()));
+        let tx_costs_fut = checked_tx
+            .total_costs(&self.latest_snapshot)
+            .map_err(InsertionError::FailedToCalculateCosts);
+
+        let (current_account_nonce, current_account_balances, tx_costs) = try_join!(
+            current_account_nonce_fut,
+            current_account_balances_fut,
+            tx_costs_fut
+        )?;
+
+        let ttx_to_insert = TimemarkedTransaction::new(checked_tx, tx_costs);
         let tx_id_to_insert = *ttx_to_insert.id();
 
         // try insert into pending
         match self.pending.add(
             ttx_to_insert.clone(),
             current_account_nonce,
-            current_account_balances,
+            &current_account_balances,
         ) {
             Err(InsertionError::NonceGap | InsertionError::AccountBalanceTooLow) => {
                 // try to add to parked queue
                 match self.parked.add(
                     ttx_to_insert,
                     current_account_nonce,
-                    current_account_balances,
+                    &current_account_balances,
                 ) {
                     Ok(()) => {
                         // log current size of parked
@@ -376,7 +408,7 @@ impl MempoolInner {
                     if let Err(error) = self.pending.add(
                         ttx_to_promote,
                         current_account_nonce,
-                        current_account_balances,
+                        &current_account_balances,
                     ) {
                         self.contained_txs.remove(&tx_id_to_promote);
                         self.comet_bft_removal_cache
@@ -436,13 +468,14 @@ impl MempoolInner {
         self.comet_bft_removal_cache.remove(tx_id);
     }
 
-    async fn run_maintenance<S: accounts::StateReadExt>(
+    async fn run_maintenance(
         &mut self,
-        state: &S,
+        latest_snapshot: Snapshot,
         recost: bool,
         txs_included_in_block: &HashSet<TransactionId>,
         block_height: u64,
     ) {
+        self.latest_snapshot = latest_snapshot;
         let mut removed_txs = Vec::<(TransactionId, RemovalReason)>::new();
 
         // To clean we need to:
@@ -463,7 +496,7 @@ impl MempoolInner {
         // TODO: Make this concurrent, all account state is separate with IO bound disk reads.
         for address_bytes in &addresses {
             // get current account state
-            let current_nonce = match state.get_account_nonce(address_bytes).await {
+            let current_nonce = match self.latest_snapshot.get_account_nonce(address_bytes).await {
                 Ok(res) => res,
                 Err(error) => {
                     error!(
@@ -473,7 +506,7 @@ impl MempoolInner {
                     continue;
                 }
             };
-            let current_balances = match get_account_balances(state, address_bytes).await {
+            let current_balances = match get_account_balances(&self.latest_snapshot, address_bytes).await {
                 Ok(res) => res,
                 Err(error) => {
                     error!(
@@ -492,7 +525,7 @@ impl MempoolInner {
                 block_height,
             ));
             if recost {
-                self.pending.recost_transactions(address_bytes, state).await;
+                self.pending.recost_transactions(address_bytes, &self.latest_snapshot).await;
             }
 
             removed_txs.extend(self.parked.clean_account_stale_expired(
@@ -502,7 +535,7 @@ impl MempoolInner {
                 block_height,
             ));
             if recost {
-                self.parked.recost_transactions(address_bytes, state).await;
+                self.parked.recost_transactions(address_bytes, &self.latest_snapshot).await;
             }
 
             // get transactions to demote from pending
