@@ -37,6 +37,7 @@ use super::RemovalReason;
 use crate::{
     accounts,
     accounts::AddressBytes as _,
+    checked_actions::CheckedActionFeeError,
     checked_transaction::CheckedTransaction,
 };
 
@@ -172,7 +173,7 @@ impl PartialOrd for TransactionPriority {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug)]
 pub(crate) enum InsertionError {
     AlreadyPresent,
     NonceTooLow,
@@ -181,6 +182,8 @@ pub(crate) enum InsertionError {
     AccountSizeLimit,
     AccountBalanceTooLow,
     ParkedSizeLimit,
+    FailedToCalculateCosts(CheckedActionFeeError),
+    Internal(String),
 }
 
 impl fmt::Display for InsertionError {
@@ -204,6 +207,12 @@ impl fmt::Display for InsertionError {
             InsertionError::ParkedSizeLimit => {
                 write!(f, "parked container size limit reached")
             }
+            InsertionError::FailedToCalculateCosts(error) => {
+                write!(f, "failed to calculate costs: {error}")
+            }
+            InsertionError::Internal(error_msg) => {
+                write!(f, "internal error while inserting to mempool: {error_msg}")
+            }
         }
     }
 }
@@ -223,6 +232,10 @@ impl From<InsertionError> for tonic::Status {
             InsertionError::AccountBalanceTooLow => {
                 tonic::Status::failed_precondition(err.to_string())
             }
+            InsertionError::FailedToCalculateCosts(_) => {
+                tonic::Status::out_of_range(err.to_string())
+            }
+            InsertionError::Internal(_) => tonic::Status::internal(err.to_string()),
         }
     }
 }
@@ -1279,12 +1292,12 @@ mod tests {
             .add(ttx_3.clone(), current_account_nonce, &account_balances)
             .unwrap();
         assert!(parked_txs.contains_tx(ttx_3.checked_tx.id()));
-        assert_eq!(
+        assert!(matches!(
             parked_txs
                 .add(ttx_3, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::AlreadyPresent
-        );
+        ));
 
         // add gapped transaction
         parked_txs
@@ -1292,12 +1305,12 @@ mod tests {
             .unwrap();
 
         // fail adding too low nonce
-        assert_eq!(
+        assert!(matches!(
             parked_txs
                 .add(ttx_1, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::NonceTooLow
-        );
+        ));
     }
 
     #[tokio::test]
@@ -1320,12 +1333,12 @@ mod tests {
             .unwrap();
 
         // fail with size limit hit
-        assert_eq!(
+        assert!(matches!(
             parked_txs
                 .add(ttx_1, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::AccountSizeLimit
-        );
+        ));
     }
 
     #[tokio::test]
@@ -1344,41 +1357,41 @@ mod tests {
         let current_account_nonce = 1;
 
         // too low nonces not added
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(ttx_0, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::NonceTooLow
-        );
+        ));
         assert!(pending_txs.txs().is_empty());
 
         // too high nonces with empty container not added
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(ttx_2.clone(), current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::NonceGap
-        );
+        ));
         assert!(pending_txs.txs().is_empty());
 
         // add ok
         pending_txs
             .add(ttx_1.clone(), current_account_nonce, &account_balances)
             .unwrap();
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(ttx_1, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::AlreadyPresent
-        );
+        ));
 
         // gapped transaction not allowed
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(ttx_3, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::NonceGap
-        );
+        ));
 
         // can add consecutive
         pending_txs
@@ -1432,7 +1445,7 @@ mod tests {
         let current_account_nonce = 0;
 
         // transaction exceeding account balances (asset present in balances) not allowed
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(
                     ttx_0_too_expensive_0,
@@ -1441,11 +1454,11 @@ mod tests {
                 )
                 .unwrap_err(),
             InsertionError::AccountBalanceTooLow
-        );
+        ));
         assert!(pending_txs.txs().is_empty());
 
         // transaction exceeding account balances (asset NOT present in balances) not allowed
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(
                     ttx_0_too_expensive_1,
@@ -1454,7 +1467,7 @@ mod tests {
                 )
                 .unwrap_err(),
             InsertionError::AccountBalanceTooLow
-        );
+        ));
         assert!(pending_txs.txs().is_empty());
 
         // transactions under account cost allowed
@@ -1484,12 +1497,12 @@ mod tests {
         }
 
         // cost exceeding when considering already contained transactions not allowed
-        assert_eq!(
+        assert!(matches!(
             pending_txs
                 .add(ttx_4, current_account_nonce, &account_balances)
                 .unwrap_err(),
             InsertionError::AccountBalanceTooLow
-        );
+        ));
     }
 
     #[tokio::test]
@@ -1604,11 +1617,13 @@ mod tests {
         );
 
         // adding too low nonce shouldn't create account
-        assert_eq!(
-            pending_txs
-                .add(ttx_s0_0_0.clone(), 1, &account_balances)
-                .unwrap_err(),
-            InsertionError::NonceTooLow,
+        assert!(
+            matches!(
+                pending_txs
+                    .add(ttx_s0_0_0.clone(), 1, &account_balances)
+                    .unwrap_err(),
+                InsertionError::NonceTooLow
+            ),
             "shouldn't be able to add nonce too low transaction"
         );
         assert!(
@@ -1623,29 +1638,35 @@ mod tests {
         assert_eq!(pending_txs.txs.len(), 1, "one account should exist");
 
         // re-adding transaction should fail
-        assert_eq!(
-            pending_txs
-                .add(ttx_s0_0_0, 0, &account_balances)
-                .unwrap_err(),
-            InsertionError::AlreadyPresent,
+        assert!(
+            matches!(
+                pending_txs
+                    .add(ttx_s0_0_0, 0, &account_balances)
+                    .unwrap_err(),
+                InsertionError::AlreadyPresent
+            ),
             "re-adding same transaction should fail"
         );
 
         // nonce replacement fails
-        assert_eq!(
-            pending_txs
-                .add(ttx_s0_0_1, 0, &account_balances)
-                .unwrap_err(),
-            InsertionError::NonceTaken,
+        assert!(
+            matches!(
+                pending_txs
+                    .add(ttx_s0_0_1, 0, &account_balances)
+                    .unwrap_err(),
+                InsertionError::NonceTaken
+            ),
             "nonce replacement not supported"
         );
 
         // nonce gaps not supported
-        assert_eq!(
-            pending_txs
-                .add(ttx_s0_2_0, 0, &account_balances)
-                .unwrap_err(),
-            InsertionError::NonceGap,
+        assert!(
+            matches!(
+                pending_txs
+                    .add(ttx_s0_2_0, 0, &account_balances)
+                    .unwrap_err(),
+                InsertionError::NonceGap
+            ),
             "gapped nonces in pending transactions not allowed"
         );
 
@@ -2479,11 +2500,13 @@ mod tests {
             .unwrap();
 
         // growing past limit causes error
-        assert_eq!(
-            parked_txs
-                .add(ttx_2.clone(), 0, &account_balances_full)
-                .unwrap_err(),
-            InsertionError::ParkedSizeLimit,
+        assert!(
+            matches!(
+                parked_txs
+                    .add(ttx_2.clone(), 0, &account_balances_full)
+                    .unwrap_err(),
+                InsertionError::ParkedSizeLimit
+            ),
             "size limit should be enforced"
         );
 
