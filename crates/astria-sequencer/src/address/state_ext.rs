@@ -120,10 +120,11 @@ mod tests {
     use cnidarium::StateDelta;
 
     use super::*;
+    use crate::storage::Storage;
 
     #[tokio::test]
     async fn put_and_get_base_prefix() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -133,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_and_get_ibc_compat_prefix() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

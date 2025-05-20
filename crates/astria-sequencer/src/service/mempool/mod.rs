@@ -18,10 +18,7 @@ use base64::{
     Engine as _,
 };
 use bytes::Bytes;
-use cnidarium::{
-    StateRead,
-    Storage,
-};
+use cnidarium::StateRead;
 use futures::{
     Future,
     FutureExt,
@@ -64,6 +61,7 @@ use crate::{
         TransactionStatus,
     },
     metrics::Metrics,
+    storage::Storage,
 };
 
 #[cfg(test)]

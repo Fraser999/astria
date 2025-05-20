@@ -200,6 +200,7 @@ mod tests {
     use super::*;
     use crate::{
         authority::StateWriteExt as _,
+        storage::Storage,
         upgrades::StateWriteExt,
     };
 
@@ -255,7 +256,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_aspen_updrade_works_as_expected() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -310,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_aspen_begin_block_works_as_expected() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -352,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_aspen_begin_block_works_as_expected() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -418,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_aspen_end_block_works_as_expected() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -453,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_aspen_end_block_does_nothing() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

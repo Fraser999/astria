@@ -4,7 +4,6 @@ use astria_eyre::eyre::{
     Result,
     WrapErr as _,
 };
-use cnidarium::Storage;
 use tendermint::v0_38::abci::{
     request,
     response,
@@ -23,9 +22,12 @@ use tracing::{
     Level,
 };
 
-use crate::app::{
-    App,
-    ShouldShutDown,
+use crate::{
+    app::{
+        App,
+        ShouldShutDown,
+    },
+    storage::Storage,
 };
 
 pub(crate) struct Consensus {

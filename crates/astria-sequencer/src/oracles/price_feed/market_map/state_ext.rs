@@ -93,6 +93,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::storage::Storage;
 
     /// Returns a `MarketMap` with the provided metadata encoded into the first market's ticker to
     /// support creating non-identical maps.
@@ -160,7 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_put_and_get_market_map() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -194,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_put_and_get_market_map_last_updated_height() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
