@@ -24,10 +24,7 @@ use astria_core::{
 };
 use astria_eyre::eyre::Result;
 use bytes::Bytes;
-use cnidarium::{
-    StateRead,
-    Storage,
-};
+use cnidarium::StateRead;
 use prost::Message as _;
 use sha2::{
     Digest as _,
@@ -69,6 +66,7 @@ use crate::{
     authority::StateReadExt,
     checked_transaction::CheckedTransaction,
     oracles::price_feed::oracle::state_ext::StateReadExt as _,
+    storage::Storage,
     test_utils::{
         dummy_balances,
         dummy_tx_costs,

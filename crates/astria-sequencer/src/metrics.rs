@@ -11,6 +11,7 @@ use telemetry::{
 };
 
 const CHECK_TX_STAGE: &str = "stage";
+const CACHE_GET_OUTCOME: &str = "outcome";
 
 pub struct Metrics {
     prepare_proposal_excluded_transactions_cometbft_space: Counter,
@@ -41,6 +42,12 @@ pub struct Metrics {
     extend_vote_duration_seconds: Histogram,
     extend_vote_failure_count: Counter,
     verify_vote_extension_failure_count: Counter,
+    verifiable_cache_hit: Counter,
+    verifiable_cache_miss: Counter,
+    verifiable_cache_item_total: Histogram,
+    non_verifiable_cache_hit: Counter,
+    non_verifiable_cache_miss: Counter,
+    non_verifiable_cache_item_total: Histogram,
 }
 
 impl Metrics {
@@ -165,6 +172,30 @@ impl Metrics {
 
     pub(crate) fn increment_verify_vote_extension_failure_count(&self) {
         self.verify_vote_extension_failure_count.increment(1);
+    }
+
+    pub(crate) fn increment_verifiable_cache_hit(&self) {
+        self.verifiable_cache_hit.increment(1);
+    }
+
+    pub(crate) fn increment_verifiable_cache_miss(&self) {
+        self.verifiable_cache_miss.increment(1);
+    }
+
+    pub(crate) fn record_verifiable_cache_item_total(&self, total: usize) {
+        self.verifiable_cache_item_total.record(total);
+    }
+
+    pub(crate) fn increment_non_verifiable_cache_hit(&self) {
+        self.non_verifiable_cache_hit.increment(1);
+    }
+
+    pub(crate) fn increment_non_verifiable_cache_miss(&self) {
+        self.non_verifiable_cache_miss.increment(1);
+    }
+
+    pub(crate) fn record_non_verifiable_cache_item_total(&self, total: usize) {
+        self.non_verifiable_cache_item_total.record(total);
     }
 }
 
@@ -372,6 +403,36 @@ impl telemetry::Metrics for Metrics {
             )?
             .register()?;
 
+        let mut verifiable_cache_factory = builder.new_counter_factory(
+            VERIFIABLE_CACHE_GET_COUNT,
+            "The number of attempts to get data from the verifiable cache in storage",
+        )?;
+        let verifiable_cache_hit = verifiable_cache_factory
+            .register_with_labels(&[(CACHE_GET_OUTCOME, "hit".to_string())])?;
+        let verifiable_cache_miss = verifiable_cache_factory
+            .register_with_labels(&[(CACHE_GET_OUTCOME, "miss".to_string())])?;
+        let verifiable_cache_item_total = builder
+            .new_histogram_factory(
+                VERIFIABLE_CACHE_ITEM_TOTAL,
+                "The number of items in the verifiable cache in storage",
+            )?
+            .register()?;
+
+        let mut non_verifiable_cache_factory = builder.new_counter_factory(
+            NON_VERIFIABLE_CACHE_GET_COUNT,
+            "The number of attempts to get data from the non-verifiable cache in storage",
+        )?;
+        let non_verifiable_cache_hit = non_verifiable_cache_factory
+            .register_with_labels(&[(CACHE_GET_OUTCOME, "hit".to_string())])?;
+        let non_verifiable_cache_miss = non_verifiable_cache_factory
+            .register_with_labels(&[(CACHE_GET_OUTCOME, "miss".to_string())])?;
+        let non_verifiable_cache_item_total = builder
+            .new_histogram_factory(
+                NON_VERIFIABLE_CACHE_ITEM_TOTAL,
+                "The number of items in the non-verifiable cache in storage",
+            )?
+            .register()?;
+
         Ok(Self {
             prepare_proposal_excluded_transactions_cometbft_space,
             prepare_proposal_excluded_transactions_sequencer_space,
@@ -401,6 +462,12 @@ impl telemetry::Metrics for Metrics {
             extend_vote_duration_seconds,
             extend_vote_failure_count,
             verify_vote_extension_failure_count,
+            verifiable_cache_hit,
+            verifiable_cache_miss,
+            verifiable_cache_item_total,
+            non_verifiable_cache_hit,
+            non_verifiable_cache_miss,
+            non_verifiable_cache_item_total,
         })
     }
 }
@@ -432,6 +499,10 @@ metric_names!(const METRICS_NAMES:
     EXTEND_VOTE_DURATION_SECONDS,
     EXTEND_VOTE_FAILURE_COUNT,
     VERIFY_VOTE_EXTENSION_FAILURE_COUNT,
+    VERIFIABLE_CACHE_GET_COUNT,
+    NON_VERIFIABLE_CACHE_GET_COUNT,
+    VERIFIABLE_CACHE_ITEM_TOTAL,
+    NON_VERIFIABLE_CACHE_ITEM_TOTAL,
 );
 
 #[cfg(test)]
@@ -505,6 +576,16 @@ mod tests {
         assert_const(
             VERIFY_VOTE_EXTENSION_FAILURE_COUNT,
             "verify_vote_extension_failure_count",
+        );
+        assert_const(VERIFIABLE_CACHE_GET_COUNT, "verifiable_cache_get_count");
+        assert_const(
+            NON_VERIFIABLE_CACHE_GET_COUNT,
+            "non_verifiable_cache_get_count",
+        );
+        assert_const(VERIFIABLE_CACHE_ITEM_TOTAL, "verifiable_cache_item_total");
+        assert_const(
+            NON_VERIFIABLE_CACHE_ITEM_TOTAL,
+            "non_verifiable_cache_item_total",
         );
     }
 }

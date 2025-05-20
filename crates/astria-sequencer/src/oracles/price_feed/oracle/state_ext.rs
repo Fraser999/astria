@@ -349,6 +349,7 @@ mod tests {
     use futures::TryStreamExt;
 
     use super::*;
+    use crate::storage::Storage;
 
     fn eth_usd() -> CurrencyPair {
         "ETH/USD".parse::<CurrencyPair>().unwrap()
@@ -385,7 +386,7 @@ mod tests {
     /// those getters in this test.
     #[tokio::test]
     async fn should_put_and_get_currency_pair_state() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -434,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_get_currency_pairs_with_ids() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -471,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_get_currency_pairs() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -502,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_put_and_get_num_currency_pairs() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

@@ -74,6 +74,7 @@ mod tests {
     use cnidarium::StateDelta;
 
     use super::*;
+    use crate::storage::Storage;
 
     const UPGRADE_1: UpgradeName = UpgradeName::new("up one");
 
@@ -96,7 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn change_info_roundtrip() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

@@ -655,11 +655,7 @@ mod test {
         protocol::transaction::v1::action::ValidatorUpdate,
         Timestamp,
     };
-    use cnidarium::{
-        Snapshot,
-        StateDelta,
-        TempStorage,
-    };
+    use cnidarium::StateDelta;
     use tendermint::abci::types::{
         ExtendedVoteInfo,
         Validator,
@@ -673,6 +669,10 @@ mod test {
         app::StateWriteExt as _,
         authority::StateWriteExt as _,
         oracles::price_feed::market_map::state_ext::StateWriteExt as _,
+        storage::{
+            Snapshot,
+            Storage,
+        },
     };
 
     const CHAIN_ID: &str = "test-0";
@@ -827,7 +827,7 @@ mod test {
         signer_b: Signer,
         signer_c: Signer,
         state: StateDelta<Snapshot>,
-        _storage: TempStorage,
+        _storage: Storage,
     }
 
     impl Fixture {
@@ -836,7 +836,7 @@ mod test {
             let signer_b = Signer::new([1; 32], 2);
             let signer_c = Signer::new([2; 32], 1);
 
-            let storage = TempStorage::new().await.unwrap();
+            let storage = Storage::new_temp().await;
             let mut state = StateDelta::new(storage.latest_snapshot());
             state
                 .put_chain_id_and_revision_number(CHAIN_ID.try_into().unwrap())

@@ -9,7 +9,6 @@ use astria_eyre::eyre::{
     eyre,
     WrapErr as _,
 };
-use cnidarium::Storage;
 use prost::Message as _;
 use tendermint::abci::{
     request,
@@ -24,6 +23,10 @@ use crate::{
     app::StateReadExt as _,
     assets::StateReadExt as _,
     bridge::StateReadExt as _,
+    storage::{
+        Snapshot,
+        Storage,
+    },
 };
 
 fn error_query_response(
@@ -47,7 +50,7 @@ fn error_query_response(
 // this could be significantly shortened.
 #[instrument(skip_all, fields(address = %address.display_address()))]
 async fn get_bridge_account_info(
-    snapshot: cnidarium::Snapshot,
+    snapshot: Snapshot,
     address: &Address,
 ) -> Result<Option<BridgeAccountInfo>, response::Query> {
     let rollup_id = match snapshot.get_bridge_account_rollup_id(address).await {
@@ -323,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_account_info_request_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -379,7 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_account_last_tx_hash_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

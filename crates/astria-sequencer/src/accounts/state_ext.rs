@@ -288,6 +288,7 @@ mod tests {
             StateReadExt as _,
             StateWriteExt as _,
         },
+        storage::Storage,
         test_utils::{
             astria_address,
             nria,
@@ -308,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_nonce_uninitialized_returns_zero() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -329,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_nonce_get_nonce_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -367,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_nonce_get_nonce_complex() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -415,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_uninitialized_returns_zero() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -437,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -479,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_multiple_accounts() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -532,7 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_balance_multiple_assets() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -571,7 +572,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_asset_balances_uninitialized_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -596,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_asset_balances() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -662,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn increase_balance_from_uninitialized() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -703,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn decrease_balance_enough_funds() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -745,7 +746,7 @@ mod tests {
 
     #[tokio::test]
     async fn decrease_balance_not_enough_funds() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

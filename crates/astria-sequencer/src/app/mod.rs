@@ -44,25 +44,20 @@ use astria_core::{
     },
     upgrades::v1::ChangeHash,
 };
-use astria_eyre::{
-    anyhow_to_eyre,
-    eyre::{
-        bail,
-        ensure,
-        Report,
-        Result,
-        WrapErr as _,
-    },
+use astria_eyre::eyre::{
+    bail,
+    ensure,
+    Report,
+    Result,
+    WrapErr as _,
 };
 use bytes::Bytes;
 use cnidarium::{
-    ArcStateDeltaExt,
-    Snapshot,
+    ArcStateDeltaExt as _,
     StagedWriteBatch,
     StateDelta,
     StateRead,
     StateWrite,
-    Storage,
 };
 use futures::future::try_join_all;
 use prost::Message as _;
@@ -146,6 +141,10 @@ use crate::{
     proposal::{
         block_size_constraints::BlockSizeConstraints,
         commitment::generate_rollup_datas_commitment,
+    },
+    storage::{
+        Snapshot,
+        Storage,
     },
     upgrades::UpgradesHandler,
 };
@@ -241,7 +240,6 @@ impl App {
         let app_hash: AppHash = snapshot
             .root_hash()
             .await
-            .map_err(anyhow_to_eyre)
             .wrap_err("failed to get current root hash")?
             .0
             .to_vec()
@@ -1422,7 +1420,6 @@ impl App {
         let write_batch = storage
             .prepare_commit(state)
             .await
-            .map_err(anyhow_to_eyre)
             .wrap_err("failed to prepare commit")?;
         let app_hash: AppHash = write_batch
             .root_hash()

@@ -48,6 +48,7 @@ mod tests {
             StateReadExt as _,
             StateWriteExt as _,
         },
+        storage::Storage,
         test_utils::{
             astria_address,
             nria,
@@ -56,7 +57,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_account_balances() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

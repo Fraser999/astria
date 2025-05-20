@@ -346,7 +346,10 @@ mod tests {
     use cnidarium::StateDelta;
 
     use super::*;
-    use crate::test_utils::astria_address;
+    use crate::{
+        storage::Storage,
+        test_utils::astria_address,
+    };
 
     fn asset_0() -> asset::Denom {
         "asset_0".parse().unwrap()
@@ -358,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_bridge_account_rollup_id_uninitialized_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -376,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_bridge_account_rollup_id() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -441,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_bridge_account_asset_id_none_should_fail() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -454,7 +457,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_bridge_account_ibc_assets() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -518,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_account_sudo_address_round_trip() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -536,7 +539,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_account_withdrawer_address_round_trip() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -554,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_deposits_empty_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -574,7 +577,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_deposits() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -663,7 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn last_transaction_id_for_bridge_account_round_trip() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

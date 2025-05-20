@@ -21,7 +21,6 @@ use astria_core::{
     },
 };
 use bytes::Bytes;
-use cnidarium::Storage;
 use prost::Message as _;
 use tonic::{
     Request,
@@ -39,6 +38,7 @@ use crate::{
         check_tx,
         CheckTxOutcome,
     },
+    storage::Storage,
     Metrics,
 };
 

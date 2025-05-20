@@ -40,10 +40,7 @@ use astria_eyre::eyre::{
     OptionExt as _,
     WrapErr as _,
 };
-use cnidarium::{
-    StateRead,
-    Storage,
-};
+use cnidarium::StateRead;
 use futures::{
     FutureExt as _,
     StreamExt as _,
@@ -75,6 +72,7 @@ use crate::{
         ActionRef,
     },
     fees::StateReadExt as _,
+    storage::Storage,
 };
 
 #[instrument(skip_all, fields(%asset))]
@@ -467,7 +465,7 @@ mod test {
             .try_build()
             .unwrap();
 
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = cnidarium::StateDelta::new(snapshot);
 
