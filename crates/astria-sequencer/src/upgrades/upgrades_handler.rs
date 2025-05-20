@@ -8,21 +8,15 @@ use astria_core::upgrades::v1::{
     Upgrade,
     Upgrades,
 };
-use astria_eyre::{
-    anyhow_to_eyre,
-    eyre::{
-        self,
-        bail,
-        eyre,
-        OptionExt as _,
-        Result,
-        WrapErr as _,
-    },
+use astria_eyre::eyre::{
+    self,
+    bail,
+    eyre,
+    OptionExt as _,
+    Result,
+    WrapErr as _,
 };
-use cnidarium::{
-    Snapshot,
-    StateWrite,
-};
+use cnidarium::StateWrite;
 use serde_json::Value;
 use tendermint::consensus::params::VersionParams;
 use tracing::{
@@ -43,6 +37,7 @@ use crate::{
     },
     authority::component::AuthorityComponent,
     oracles::price_feed,
+    storage::Snapshot,
 };
 
 pub(crate) struct UpgradesHandler {
@@ -144,7 +139,6 @@ impl UpgradesHandler {
             let app_hash = snapshot
                 .root_hash()
                 .await
-                .map_err(anyhow_to_eyre)
                 .wrap_err("failed to get current root hash from snapshot")?;
             let hex_encoded_app_hash = hex::encode(app_hash.0);
 

@@ -225,6 +225,7 @@ mod tests {
     use tokio::pin;
 
     use super::*;
+    use crate::storage::Storage;
 
     fn asset_0() -> asset::Denom {
         "asset_0".parse().unwrap()
@@ -240,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn block_fee_read_and_increase() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -280,7 +281,7 @@ mod tests {
         FeeComponents<F>: TryFrom<StoredValue<'a>, Error = Report> + Debug,
         StoredValue<'a>: From<FeeComponents<F>>,
     {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -362,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_allowed_fee_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -389,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn can_delete_allowed_fee_assets_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -430,7 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn can_delete_allowed_fee_assets_complex() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

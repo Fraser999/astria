@@ -26,12 +26,7 @@ use astria_core::{
         },
     },
 };
-use cnidarium::{
-    Snapshot,
-    StateDelta,
-    Storage,
-    TempStorage,
-};
+use cnidarium::StateDelta;
 use ibc_types::{
     core::{
         client::ClientId,
@@ -83,6 +78,10 @@ use crate::{
     ibc::host_interface::AstriaHost,
     mempool::Mempool,
     proposal::commitment::generate_rollup_datas_commitment,
+    storage::{
+        Snapshot,
+        Storage,
+    },
     test_utils::nria,
     Metrics,
 };
@@ -106,7 +105,7 @@ impl Fixture {
     ///
     /// If `upgrades` is `None`, then Aspen will be set to activate at height 1.
     pub(crate) async fn uninitialized(upgrades: Option<Upgrades>) -> Self {
-        let storage = TempStorage::new().await.unwrap().clone();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
         let mempool = Mempool::new(metrics, 100, 100);

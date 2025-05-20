@@ -42,6 +42,7 @@ use crate::{
     grpc::sequencer::SequencerServer,
     ibc::host_interface::AstriaHost,
     mempool::Mempool,
+    storage::Storage,
     Metrics,
 };
 
@@ -101,7 +102,7 @@ impl BackgroundTasks {
 }
 
 pub(crate) struct SequencerServerArgs {
-    pub storage: cnidarium::Storage,
+    pub storage: Storage,
     pub mempool: Mempool,
     pub upgrades: Upgrades,
     pub metrics: &'static Metrics,
@@ -131,7 +132,7 @@ pub(crate) async fn serve(args: SequencerServerArgs) -> eyre::Result<(), tonic::
         shutdown_rx,
     } = args;
 
-    let ibc = penumbra_ibc::component::rpc::IbcQuery::<AstriaHost>::new(storage.clone());
+    let ibc = penumbra_ibc::component::rpc::IbcQuery::<AstriaHost>::new(storage.inner());
     let sequencer_api = SequencerServer::new(storage.clone(), mempool.clone(), upgrades);
     let mempool_api = mempool::Server::new(storage.clone(), mempool, metrics);
     let market_map_api = price_feed::SequencerServer::new(storage.clone());

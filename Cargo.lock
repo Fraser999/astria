@@ -878,6 +878,7 @@ dependencies = [
 name = "astria-sequencer"
 version = "3.0.0"
 dependencies = [
+ "anyhow",
  "assert-json-diff",
  "astria-build-info",
  "astria-config",
@@ -892,6 +893,7 @@ dependencies = [
  "cnidarium",
  "divan",
  "futures",
+ "hashlink",
  "hex",
  "ibc-proto",
  "ibc-types",
@@ -913,10 +915,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "tempfile",
  "tendermint",
  "tendermint-proto",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic",
  "tower 0.5.2",
@@ -3911,6 +3915,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2bca93b15ea5a746f220e56587f71e73c6165eab783df9e26590069953e3c30"
 dependencies = [
  "fxhash",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
+dependencies = [
+ "hashbrown 0.15.2",
 ]
 
 [[package]]

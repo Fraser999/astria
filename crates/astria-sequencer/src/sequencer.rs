@@ -1,15 +1,12 @@
 use std::time::Duration;
 
 use astria_core::generated::price_feed::service::v2::oracle_client::OracleClient;
-use astria_eyre::{
-    anyhow_to_eyre,
-    eyre::{
-        self,
-        eyre,
-        OptionExt as _,
-        Result,
-        WrapErr as _,
-    },
+use astria_eyre::eyre::{
+    self,
+    eyre,
+    OptionExt as _,
+    Result,
+    WrapErr as _,
 };
 use penumbra_tower_trace::{
     trace::request_span,
@@ -59,6 +56,7 @@ use crate::{
     mempool::Mempool,
     metrics::Metrics,
     service,
+    storage::Storage,
     upgrades::UpgradesHandler,
 };
 
@@ -113,7 +111,9 @@ impl Sequencer {
                     InitializationOutcome::Initialized{grpc_server,abci_server  } => {
                         Self::run_until_stopped(grpc_server, abci_server, &mut signals).await
                     }
-                    InitializationOutcome::ShutDownForUpgrade => { Ok(()) }
+                    InitializationOutcome::ShutDownForUpgrade => {
+                        Ok(())
+                    }
                 }
             }
         }
@@ -164,15 +164,15 @@ impl Sequencer {
 
         let substore_prefixes = vec![penumbra_ibc::IBC_SUBSTORE_PREFIX];
 
-        let storage = cnidarium::Storage::load(
+        let storage = Storage::load(
             config.db_filepath.clone(),
             substore_prefixes
                 .into_iter()
                 .map(ToString::to_string)
                 .collect(),
+            metrics,
         )
         .await
-        .map_err(anyhow_to_eyre)
         .wrap_err("failed to load storage backing chain state")?;
         let snapshot = storage.latest_snapshot();
 
@@ -292,7 +292,7 @@ impl Sequencer {
 }
 
 fn start_abci_server(
-    storage: &cnidarium::Storage,
+    storage: &Storage,
     app: App,
     mempool_service: service::Mempool,
     listen_url: AbciListenUrl,

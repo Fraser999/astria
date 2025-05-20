@@ -812,6 +812,7 @@ mod tests {
             StateReadExt as _,
             StateWriteExt,
         },
+        storage::Storage,
         test_utils::{
             astria_address,
             astria_compat_address,
@@ -850,7 +851,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_source_zone_asset_on_sequencer_account() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -897,7 +898,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_sink_zone_asset_on_sequencer_account() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -944,7 +945,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_source_zone_asset_on_bridge_account_and_emit_to_rollup() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1022,7 +1023,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_sink_zone_asset_on_bridge_account_and_emit_to_rollup() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1097,7 +1098,7 @@ mod tests {
 
     #[tokio::test]
     async fn transfer_to_bridge_is_rejected_due_to_invalid_memo() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1133,7 +1134,7 @@ mod tests {
 
     #[tokio::test]
     async fn transfer_to_bridge_account_is_rejected_due_to_not_permitted_token() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1172,7 +1173,7 @@ mod tests {
 
     #[tokio::test]
     async fn refund_sequencer_account_with_source_zone_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1219,7 +1220,7 @@ mod tests {
 
     #[tokio::test]
     async fn refund_sequencer_account_with_sink_zone_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1266,7 +1267,7 @@ mod tests {
 
     #[tokio::test]
     async fn refund_rollup_with_sink_zone_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1341,7 +1342,7 @@ mod tests {
 
     #[tokio::test]
     async fn refund_rollup_with_source_zone_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 
@@ -1419,7 +1420,7 @@ mod tests {
 
     #[tokio::test]
     async fn refund_rollup_with_source_zone_asset_compat_prefix() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state_tx = StateDelta::new(snapshot.clone());
 

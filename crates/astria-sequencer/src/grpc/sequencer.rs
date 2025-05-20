@@ -30,7 +30,6 @@ use astria_core::{
     Protobuf,
 };
 use bytes::Bytes;
-use cnidarium::Storage;
 use tonic::{
     Request,
     Response,
@@ -49,6 +48,7 @@ use crate::{
     authority::StateReadExt as _,
     grpc::StateReadExt as _,
     mempool::Mempool,
+    storage::Storage,
 };
 
 pub(crate) struct SequencerServer {
@@ -373,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn get_sequencer_block_ok() {
         let block = make_test_sequencer_block(1);
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
         let mempool = Mempool::new(metrics, 100, 100);
         let mut state_tx = StateDelta::new(storage.latest_snapshot());
@@ -505,7 +505,7 @@ mod tests {
     async fn validator_name_request_fails_if_not_a_validator() {
         let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
         let mempool = Mempool::new(metrics, 100, 100);
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
 
         let server = Arc::new(SequencerServer::new(
             storage.clone(),
@@ -529,7 +529,7 @@ mod tests {
     async fn validator_name_request_fails_if_pre_aspen() {
         let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));
         let mempool = Mempool::new(metrics, 100, 100);
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

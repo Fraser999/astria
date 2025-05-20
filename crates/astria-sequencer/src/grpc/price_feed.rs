@@ -28,7 +28,6 @@ use astria_core::{
     },
     oracles::price_feed::types::v2::CurrencyPair,
 };
-use cnidarium::Storage;
 use futures::{
     TryFutureExt as _,
     TryStreamExt as _,
@@ -49,6 +48,7 @@ use crate::{
             StateReadExt as _,
         },
     },
+    storage::Storage,
 };
 
 pub(crate) struct SequencerServer {

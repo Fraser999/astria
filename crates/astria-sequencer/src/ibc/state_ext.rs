@@ -191,6 +191,7 @@ mod tests {
     use crate::{
         address::StateWriteExt,
         ibc::StateWriteExt as _,
+        storage::Storage,
         test_utils::{
             astria_address,
             ASTRIA_PREFIX,
@@ -207,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_ibc_sudo_address_fails_if_not_set() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -220,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_sudo_address() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -257,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_ibc_relayer_ok_if_not_set() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -276,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_ibc_relayer_address() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -306,7 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_relayer_address() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -344,7 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_ibc_channel_balance_unset_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -363,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_channel_balance_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -401,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_channel_balance_multiple_assets() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -438,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_channel_balance_multiple_channels() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
