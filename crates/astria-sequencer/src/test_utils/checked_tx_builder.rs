@@ -11,10 +11,7 @@ use astria_core::{
     Protobuf as _,
 };
 use bytes::Bytes;
-use cnidarium::{
-    Snapshot,
-    StateDelta,
-};
+use cnidarium::StateDelta;
 use prost::Message as _;
 
 use super::{
@@ -23,6 +20,7 @@ use super::{
 };
 use crate::{
     checked_transaction::CheckedTransaction,
+    storage::Snapshot,
     test_utils::nria,
 };
 

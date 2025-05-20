@@ -259,6 +259,7 @@ mod tests {
     use futures::TryStreamExt as _;
 
     use super::*;
+    use crate::storage::Storage;
 
     fn verification_key(seed: u8) -> VerificationKey {
         SigningKey::from([seed; 32]).verification_key()
@@ -270,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn sudo_address() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -311,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_aspen_validator_set_uninitialized_fails() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -324,7 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_get_and_remove_pre_aspen_validator_set() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -379,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_block_validator_updates_empty() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -396,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_block_validator_updates() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -460,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_block_validator_updates() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -501,7 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_block_validator_updates_empty_ok() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -574,7 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_and_get_validator_count() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -620,7 +621,7 @@ mod tests {
     )]
     #[tokio::test]
     async fn put_get_and_remove_validator() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

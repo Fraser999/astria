@@ -518,7 +518,10 @@ mod tests {
     use rand::Rng;
 
     use super::*;
-    use crate::test_utils::astria_address;
+    use crate::{
+        storage::Storage,
+        test_utils::astria_address,
+    };
 
     // creates new sequencer block, optionally shifting all values except the height by 1
     fn make_test_sequencer_block(height: u32) -> SequencerBlock {
@@ -558,7 +561,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_sequencer_block() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -602,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_sequencer_block_update() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -639,7 +642,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_block_hash_by_height() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -665,7 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_sequencer_block_header_by_hash() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -691,7 +694,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_rollup_ids_by_block_hash() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -718,7 +721,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_sequencer_block_by_hash() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -743,7 +746,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_rollup_data() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -777,7 +780,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_rollup_transactions_proof_by_block_hash() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -795,7 +798,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_rollup_ids_proof_by_block_hash() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -813,7 +816,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_upgrade_change_hashes() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -831,7 +834,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_extended_commit_info_with_proof() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 

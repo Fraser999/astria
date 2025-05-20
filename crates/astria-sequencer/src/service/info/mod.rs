@@ -8,7 +8,6 @@ use std::{
 
 use astria_core::protocol::abci::AbciErrorCode;
 use astria_eyre::eyre::WrapErr as _;
-use cnidarium::Storage;
 use futures::{
     Future,
     FutureExt as _,
@@ -32,12 +31,11 @@ use tracing::{
     Instrument as _,
 };
 
+use crate::storage::Storage;
+
 mod abci_query_router;
 
-use astria_eyre::{
-    anyhow_to_eyre,
-    eyre::Result,
-};
+use astria_eyre::eyre::Result;
 
 use crate::app::StateReadExt as _;
 
@@ -94,7 +92,7 @@ impl Info {
                 let snapshot = self.storage.latest_snapshot();
 
                 let block_height_fut = snapshot.get_block_height().unwrap_or_else(|_| 0).map(Ok);
-                let app_hash_fut = snapshot.root_hash().map_err(anyhow_to_eyre);
+                let app_hash_fut = snapshot.root_hash();
                 let app_version_fut = snapshot.get_consensus_params();
 
                 let (block_height, app_hash, maybe_consensus_params) =
@@ -234,9 +232,7 @@ mod tests {
             protocol::account::v1::AssetBalance,
         };
 
-        let storage = cnidarium::TempStorage::new()
-            .await
-            .expect("failed to create temp storage backing chain state");
+        let storage = Storage::new_temp().await;
         let height = 99;
         let version = storage.latest_version().wrapping_add(1);
         let mut state = StateDelta::new(storage.latest_snapshot());
@@ -268,8 +264,7 @@ mod tests {
         });
 
         let response = {
-            let storage = (*storage).clone();
-            let info_service = Info::new(storage).unwrap();
+            let info_service = Info::new(storage.clone()).unwrap();
             info_service
                 .handle_info_request(info_request)
                 .await
@@ -299,7 +294,7 @@ mod tests {
     async fn handle_denom_query() {
         use astria_core::generated::astria::protocol::asset::v1 as raw;
 
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let mut state = StateDelta::new(storage.latest_snapshot());
 
         let denom: asset::TracePrefixed = "some/ibc/asset".parse().unwrap();
@@ -319,8 +314,7 @@ mod tests {
         });
 
         let response = {
-            let storage = (*storage).clone();
-            let info_service = Info::new(storage).unwrap();
+            let info_service = Info::new(storage.clone()).unwrap();
             info_service
                 .handle_info_request(info_request)
                 .await
@@ -343,7 +337,7 @@ mod tests {
     async fn handle_allowed_fee_assets_query() {
         use astria_core::generated::astria::protocol::asset::v1 as raw;
 
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let mut state = StateDelta::new(storage.latest_snapshot());
 
         let assets = vec![
@@ -374,8 +368,7 @@ mod tests {
         });
 
         let response = {
-            let storage = (*storage).clone();
-            let info_service = Info::new(storage).unwrap();
+            let info_service = Info::new(storage.clone()).unwrap();
             info_service
                 .handle_info_request(info_request)
                 .await
@@ -405,7 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_fee_components() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let mut state = StateDelta::new(storage.latest_snapshot());
 
         let height = 99;
@@ -422,8 +415,7 @@ mod tests {
         });
 
         let response = {
-            let storage = (*storage).clone();
-            let info_service = Info::new(storage).unwrap();
+            let info_service = Info::new(storage.clone()).unwrap();
             info_service
                 .handle_info_request(info_request)
                 .await

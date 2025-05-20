@@ -113,6 +113,7 @@ mod tests {
     use cnidarium::StateDelta;
 
     use super::*;
+    use crate::storage::Storage;
 
     fn asset() -> asset::Denom {
         "asset".parse().unwrap()
@@ -127,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -162,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_ibc_asset_non_existent() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let state = StateDelta::new(snapshot);
 
@@ -180,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn has_ibc_asset() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -211,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_asset_simple() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
@@ -233,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_ibc_asset_complex() {
-        let storage = cnidarium::TempStorage::new().await.unwrap();
+        let storage = Storage::new_temp().await;
         let snapshot = storage.latest_snapshot();
         let mut state = StateDelta::new(snapshot);
 
