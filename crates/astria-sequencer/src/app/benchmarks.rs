@@ -5,6 +5,8 @@
 
 use std::time::Duration;
 
+use tendermint::abci::request;
+
 use crate::{
     benchmark_utils::{
         self,
@@ -67,5 +69,89 @@ fn prepare_proposal_tx_execution(bencher: divan::Bencher) {
             // Ensure we actually processed some txs.  This will trip if execution fails for all
             // txs, or more likely, if the mempool becomes exhausted of txs.
             assert!(!executed_txs.is_empty());
+        });
+}
+
+#[divan::bench(max_time = MAX_TIME)]
+fn prepare_proposal(bencher: divan::Bencher) {
+    let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+    let mut fixture = initialize();
+    let storage = fixture.storage();
+    bencher
+        .with_inputs(|| {
+            let time = tendermint::Time::from_unix_timestamp(1_741_740_299, 32).unwrap();
+            let request = request::PrepareProposal {
+                height: 1u32.into(),
+                time,
+                proposer_address: [9u8; 20].to_vec().try_into().unwrap(),
+                next_validators_hash: tendermint::Hash::default(),
+                local_last_commit: None,
+                misbehavior: vec![],
+                txs: vec![],
+                max_tx_bytes: COMETBFT_MAX_TX_BYTES,
+            };
+            (request, storage.clone())
+        })
+        .bench_local_values(|(request, storage)| {
+            let response = runtime.block_on(async {
+                fixture
+                    .app
+                    .prepare_proposal(request, storage)
+                    .await
+                    .unwrap()
+            });
+            // Ensure we actually processed some txs.  This will trip if execution fails for all
+            // txs, or more likely, if the mempool becomes exhausted of txs.
+            assert!(!response.txs.is_empty());
+        });
+}
+
+#[divan::bench(max_time = MAX_TIME)]
+fn process_proposal(bencher: divan::Bencher) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let mut fixture = initialize();
+    let storage = fixture.storage();
+    let time = tendermint::Time::from_unix_timestamp(1_741_740_299, 32).unwrap();
+    let prepare_request = request::PrepareProposal {
+        height: 1u32.into(),
+        time,
+        proposer_address: [9u8; 20].to_vec().try_into().unwrap(),
+        next_validators_hash: tendermint::Hash::default(),
+        local_last_commit: None,
+        misbehavior: vec![],
+        txs: vec![],
+        max_tx_bytes: COMETBFT_MAX_TX_BYTES,
+    };
+    let txs = runtime.block_on(async {
+        fixture
+            .app
+            .prepare_proposal(prepare_request.clone(), storage.clone())
+            .await
+            .unwrap()
+            .txs
+    });
+    let request = request::ProcessProposal {
+        txs: txs.clone(),
+        proposed_last_commit: None,
+        misbehavior: prepare_request.misbehavior,
+        hash: tendermint::Hash::Sha256([6u8; 32]),
+        height: prepare_request.height,
+        time: time.checked_add(Duration::from_secs(1)).unwrap(), // ensure process_proposal doesn't skip execution
+        next_validators_hash: prepare_request.next_validators_hash,
+        proposer_address: prepare_request.proposer_address,
+    };
+    bencher
+        .with_inputs(|| (request.clone(), storage.clone()))
+        .bench_local_values(|(request, storage)| {
+            runtime.block_on(async {
+                fixture
+                    .app
+                    .process_proposal(request, storage)
+                    .await
+                    .unwrap()
+            });
         });
 }

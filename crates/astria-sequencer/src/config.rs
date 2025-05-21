@@ -10,6 +10,11 @@ use serde::{
 };
 use url::Url;
 
+#[test]
+fn toodoo() {
+    todo!("COMETBFT_MAX_TX_BYTES down to 1_047_000 (see Claude answer)");
+}
+
 #[expect(
     clippy::struct_excessive_bools,
     reason = "this is used as a container for deserialization. Making this a builder-pattern is \

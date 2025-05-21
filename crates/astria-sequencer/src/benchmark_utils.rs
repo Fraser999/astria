@@ -28,7 +28,7 @@ pub(crate) const SIGNER_COUNT: u8 = 10;
 pub(crate) const TRANSFERS_PER_TX: usize = 2866;
 
 const ROLLUP_DATA_TX_COUNT: usize = 100_001;
-const TRANSFERS_TX_COUNT: usize = 1_000;
+const TRANSFERS_TX_COUNT: usize = 3_00;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub(crate) enum TxTypes {

@@ -30,7 +30,7 @@ run-cometbft:
     --chain-id=astria
   jq ".consensus_params.abci.vote_extensions_enable_height = \"1\"" $HOME/.cometbft/config/genesis.json > "$genesis" && mv "$genesis" $HOME/.cometbft/config/genesis.json
 
-  sed -i'.bak' 's/timeout_commit = "1s"/timeout_commit = "2s"/g' ~/.cometbft/config/config.toml
+  sed -i'.bak' 's/timeout_commit = "1s"/timeout_commit = "20s"/g' ~/.cometbft/config/config.toml
   cometbft node
 
 [macos]
@@ -38,7 +38,7 @@ stop-testnet:
   pkill cometbft || true
   pkill astria-sequencer || true
 [macos]
-run-testnet: 
+run-testnet:
   cargo build
   ./scripts/testnet.sh
 
@@ -46,8 +46,8 @@ run-testnet:
 stop-testnet:
   pkill -f [a]stria-sequencer || true
   pkill cometbft || true
-[linux] 
-run-testnet: 
+[linux]
+run-testnet:
   cargo build
   ./scripts/testnet.sh
 

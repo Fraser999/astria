@@ -510,6 +510,7 @@ impl App {
         let skip_execution = self
             .execution_state
             .check_if_prepared_proposal(process_proposal.clone());
+        println!("SKIPPING: {skip_execution}");
 
         // Based on the status after the check, a couple of logs and metrics may
         // be updated or emitted.
@@ -742,19 +743,19 @@ impl App {
         let mut unused_count = pending_txs.len();
         let mut rollup_data_bytes = vec![];
         for tx in pending_txs {
-            unused_count = unused_count.saturating_sub(1);
-            rollup_data_bytes.extend(
-                tx.rollup_data_bytes()
-                    .map(|(rollup_id, data)| (*rollup_id, data.clone())),
-            );
-
             if self
-                .proposal_checks_and_tx_execution(tx, &mut proposal_info)
+                .proposal_checks_and_tx_execution(tx.clone(), &mut proposal_info)
                 .await?
                 .should_break()
             {
                 break;
             }
+
+            unused_count = unused_count.saturating_sub(1);
+            rollup_data_bytes.extend(
+                tx.rollup_data_bytes()
+                    .map(|(rollup_id, data)| (*rollup_id, data.clone())),
+            );
         }
 
         let Proposal::Prepare {
@@ -780,7 +781,7 @@ impl App {
             excluded_tx_count.saturating_add(failed_tx_count),
         );
 
-        debug!("{unused_count} leftover pending transactions");
+        println!("{unused_count} leftover pending transactions, {} included", included_txs.len());
         self.metrics
             .set_transactions_in_mempool_total(self.mempool.len().await);
 
