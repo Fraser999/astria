@@ -35,7 +35,6 @@ use tracing_subscriber::{
         ParseError,
     },
     fmt::{
-        format::FmtSpan,
         writer::BoxMakeWriter,
         MakeWriter,
     },
@@ -196,7 +195,9 @@ impl Config {
             formatter = Some(
                 tracing_subscriber::fmt::layer()
                     .compact()
-                    .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+                    .with_file(true)
+                    .with_line_number(true)
+                    // .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
                     .with_writer(stdout_writer),
             );
         }

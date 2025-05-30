@@ -99,6 +99,7 @@ impl Consensus {
         &mut self,
         req: ConsensusRequest,
     ) -> Result<(ConsensusResponse, ShouldShutDown), BoxError> {
+        debug!(?req, "consensus request");
         Ok(match req {
             ConsensusRequest::InitChain(init_chain) => (
                 ConsensusResponse::InitChain(

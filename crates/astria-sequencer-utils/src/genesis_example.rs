@@ -44,13 +44,16 @@ use astria_eyre::eyre::{
     WrapErr as _,
 };
 use penumbra_ibc::IbcRelay;
+use astria_core::crypto::SigningKey;
 
 const ASTRIA_ADDRESS_PREFIX: &str = "astria";
 
 fn alice() -> Address {
+    let bytes: [u8; 32] = hex::decode("5aab1ae5b47dda3c50a5df2d4cd00cba82cac6e41a303d79cfe2adb2c2002f7b").unwrap().try_into().unwrap();
+    let secret_key = SigningKey::from(bytes);
     Address::builder()
         .prefix(ASTRIA_ADDRESS_PREFIX)
-        .slice(hex::decode("1c0c490f1b5528d8173c5de46d131160e4b2c0c3").unwrap())
+        .array(secret_key.address_bytes())
         .try_build()
         .unwrap()
 }
