@@ -40,3 +40,9 @@ pub use config::Config;
 pub use metrics::Metrics;
 pub use sequencer::Sequencer;
 pub use telemetry;
+
+use std::alloc;
+use cap::Cap;
+
+#[global_allocator]
+pub static ALLOCATOR: Cap<alloc::System> = Cap::new(alloc::System, usize::max_value());

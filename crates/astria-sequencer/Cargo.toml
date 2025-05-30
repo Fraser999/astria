@@ -25,6 +25,7 @@ astria-build-info = { path = "../astria-build-info", features = ["runtime"] }
 # Avoid using "anyhow" results anywhere else.
 astria-eyre = { path = "../astria-eyre", features = ["anyhow"] }
 
+cap = "0.1.2"
 config = { package = "astria-config", path = "../astria-config" }
 merkle = { package = "astria-merkle", path = "../astria-merkle", features = [
   "unchecked-constructors",
@@ -75,6 +76,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tryhard = { workspace = true }
+humansize = "2.1.3"
 
 [dev-dependencies]
 astria-core = { path = "../astria-core", features = [

@@ -179,7 +179,7 @@ upgrades:
     #       id: "1"
 
 sequencer:
-  logLevel: "info"
+  logLevel: "astria=debug,info"
   abciUDS: true
   mempool:
     parked:

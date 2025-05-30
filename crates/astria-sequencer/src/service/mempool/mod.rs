@@ -7,11 +7,7 @@ use std::{
     },
     time::Instant,
 };
-
-use astria_core::{
-    primitive::v1::TransactionId,
-    protocol::abci::AbciErrorCode,
-};
+use astria_core::{primitive::v1::TransactionId, protocol::abci::AbciErrorCode};
 use astria_eyre::eyre::Report;
 use base64::{
     prelude::BASE64_STANDARD,
@@ -62,6 +58,7 @@ use crate::{
     },
     metrics::Metrics,
     storage::Storage,
+    ALLOCATOR,
 };
 
 #[cfg(test)]
@@ -99,6 +96,9 @@ impl Service<MempoolRequest> for Mempool {
 
     fn call(&mut self, req: MempoolRequest) -> Self::Future {
         use penumbra_tower_trace::v038::RequestExt as _;
+
+        tracing::warn!("Currently allocated: {}", humansize::format_size(ALLOCATOR.allocated(), humansize::DECIMAL));
+
         let span = req.create_span();
         let storage = self.storage.clone();
         let mempool = self.inner.clone();
@@ -106,8 +106,9 @@ impl Service<MempoolRequest> for Mempool {
         async move {
             let rsp = match req {
                 MempoolRequest::CheckTx(req) => MempoolResponse::CheckTx(
-                    handle_check_tx_request(req, storage.latest_snapshot(), &mempool, metrics)
-                        .await,
+                    tokio::spawn(
+                        handle_check_tx_request(req, storage.latest_snapshot(), mempool, metrics)
+                    ).await.unwrap(),
                 ),
             };
             Ok(rsp)
@@ -131,7 +132,7 @@ impl Service<MempoolRequest> for Mempool {
 async fn handle_check_tx_request<S: StateRead>(
     req: request::CheckTx,
     state: S,
-    mempool: &AppMempool,
+    mempool: AppMempool,
     metrics: &'static Metrics,
 ) -> response::CheckTx {
     let request::CheckTx {
@@ -141,7 +142,7 @@ async fn handle_check_tx_request<S: StateRead>(
 
     let start = Instant::now();
 
-    let outcome = check_tx(tx_bytes, state, mempool, metrics).await;
+    let outcome = check_tx(tx_bytes, state, mempool.clone(), metrics, check_tx_kind == CheckTxKind::Recheck).await;
     let response = if let CheckTxOutcome::RemovedFromMempool {
         tx_id,
         reason,
@@ -178,11 +179,20 @@ async fn handle_check_tx_request<S: StateRead>(
 pub(crate) async fn check_tx<S: StateRead>(
     tx_bytes: Bytes,
     state: S,
-    mempool: &AppMempool,
+    mempool: AppMempool,
     metrics: &'static Metrics,
+    is_recheck: bool
 ) -> CheckTxOutcome {
     let tx_status_start = Instant::now();
     let tx_id = TransactionId::new(sha2::Sha256::digest(&tx_bytes).into());
+    tracing::info!(%tx_id, is_recheck, "got check tx");
+    // tokio::time::sleep(std::time::Duration::from_micros(1500)).await;
+    // if is_recheck {
+    //     return CheckTxOutcome::RemovedFromMempool {
+    //         tx_id,
+    //         reason: RemovalReason::Expired,
+    //     }
+    // }
     let outcome = match mempool.transaction_status(&tx_id).await {
         Some(TransactionStatus::Parked) => Some(CheckTxOutcome::AlreadyInParked(tx_id)),
         Some(TransactionStatus::Pending) => Some(CheckTxOutcome::AlreadyInPending(tx_id)),
@@ -197,7 +207,10 @@ pub(crate) async fn check_tx<S: StateRead>(
         tx_status_end.saturating_duration_since(tx_status_start),
     );
     if let Some(outcome) = outcome {
+        tracing::info!("took {}ms to recheck status of {tx_id}", tx_status_end.saturating_duration_since(tx_status_start).as_secs_f32() * 1000.0);
         return outcome;
+    } else {
+        tracing::info!("took {}ms to check status of new {tx_id} - not in mempool", tx_status_end.saturating_duration_since(tx_status_start).as_secs_f32() * 1000.0);
     }
 
     let checked_tx = match CheckedTransaction::new(tx_bytes, &state).await {
@@ -229,17 +242,21 @@ pub(crate) async fn check_tx<S: StateRead>(
             return CheckTxOutcome::FailedChecks(error);
         }
     };
+    tracing::info!("took {}ms to make checked tx in check status of new {tx_id}", tx_status_end.elapsed().as_secs_f32() * 1000.0);
     metrics.record_check_tx_duration_seconds_check_actions(tx_status_end.elapsed());
 
     // attempt to insert the transaction into the mempool
-    let insertion_status = match insert_into_mempool(mempool, &state, checked_tx, metrics).await {
+    let start = Instant::now();
+    let insertion_status = match insert_into_mempool(&mempool, &state, checked_tx, metrics).await {
         Ok(status) => status,
         Err(outcome) => {
             return outcome;
         }
     };
+    tracing::info!("took {}ms to insert in mempool in check status of new {tx_id}", start.elapsed().as_secs_f32() * 1000.0);
 
     metrics.set_transactions_in_mempool_total(mempool.len().await);
+    tracing::info!("took {}ms to fully check status of new {tx_id}", tx_status_start.elapsed().as_secs_f32() * 1000.0);
 
     match insertion_status {
         InsertionStatus::AddedToParked => CheckTxOutcome::AddedToParked(tx_id),

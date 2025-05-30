@@ -9,7 +9,8 @@ copy-env type=default_env:
   cp {{ type }}.env.example .env
 
 run:
-  cargo run
+  rm -f /tmp/astria_abci.sock
+  cargo run --release
 
 run-cometbft:
   #!/usr/bin/env bash
@@ -27,10 +28,12 @@ run-cometbft:
     copy-genesis-state \
     --genesis-app-state-file="${app_state_genesis}" \
     --destination-genesis-file="$HOME/.cometbft/config/genesis.json" \
-    --chain-id=astria
+    --chain-id=test-astria
   jq ".consensus_params.abci.vote_extensions_enable_height = \"1\"" $HOME/.cometbft/config/genesis.json > "$genesis" && mv "$genesis" $HOME/.cometbft/config/genesis.json
 
   sed -i'.bak' 's/timeout_commit = "1s"/timeout_commit = "2s"/g' ~/.cometbft/config/config.toml
+  sed -i'.bak' 's/cache_size = 10000/cache_size = 0/g' ~/.cometbft/config/config.toml
+  sed -i'.bak' 's#proxy_app = "tcp://127.0.0.1:26658"#proxy_app = "unix:///tmp/astria_abci.sock"#g' ~/.cometbft/config/config.toml
   cometbft node
 
 [macos]
@@ -38,7 +41,7 @@ stop-testnet:
   pkill cometbft || true
   pkill astria-sequencer || true
 [macos]
-run-testnet: 
+run-testnet:
   cargo build
   ./scripts/testnet.sh
 
@@ -46,8 +49,8 @@ run-testnet:
 stop-testnet:
   pkill -f [a]stria-sequencer || true
   pkill cometbft || true
-[linux] 
-run-testnet: 
+[linux]
+run-testnet:
   cargo build
   ./scripts/testnet.sh
 
