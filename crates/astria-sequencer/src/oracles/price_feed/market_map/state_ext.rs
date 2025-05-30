@@ -11,7 +11,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::instrument;
 
 use super::storage::{
     self,
@@ -21,7 +20,6 @@ use crate::storage::StoredValue;
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all)]
     async fn get_market_map(&self) -> Result<Option<MarketMap>> {
         let Some(bytes) = self
             .get_raw(keys::MARKET_MAP)
@@ -39,7 +37,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid market map bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_market_map_last_updated_height(&self) -> Result<u64> {
         let Some(bytes) = self
             .get_raw(keys::LAST_UPDATED)
@@ -59,7 +56,6 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_market_map(&mut self, market_map: MarketMap) -> Result<()> {
         let bytes = StoredValue::from(storage::MarketMap::from(&market_map))
             .serialize()
@@ -68,7 +64,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_market_map_last_updated_height(&mut self, height: u64) -> Result<()> {
         let bytes = StoredValue::from(storage::BlockHeight::from(height))
             .serialize()

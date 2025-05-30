@@ -32,7 +32,6 @@ use cnidarium::{
 };
 use futures::Stream;
 use pin_project_lite::pin_project;
-use tracing::instrument;
 
 use super::storage::{
     self,
@@ -127,7 +126,6 @@ where
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all)]
     async fn get_currency_pair_id(
         &self,
         currency_pair: &CurrencyPair,
@@ -147,7 +145,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid currency pair id bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_currency_pair(&self, id: CurrencyPairId) -> Result<Option<CurrencyPair>> {
         let Some(bytes) = self
             .get_raw(&keys::id_to_currency_pair(id))
@@ -164,21 +161,18 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid currency pair bytes")
     }
 
-    #[instrument(skip_all)]
     fn currency_pairs_with_ids(&self) -> CurrencyPairsWithIdsStream<Self::PrefixRawStream> {
         CurrencyPairsWithIdsStream {
             underlying: self.prefix_raw(keys::CURRENCY_PAIR_TO_ID_PREFIX),
         }
     }
 
-    #[instrument(skip_all)]
     fn currency_pairs(&self) -> CurrencyPairsStream<Self::PrefixKeysStream> {
         CurrencyPairsStream {
             underlying: self.prefix_keys(keys::CURRENCY_PAIR_STATE_PREFIX),
         }
     }
 
-    #[instrument(skip_all)]
     async fn get_num_currency_pairs(&self) -> Result<u64> {
         let Some(bytes) = self
             .get_raw(keys::NUM_CURRENCY_PAIRS)
@@ -193,7 +187,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid number of currency pairs bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_currency_pair_state(
         &self,
         currency_pair: &CurrencyPair,
@@ -214,7 +207,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid currency pair state bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_next_currency_pair_id(&self) -> Result<CurrencyPairId> {
         let Some(bytes) = self
             .get_raw(keys::NEXT_CURRENCY_PAIR_ID)
@@ -234,7 +226,6 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_num_currency_pairs(&mut self, num_currency_pairs: u64) -> Result<()> {
         let bytes = StoredValue::from(storage::Count::from(num_currency_pairs))
             .serialize()
@@ -243,7 +234,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_currency_pair_state(
         &mut self,
         currency_pair: CurrencyPair,
@@ -261,7 +251,6 @@ pub(crate) trait StateWriteExt: StateWrite {
             .wrap_err("failed to put currency pair")
     }
 
-    #[instrument(skip_all)]
     fn put_next_currency_pair_id(&mut self, next_currency_pair_id: CurrencyPairId) -> Result<()> {
         let bytes = StoredValue::from(storage::CurrencyPairId::from(next_currency_pair_id))
             .serialize()
@@ -270,7 +259,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn put_price_for_currency_pair(
         &mut self,
         currency_pair: CurrencyPair,
@@ -291,7 +279,6 @@ pub(crate) trait StateWriteExt: StateWrite {
             .wrap_err("failed to put currency pair state")
     }
 
-    #[instrument(skip_all)]
     async fn remove_currency_pair(&mut self, currency_pair: &CurrencyPair) -> Result<()> {
         let id = self
             .get_currency_pair_id(currency_pair)
@@ -307,7 +294,6 @@ pub(crate) trait StateWriteExt: StateWrite {
 
 impl<T: StateWrite> StateWriteExt for T {}
 
-#[instrument(skip_all)]
 fn put_currency_pair_id<T: StateWrite + ?Sized>(
     state: &mut T,
     currency_pair: &CurrencyPair,
@@ -320,7 +306,6 @@ fn put_currency_pair_id<T: StateWrite + ?Sized>(
     Ok(())
 }
 
-#[instrument(skip_all)]
 fn put_currency_pair<T: StateWrite + ?Sized>(
     state: &mut T,
     id: CurrencyPairId,

@@ -25,8 +25,6 @@ use cnidarium::{
 use ibc_types::core::channel::ChannelId;
 use tracing::{
     debug,
-    instrument,
-    Level,
 };
 
 use super::storage::{
@@ -40,7 +38,6 @@ use crate::{
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all, fields(%channel, %asset), err(level = Level::WARN))]
     async fn get_ibc_channel_balance<'a, TAsset>(
         &self,
         channel: &ChannelId,
@@ -64,7 +61,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid ibc channel balance bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_ibc_sudo_address(&self) -> Result<[u8; ADDRESS_LEN]> {
         let Some(bytes) = self
             .get_raw(keys::IBC_SUDO)
@@ -80,7 +76,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid ibc sudo address bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn is_ibc_relayer<T: AddressBytes>(&self, address: &T) -> Result<bool> {
         Ok(self
             .get_raw(&keys::ibc_relayer(address))
@@ -99,7 +94,6 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all, fields(%channel, %asset, balance), err(level = Level::WARN))]
     fn put_ibc_channel_balance<'a, TAsset>(
         &mut self,
         channel: &ChannelId,
@@ -117,7 +111,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(%channel, %asset, amount), err(level = Level::DEBUG))]
     async fn decrease_ibc_channel_balance<'a, TAsset>(
         &mut self,
         channel: &ChannelId,
@@ -141,7 +134,6 @@ pub(crate) trait StateWriteExt: StateWrite {
             .wrap_err("failed to write new balance to ibc channel")
     }
 
-    #[instrument(skip_all)]
     fn put_ibc_sudo_address<T: AddressBytes>(&mut self, address: T) -> Result<()> {
         let bytes = StoredValue::from(storage::AddressBytes::from(&address))
             .serialize()
@@ -150,7 +142,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_ibc_relayer_address<T: AddressBytes>(&mut self, address: &T) -> Result<()> {
         let bytes = StoredValue::Unit
             .serialize()
@@ -159,7 +150,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn delete_ibc_relayer_address<T: AddressBytes>(&mut self, address: &T) {
         self.delete(keys::ibc_relayer(address));
     }
