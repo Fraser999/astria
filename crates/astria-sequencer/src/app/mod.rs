@@ -18,7 +18,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-
+use std::time::Duration;
 use astria_core::{
     primitive::v1::TransactionId,
     protocol::{
@@ -720,12 +720,17 @@ impl App {
         let pending_txs = self.mempool.builder_queue().await;
 
         let mut unused_count = pending_txs.len();
+        let start = Instant::now();
         for tx in pending_txs {
             if self
                 .proposal_checks_and_tx_execution(tx, &mut proposal_info)
                 .await?
                 .should_break()
             {
+                break;
+            }
+            if start.elapsed() > Duration::from_millis(1750) {
+                info!("timed out executing txs during prepare proposal");
                 break;
             }
             unused_count = unused_count.saturating_sub(1);
@@ -752,9 +757,10 @@ impl App {
             excluded_tx_count.saturating_add(failed_tx_count),
         );
 
-        debug!("{unused_count} leftover pending transactions");
+        let mempool_len = self.mempool.len().await;
+        debug!("executed {} txs, {unused_count} leftover, {mempool_len} in mempool", executed_txs.len());
         self.metrics
-            .set_transactions_in_mempool_total(self.mempool.len().await);
+            .set_transactions_in_mempool_total(mempool_len);
 
         let included_txs = executed_txs
             .iter()
@@ -815,7 +821,8 @@ impl App {
         proposal_info: &mut Proposal,
     ) -> Result<BreakOrContinue> {
         let tx_len = tx.encoded_bytes().len();
-        info!(tx_id = %tx.id(), "executing transaction");
+        let tx_id = *tx.id();
+        info!(tx_id = %tx.id(), tx_len, actions_count = tx.checked_actions().len(), "executing transaction");
 
         // check CometBFT size constraints for `prepare_proposal`
         if let Proposal::Prepare {
@@ -973,6 +980,7 @@ impl App {
             }
         };
         proposal_info.set_current_tx_group(tx_group);
+        info!(%tx_id, "executed transaction");
         Ok(BreakOrContinue::Continue)
     }
 

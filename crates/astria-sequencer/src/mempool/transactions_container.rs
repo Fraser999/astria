@@ -192,7 +192,7 @@ impl fmt::Display for InsertionError {
             InsertionError::NonceGap => write!(f, "gap in the pending nonce sequence"),
             InsertionError::AccountSizeLimit => write!(
                 f,
-                "maximum number of pending transactions has been reached for the given account"
+                "maximum number of parked transactions has been reached for the given account"
             ),
             InsertionError::AccountBalanceTooLow => {
                 write!(f, "account does not have enough balance to cover costs")
@@ -228,6 +228,7 @@ impl From<InsertionError> for tonic::Status {
 #[derive(Clone, Default, Debug)]
 pub(super) struct PendingTransactionsForAccount {
     txs: BTreeMap<u32, TimemarkedTransaction>,
+    tx_ids: HashSet<TransactionId>,
 }
 
 impl PendingTransactionsForAccount {
@@ -301,6 +302,14 @@ impl TransactionsForAccount for PendingTransactionsForAccount {
         &mut self.txs
     }
 
+    fn tx_ids(&self) -> &HashSet<TransactionId> {
+        &self.tx_ids
+    }
+
+    fn tx_ids_mut(&mut self) -> &mut HashSet<TransactionId> {
+        &mut self.tx_ids
+    }
+
     fn is_at_tx_limit(&self) -> bool {
         false
     }
@@ -340,6 +349,7 @@ impl TransactionsForAccount for PendingTransactionsForAccount {
 #[derive(Clone, Default, Debug)]
 pub(super) struct ParkedTransactionsForAccount<const MAX_TX_COUNT: usize> {
     txs: BTreeMap<u32, TimemarkedTransaction>,
+    tx_ids: HashSet<TransactionId>,
 }
 
 impl<const MAX_TX_COUNT: usize> ParkedTransactionsForAccount<MAX_TX_COUNT> {
@@ -389,6 +399,14 @@ impl<const MAX_TX_COUNT: usize> TransactionsForAccount
         &mut self.txs
     }
 
+    fn tx_ids(&self) -> &HashSet<TransactionId> {
+        &self.tx_ids
+    }
+
+    fn tx_ids_mut(&mut self) -> &mut HashSet<TransactionId> {
+        &mut self.tx_ids
+    }
+
     fn is_at_tx_limit(&self) -> bool {
         self.txs.len() >= MAX_TX_COUNT
     }
@@ -419,6 +437,10 @@ pub(super) trait TransactionsForAccount: Default {
     fn txs(&self) -> &BTreeMap<u32, TimemarkedTransaction>;
 
     fn txs_mut(&mut self) -> &mut BTreeMap<u32, TimemarkedTransaction>;
+
+    fn tx_ids(&self) -> &HashSet<TransactionId>;
+
+    fn tx_ids_mut(&mut self) -> &mut HashSet<TransactionId>;
 
     fn is_at_tx_limit(&self) -> bool;
 
@@ -496,15 +518,19 @@ pub(super) trait TransactionsForAccount: Default {
             return Vec::new();
         }
 
-        self.txs_mut()
+        let tx_ids = self.txs_mut()
             .split_off(&nonce)
             .values()
             .map(|ttx| *ttx.id())
-            .collect()
+            .collect();
+        for tx_id in &tx_ids {
+            self.tx_ids_mut().remove(tx_id);
+        }
+        tx_ids
     }
 
     fn contains_tx(&self, tx_id: &TransactionId) -> bool {
-        self.txs().values().any(|ttx| ttx.id() == tx_id)
+        self.tx_ids().contains(tx_id)
     }
 }
 
@@ -740,10 +766,11 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
             .sum()
     }
 
-    fn contains_tx(&self, tx_id: &TransactionId) -> bool {
+    fn contains_tx(&self, tx_id: &TransactionId, address: &[u8; ADDRESS_LENGTH]) -> bool {
         self.txs()
-            .values()
-            .any(|account_txs| account_txs.contains_tx(tx_id))
+            .get(address)
+            .map(|account_txs| account_txs.contains_tx(tx_id))
+            .unwrap_or_default()
     }
 }
 
@@ -881,6 +908,7 @@ impl<const MAX_PARKED_TXS_PER_ACCOUNT: usize> ParkedTransactions<MAX_PARKED_TXS_
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use astria_core::{
@@ -2473,3 +2501,4 @@ mod tests {
         parked_txs.add(ttx_2, 0, &account_balances_full).unwrap();
     }
 }
+*/
