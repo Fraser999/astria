@@ -15,10 +15,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -39,7 +35,6 @@ pub(crate) struct CheckedBridgeSudoChange {
 }
 
 impl CheckedBridgeSudoChange {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: BridgeSudoChange,
         tx_signer: [u8; ADDRESS_LEN],
@@ -71,7 +66,6 @@ impl CheckedBridgeSudoChange {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         // check that the signer of this tx is the authorized sudo address for the bridge account
         let Some(sudo_address) = state
@@ -90,7 +84,6 @@ impl CheckedBridgeSudoChange {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
 

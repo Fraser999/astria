@@ -10,7 +10,6 @@ use tendermint::abci::request::{
     BeginBlock,
     EndBlock,
 };
-use tracing::instrument;
 
 use crate::{
     accounts,
@@ -25,7 +24,6 @@ pub(crate) struct AccountsComponent;
 impl Component for AccountsComponent {
     type AppState = GenesisAppState;
 
-    #[instrument(name = "AccountsComponent::init_chain", skip_all, err)]
     async fn init_chain<S>(mut state: S, app_state: &Self::AppState) -> Result<()>
     where
         S: accounts::StateWriteExt + assets::StateReadExt,
@@ -48,7 +46,6 @@ impl Component for AccountsComponent {
         Ok(())
     }
 
-    #[instrument(name = "AccountsComponent::begin_block", skip_all)]
     async fn begin_block<S: accounts::StateWriteExt + 'static>(
         _state: &mut Arc<S>,
         _begin_block: &BeginBlock,
@@ -56,7 +53,6 @@ impl Component for AccountsComponent {
         Ok(())
     }
 
-    #[instrument(name = "AccountsComponent::end_block", skip_all)]
     async fn end_block<S: accounts::StateWriteExt + 'static>(
         _state: &mut Arc<S>,
         _end_block: &EndBlock,

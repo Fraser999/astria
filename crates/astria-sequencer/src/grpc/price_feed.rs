@@ -37,7 +37,6 @@ use tonic::{
     Response,
     Status,
 };
-use tracing::instrument;
 
 use crate::{
     app::StateReadExt as _,
@@ -65,7 +64,6 @@ impl SequencerServer {
 
 #[async_trait::async_trait]
 impl MarketMapQueryService for SequencerServer {
-    #[instrument(skip_all)]
     async fn market_map(
         self: Arc<Self>,
         _request: Request<MarketMapRequest>,
@@ -97,7 +95,6 @@ impl MarketMapQueryService for SequencerServer {
         }))
     }
 
-    #[instrument(skip_all)]
     async fn market(
         self: Arc<Self>,
         request: Request<MarketRequest>,
@@ -126,7 +123,6 @@ impl MarketMapQueryService for SequencerServer {
         }))
     }
 
-    #[instrument(skip_all)]
     async fn last_updated(
         self: Arc<Self>,
         _request: Request<LastUpdatedRequest>,
@@ -149,7 +145,6 @@ impl MarketMapQueryService for SequencerServer {
 
 #[async_trait::async_trait]
 impl OracleService for SequencerServer {
-    #[instrument(skip_all)]
     async fn get_all_currency_pairs(
         self: Arc<Self>,
         _request: Request<GetAllCurrencyPairsRequest>,
@@ -170,7 +165,6 @@ impl OracleService for SequencerServer {
         }))
     }
 
-    #[instrument(skip_all)]
     async fn get_price(
         self: Arc<Self>,
         request: Request<GetPriceRequest>,
@@ -220,7 +214,6 @@ impl OracleService for SequencerServer {
         }))
     }
 
-    #[instrument(skip_all)]
     async fn get_prices(
         self: Arc<Self>,
         request: Request<GetPricesRequest>,
@@ -280,7 +273,6 @@ impl OracleService for SequencerServer {
         }))
     }
 
-    #[instrument(skip_all)]
     async fn get_currency_pair_mapping(
         self: Arc<Self>,
         _request: Request<GetCurrencyPairMappingRequest>,

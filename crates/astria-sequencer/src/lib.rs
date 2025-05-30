@@ -35,14 +35,14 @@ pub(crate) mod test_utils;
 pub(crate) mod upgrades;
 mod utils;
 
+use std::alloc;
+
 pub use build_info::BUILD_INFO;
+use cap::Cap;
 pub use config::Config;
 pub use metrics::Metrics;
 pub use sequencer::Sequencer;
 pub use telemetry;
-
-use std::alloc;
-use cap::Cap;
 
 #[global_allocator]
 pub static ALLOCATOR: Cap<alloc::System> = Cap::new(alloc::System, usize::max_value());

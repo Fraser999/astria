@@ -4,6 +4,11 @@ use astria_eyre::eyre::{
     Result,
     WrapErr as _,
 };
+use log::{
+    debug,
+    info,
+    warn,
+};
 use tendermint::v0_38::abci::{
     request,
     response,
@@ -13,14 +18,6 @@ use tendermint::v0_38::abci::{
 use tokio::sync::mpsc;
 use tower_abci::BoxError;
 use tower_actor::Message;
-use tracing::{
-    debug,
-    info,
-    instrument,
-    warn,
-    Instrument,
-    Level,
-};
 
 use crate::{
     app::{
@@ -62,19 +59,15 @@ impl Consensus {
             // The send only fails if the receiver was dropped, which happens
             // if the caller didn't propagate the message back to tendermint
             // for some reason -- but that's not our problem.
-            let (rsp, should_shut_down) =
-                match self.handle_request(req).instrument(span.clone()).await {
-                    Ok(ok_res) => ok_res,
-                    Err(e) => {
-                        panic!("failed to handle consensus request, this is a bug: {e:?}");
-                    }
-                };
+            let (rsp, should_shut_down) = match self.handle_request(req).await {
+                Ok(ok_res) => ok_res,
+                Err(e) => {
+                    panic!("failed to handle consensus request, this is a bug: {e:?}");
+                }
+            };
             // `send` returns the sent message if sending fail, so we are dropping it.
             if rsp_sender.send(Ok(rsp)).is_err() {
-                warn!(
-                    parent: &span,
-                    "failed returning consensus response to request sender; dropping response"
-                );
+                warn!("failed returning consensus response to request sender; dropping response");
             }
             if let ShouldShutDown::ShutDownForUpgrade {
                 upgrade_activation_height,
@@ -82,24 +75,18 @@ impl Consensus {
                 hex_encoded_app_hash,
             } = should_shut_down
             {
-                info!(
-                    upgrade_activation_height,
-                    latest_app_hash = %hex_encoded_app_hash,
-                    latest_block_time = %block_time,
-                    "shutting down for upgrade"
-                );
+                info!("shutting down for upgrade");
                 self.cancellation_token.cancel();
             }
         }
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn handle_request(
         &mut self,
         req: ConsensusRequest,
     ) -> Result<(ConsensusResponse, ShouldShutDown), BoxError> {
-        debug!(?req, "consensus request");
+        debug!("consensus request");
         Ok(match req {
             ConsensusRequest::InitChain(init_chain) => (
                 ConsensusResponse::InitChain(
@@ -122,10 +109,7 @@ impl Consensus {
                     match self.handle_process_proposal(process_proposal).await {
                         Ok(()) => response::ProcessProposal::Accept,
                         Err(e) => {
-                            warn!(
-                                error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                                "rejecting proposal"
-                            );
+                            warn!("rejecting proposal");
                             response::ProcessProposal::Reject
                         }
                     },
@@ -136,10 +120,7 @@ impl Consensus {
                 ConsensusResponse::ExtendVote(match self.handle_extend_vote(extend_vote).await {
                     Ok(response) => response,
                     Err(e) => {
-                        warn!(
-                            error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                            "failed to extend vote, returning empty vote extension"
-                        );
+                        warn!("failed to extend vote, returning empty vote extension");
                         response::ExtendVote {
                             vote_extension: vec![].into(),
                         }
@@ -170,7 +151,6 @@ impl Consensus {
         })
     }
 
-    #[instrument(skip_all, err)]
     async fn init_chain(&mut self, init_chain: request::InitChain) -> Result<response::InitChain> {
         // the storage version is set to u64::MAX by default when first created
         if self.storage.latest_version() != u64::MAX {
@@ -209,7 +189,6 @@ impl Consensus {
         })
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn handle_prepare_proposal(
         &mut self,
         prepare_proposal: request::PrepareProposal,
@@ -219,7 +198,6 @@ impl Consensus {
             .await
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn handle_process_proposal(
         &mut self,
         process_proposal: request::ProcessProposal,
@@ -231,7 +209,6 @@ impl Consensus {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     async fn handle_extend_vote(
         &mut self,
         extend_vote: request::ExtendVote,
@@ -240,7 +217,6 @@ impl Consensus {
         Ok(extend_vote)
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn handle_verify_vote_extension(
         &mut self,
         vote_extension: request::VerifyVoteExtension,
@@ -248,16 +224,6 @@ impl Consensus {
         self.app.verify_vote_extension(vote_extension).await
     }
 
-    #[instrument(
-        skip_all,
-        fields(
-            hash = %finalize_block.hash,
-            height = %finalize_block.height,
-            time = %finalize_block.time,
-            proposer = %finalize_block.proposer_address
-        ),
-        err
-    )]
     async fn finalize_block(
         &mut self,
         finalize_block: request::FinalizeBlock,
@@ -270,7 +236,6 @@ impl Consensus {
         Ok(finalize_block)
     }
 
-    #[instrument(skip_all)]
     async fn commit(&mut self) -> Result<(response::Commit, ShouldShutDown)> {
         let should_shut_down = self
             .app

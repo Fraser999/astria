@@ -24,10 +24,6 @@ use penumbra_ibc::{
     IbcRelay,
     IbcRelayWithHandlers,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -46,7 +42,6 @@ pub(crate) struct CheckedIbcRelay {
 }
 
 impl CheckedIbcRelay {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: IbcRelay,
         tx_signer: [u8; ADDRESS_LEN],
@@ -71,7 +66,6 @@ impl CheckedIbcRelay {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         ensure!(
             state
@@ -83,7 +77,6 @@ impl CheckedIbcRelay {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
         self.action_with_handlers

@@ -13,10 +13,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::storage::{
     self,
@@ -28,7 +24,6 @@ use crate::storage::StoredValue;
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_native_asset(&self) -> Result<Option<asset::TracePrefixed>> {
         let Some(bytes) = self
             .get_raw(keys::NATIVE_ASSET)
@@ -46,7 +41,6 @@ pub(crate) trait StateReadExt: StateRead {
             .map(Option::Some)
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn has_ibc_asset<'a, TAsset>(&self, asset: &'a TAsset) -> Result<bool>
     where
         TAsset: Sync,
@@ -60,7 +54,6 @@ pub(crate) trait StateReadExt: StateRead {
             .is_some())
     }
 
-    #[instrument(skip_all, fields(%asset), err(level = Level::WARN))]
     async fn map_ibc_to_trace_prefixed_asset(
         &self,
         asset: &asset::IbcPrefixed,
@@ -86,7 +79,6 @@ impl<T: ?Sized + StateRead> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_native_asset(&mut self, asset: asset::TracePrefixed) -> Result<()> {
         let bytes = StoredValue::from(storage::TracePrefixedDenom::from(&asset))
             .serialize()
@@ -95,7 +87,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_ibc_asset(&mut self, asset: asset::TracePrefixed) -> Result<()> {
         let key = keys::asset(&asset);
         let bytes = StoredValue::from(storage::TracePrefixedDenom::from(&asset))

@@ -34,10 +34,6 @@ use cnidarium::{
     StateWrite,
 };
 use penumbra_ibc::IbcRelay;
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -636,7 +632,6 @@ impl CheckedAction {
     }
 }
 
-#[instrument(skip_all, fields(action = %action.name()), err(level = Level::DEBUG))]
 async fn pay_fee<'a, F, S>(
     action: &'a F,
     tx_signer: &[u8; ADDRESS_LENGTH],

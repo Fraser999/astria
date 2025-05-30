@@ -23,7 +23,6 @@ use tendermint::v0_38::abci::{
 };
 use tower::Service;
 use tower_abci::BoxError;
-use tracing::Instrument as _;
 
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot;
@@ -60,7 +59,6 @@ impl Service<SnapshotRequest> for Snapshot {
                 }
             })
         }
-        .instrument(span)
         .boxed()
     }
 }

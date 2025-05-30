@@ -29,6 +29,12 @@ use astria_eyre::{
     eyre,
     eyre::WrapErr as _,
 };
+use log::{
+    error,
+    info,
+    trace,
+    warn,
+};
 use tendermint::{
     abci::request::FinalizeBlock,
     Hash,
@@ -46,14 +52,6 @@ use tonic::{
     Request,
     Response,
     Status,
-};
-use tracing::{
-    error,
-    info,
-    info_span,
-    instrument,
-    trace,
-    warn,
 };
 
 use crate::app::event_bus::{
@@ -180,10 +178,10 @@ impl Runner {
                             trace!("stream task has been joined successfully");
                         },
                         Ok(Err(error)) => {
-                            warn!(%error, "stream task has been joined with an error");
+                            warn!("stream task has been joined with an error");
                         },
                         Err(error) => {
-                            warn!(%error, "stream task has panicked");
+                            warn!("stream task has panicked");
                         }
                     }
                 }
@@ -193,7 +191,6 @@ impl Runner {
         self.shutdown().await;
     }
 
-    #[instrument(skip_all)]
     async fn shutdown(&mut self) {
         match tokio::time::timeout(STREAM_TASKS_SHUTDOWN_DURATION, async {
             while let Some(joined_tasks) = self.stream_tasks.join_next().await {
@@ -202,10 +199,10 @@ impl Runner {
                         trace!("stream task has been joined successfully");
                     }
                     Ok(Err(error)) => {
-                        warn!(%error, "stream task has been joined with an error");
+                        warn!("stream task has been joined with an error");
                     }
                     Err(error) => {
-                        warn!(%error, "stream task has panicked");
+                        warn!("stream task has panicked");
                     }
                 }
             }
@@ -216,7 +213,7 @@ impl Runner {
                 info!("all stream tasks have been joined successfully");
             }
             Err(error) => {
-                error!(%error, "stream tasks failed to shut down in time");
+                error!("stream tasks failed to shut down in time");
                 self.stream_tasks.abort_all();
             }
         }
@@ -234,7 +231,6 @@ impl Facade {
         }
     }
 
-    #[instrument(skip_all)]
     async fn spawn_optimistic_block_stream(
         &self,
         get_optimistic_block_stream_request: GetOptimisticBlockStreamRequest,
@@ -268,7 +264,6 @@ impl Facade {
         ))
     }
 
-    #[instrument(skip_all)]
     async fn spawn_block_commitment_stream_request(
         &self,
     ) -> tonic::Result<Response<GrpcStream<GetBlockCommitmentStreamResponse>>> {
@@ -297,7 +292,6 @@ impl OptimisticBlockService for Facade {
     type GetBlockCommitmentStreamStream = GrpcStream<GetBlockCommitmentStreamResponse>;
     type GetOptimisticBlockStreamStream = GrpcStream<GetOptimisticBlockStreamResponse>;
 
-    #[instrument(skip_all)]
     async fn get_optimistic_block_stream(
         self: Arc<Self>,
         request: Request<GetOptimisticBlockStreamRequest>,
@@ -308,7 +302,6 @@ impl OptimisticBlockService for Facade {
             .await
     }
 
-    #[instrument(skip_all)]
     async fn get_block_commitment_stream(
         self: Arc<Self>,
         _request: Request<GetBlockCommitmentStreamRequest>,
@@ -327,37 +320,23 @@ async fn block_commitment_stream(
             loop {
                 match finalized_blocks_receiver.receive().await {
                     Ok(finalized_block) => {
-                        if let Err(error) =
-                            info_span!(BLOCK_COMMITMENT_STREAM_SPAN).in_scope(|| {
-                                let Hash::Sha256(block_hash) = finalized_block.hash else {
-                                    warn!("block hash is empty; this should not occur");
-                                    return Ok(());
-                                };
+                        let Hash::Sha256(block_hash) = finalized_block.hash else {
+                            warn!("block hash is empty; this should not occur");
+                            return Ok(());
+                        };
 
-                                let sequencer_block_commit = SequencerBlockCommit::new(
-                                    finalized_block.height.value(),
-                                    block::Hash::new(block_hash),
-                                );
+                        let sequencer_block_commit = SequencerBlockCommit::new(
+                            finalized_block.height.value(),
+                            block::Hash::new(block_hash),
+                        );
 
-                                let get_block_commitment_stream_response =
-                                    GetBlockCommitmentStreamResponse {
-                                        commitment: Some(sequencer_block_commit.to_raw()),
-                                    };
+                        let get_block_commitment_stream_response =
+                            GetBlockCommitmentStreamResponse {
+                                commitment: Some(sequencer_block_commit.to_raw()),
+                            };
 
-                                match tx
-                                    .try_send(Ok(get_block_commitment_stream_response))
-                                    .wrap_err("forwarding block commitment stream to client failed")
-                                {
-                                    Ok(()) => Ok(()),
-                                    Err(error) => {
-                                        error!(%error);
-                                        Err(error)
-                                    }
-                                }
-                            })
-                        {
-                            break Err(error);
-                        }
+                        tx.try_send(Ok(get_block_commitment_stream_response))
+                            .wrap_err("forwarding block commitment stream to client failed")?
                     }
                     Err(e) => {
                         break Err(e).wrap_err("failed receiving finalized block from event bus");
@@ -383,30 +362,16 @@ async fn optimistic_stream(
             loop {
                 match process_proposal_blocks.receive().await {
                     Ok(block) => {
-                        if let Err(e) = info_span!(OPTIMISTIC_STREAM_SPAN).in_scope(|| {
-                            let filtered_optimistic_block =
-                                block.to_filtered_block(vec![rollup_id]);
-                            let raw_filtered_optimistic_block =
-                                filtered_optimistic_block.into_raw();
+                        let filtered_optimistic_block = block.to_filtered_block(vec![rollup_id]);
+                        let raw_filtered_optimistic_block = filtered_optimistic_block.into_raw();
 
-                            let get_optimistic_block_stream_response =
-                                GetOptimisticBlockStreamResponse {
-                                    block: Some(raw_filtered_optimistic_block),
-                                };
+                        let get_optimistic_block_stream_response =
+                            GetOptimisticBlockStreamResponse {
+                                block: Some(raw_filtered_optimistic_block),
+                            };
 
-                            match tx
-                                .try_send(Ok(get_optimistic_block_stream_response))
-                                .wrap_err("forwarding optimistic block stream to client failed")
-                            {
-                                Ok(()) => Ok(()),
-                                Err(error) => {
-                                    error!(%error);
-                                    Err(error)
-                                }
-                            }
-                        }) {
-                            break Err(e);
-                        }
+                        tx.try_send(Ok(get_optimistic_block_stream_response))
+                            .wrap_err("forwarding optimistic block stream to client failed")?
                     }
                     Err(e) => {
                         break Err(e).wrap_err("failed receiving proposed block from event bus");

@@ -24,10 +24,6 @@ use penumbra_ibc::component::{
     ClientStatus,
     ConsensusStateWriteExt as _,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -45,7 +41,6 @@ pub(crate) struct CheckedRecoverIbcClient {
 }
 
 impl CheckedRecoverIbcClient {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: RecoverIbcClient,
         tx_signer: [u8; ADDRESS_LEN],
@@ -60,7 +55,6 @@ impl CheckedRecoverIbcClient {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         self.do_run_mutable_checks(state).await.map(|_| ())
     }
@@ -132,7 +126,6 @@ impl CheckedRecoverIbcClient {
         })
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         let ClientStates {
             mut client_state,

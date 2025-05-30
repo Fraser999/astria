@@ -44,10 +44,6 @@ use penumbra_ibc::component::packet::{
     Unchecked,
 };
 use penumbra_proto::core::component::ibc::v1::FungibleTokenPacketData;
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -76,7 +72,6 @@ pub(crate) struct CheckedIcs20Withdrawal {
 }
 
 impl CheckedIcs20Withdrawal {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: Ics20Withdrawal,
         tx_signer: [u8; ADDRESS_LEN],
@@ -142,7 +137,6 @@ impl CheckedIcs20Withdrawal {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         if let Some((bridge_address, rollup_withdrawal)) =
             &self.bridge_address_and_rollup_withdrawal
@@ -187,7 +181,6 @@ impl CheckedIcs20Withdrawal {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
         if let Some((_bridge_address, rollup_withdrawal)) =

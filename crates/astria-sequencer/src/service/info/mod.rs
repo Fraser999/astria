@@ -26,10 +26,6 @@ use tendermint::v0_38::abci::{
 use tokio::try_join;
 use tower::Service;
 use tower_abci::BoxError;
-use tracing::{
-    instrument,
-    Instrument as _,
-};
 
 use crate::storage::Storage;
 
@@ -85,7 +81,6 @@ impl Info {
         })
     }
 
-    #[instrument(skip_all)]
     async fn handle_info_request(self, request: InfoRequest) -> Result<InfoResponse, BoxError> {
         match request {
             InfoRequest::Info(_) => {
@@ -161,10 +156,7 @@ impl Service<InfoRequest> for Info {
     fn call(&mut self, req: InfoRequest) -> Self::Future {
         let span = req.create_span();
 
-        self.clone()
-            .handle_info_request(req)
-            .instrument(span)
-            .boxed()
+        self.clone().handle_info_request(req).boxed()
     }
 }
 

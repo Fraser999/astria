@@ -894,6 +894,7 @@ dependencies = [
  "cap",
  "cnidarium",
  "divan",
+ "env_logger",
  "futures",
  "hex",
  "humansize",
@@ -902,6 +903,7 @@ dependencies = [
  "indexmap 2.9.0",
  "insta",
  "itertools 0.12.1",
+ "log",
  "maplit",
  "matchit",
  "pbjson-types",
@@ -930,7 +932,6 @@ dependencies = [
  "tower-abci",
  "tower-actor",
  "tower-http",
- "tracing",
  "tryhard",
  "url",
 ]

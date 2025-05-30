@@ -68,6 +68,7 @@ use ibc_types::{
     },
     transfer::acknowledgement::TokenTransferAcknowledgement,
 };
+use log::warn;
 use penumbra_ibc::component::app_handler::{
     AppHandler,
     AppHandlerCheck,
@@ -75,10 +76,6 @@ use penumbra_ibc::component::app_handler::{
 };
 use penumbra_proto::penumbra::core::component::ibc::v1::FungibleTokenPacketData;
 use tokio::try_join;
-use tracing::{
-    instrument,
-    Level,
-};
 
 use crate::{
     accounts::StateWriteExt as _,
@@ -186,7 +183,6 @@ pub(crate) struct Ics20Transfer;
 
 #[async_trait::async_trait]
 impl AppHandlerCheck for Ics20Transfer {
-    #[instrument(skip_all)]
     async fn chan_open_init_check<S: StateRead>(
         _: S,
         msg: &MsgChannelOpenInit,
@@ -202,7 +198,6 @@ impl AppHandlerCheck for Ics20Transfer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn chan_open_try_check<S: StateRead>(
         _: S,
         msg: &MsgChannelOpenTry,
@@ -218,7 +213,6 @@ impl AppHandlerCheck for Ics20Transfer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn chan_open_ack_check<S: StateRead>(
         _: S,
         msg: &MsgChannelOpenAck,
@@ -230,7 +224,6 @@ impl AppHandlerCheck for Ics20Transfer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn chan_open_confirm_check<S: StateRead>(
         _: S,
         _: &MsgChannelOpenConfirm,
@@ -240,7 +233,6 @@ impl AppHandlerCheck for Ics20Transfer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn chan_close_init_check<S: StateRead>(
         _: S,
         _: &MsgChannelCloseInit,
@@ -248,7 +240,6 @@ impl AppHandlerCheck for Ics20Transfer {
         anyhow::bail!("ics20 always aborts on chan_close_init");
     }
 
-    #[instrument(skip_all)]
     async fn chan_close_confirm_check<S: StateRead>(
         _: S,
         _: &MsgChannelCloseConfirm,
@@ -257,7 +248,6 @@ impl AppHandlerCheck for Ics20Transfer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn recv_packet_check<S: StateRead>(_: S, msg: &MsgRecvPacket) -> anyhow::Result<()> {
         // most checks performed in `execute`
         // perform stateless checks here
@@ -272,7 +262,6 @@ impl AppHandlerCheck for Ics20Transfer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn timeout_packet_check<S: StateRead>(state: S, msg: &MsgTimeout) -> anyhow::Result<()> {
         refund_tokens_check(
             state,
@@ -284,7 +273,6 @@ impl AppHandlerCheck for Ics20Transfer {
         .map_err(eyre_to_anyhow)
     }
 
-    #[instrument(skip_all)]
     async fn acknowledge_packet_check<S: StateRead>(
         state: S,
         msg: &MsgAcknowledgement,
@@ -309,7 +297,6 @@ impl AppHandlerCheck for Ics20Transfer {
     }
 }
 
-#[instrument(skip_all, fields(%source_port, %source_channel), err(level = Level::DEBUG))]
 async fn refund_tokens_check<S: StateRead>(
     state: S,
     data: &[u8],
@@ -362,7 +349,6 @@ impl AppHandlerExecute for Ics20Transfer {
 
     async fn chan_close_init_execute<S: StateWrite>(_: S, _: &MsgChannelCloseInit) {}
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     async fn recv_packet_execute<S: StateWrite>(
         mut state: S,
         msg: &MsgRecvPacket,
@@ -378,10 +364,7 @@ impl AppHandlerExecute for Ics20Transfer {
         let ack = match receive_tokens(&mut state, &msg.packet).await {
             Ok(()) => TokenTransferAcknowledgement::success(),
             Err(e) => {
-                tracing::warn!(
-                    error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                    "failed to execute ics20 transfer"
-                );
+                warn!("failed to execute ics20 transfer");
                 let error_message = if use_new_error_format {
                     "ics20 transfer failed".to_string()
                 } else {
@@ -399,7 +382,6 @@ impl AppHandlerExecute for Ics20Transfer {
             .context("failed to write acknowledgement")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn timeout_packet_execute<S: StateWrite>(
         mut state: S,
         msg: &MsgTimeout,
@@ -409,7 +391,6 @@ impl AppHandlerExecute for Ics20Transfer {
         })
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn acknowledge_packet_execute<S: StateWrite>(
         mut state: S,
         msg: &MsgAcknowledgement,
@@ -430,18 +411,6 @@ impl AppHandlerExecute for Ics20Transfer {
 #[async_trait::async_trait]
 impl AppHandler for Ics20Transfer {}
 
-#[instrument(
-    skip_all,
-    fields(
-        %packet.port_on_a,
-        %packet.chan_on_a,
-        %packet.port_on_b,
-        %packet.chan_on_b,
-        %packet.timeout_height_on_b,
-        %packet.timeout_timestamp_on_b,
-    ),
-    err,
-)]
 async fn receive_tokens<S: StateWrite>(mut state: S, packet: &Packet) -> Result<()> {
     let packet_data: FungibleTokenPacketData = serde_json::from_slice(&packet.data)
         .wrap_err("failed to deserialize fungible token packet data")?;
@@ -530,18 +499,6 @@ async fn receive_tokens<S: StateWrite>(mut state: S, packet: &Packet) -> Result<
     Ok(())
 }
 
-#[instrument(
-    skip_all,
-    fields(
-        %packet.port_on_a,
-        %packet.chan_on_a,
-        %packet.port_on_b,
-        %packet.chan_on_b,
-        %packet.timeout_height_on_b,
-        %packet.timeout_timestamp_on_b,
-    ),
-    err,
-)]
 async fn refund_tokens<S: StateWrite>(mut state: S, packet: &Packet) -> Result<()> {
     let packet_data: FungibleTokenPacketData = serde_json::from_slice(&packet.data)
         .wrap_err("failed to deserialize fungible token packet data")?;
@@ -601,7 +558,6 @@ fn does_failed_transfer_come_from_rollup(
     serde_json::from_str::<Ics20WithdrawalFromRollup>(&packet_data.memo).ok()
 }
 
-#[instrument(skip_all, fields(%recipient, %asset, amount), err(level = Level::DEBUG))]
 async fn refund_tokens_to_sequencer_address<S: StateWrite>(
     mut state: S,
     recipient: &Address,
@@ -624,7 +580,6 @@ async fn refund_tokens_to_sequencer_address<S: StateWrite>(
     Ok(())
 }
 
-#[instrument(skip_all, fields(input), err(level = Level::DEBUG))]
 async fn parse_asset<S: StateRead>(state: S, input: &str) -> Result<denom::TracePrefixed> {
     let asset = match input
         .parse::<Denom>()
@@ -642,7 +597,6 @@ async fn parse_asset<S: StateRead>(state: S, input: &str) -> Result<denom::Trace
     Ok(asset)
 }
 
-#[instrument(skip_all, fields(input), err(level = Level::DEBUG))]
 async fn parse_address_on_sequencer<S: StateRead>(state: &S, input: &str) -> Result<Address> {
     use futures::TryFutureExt as _;
     let (base_prefix, compat_prefix) = match try_join!(
@@ -688,7 +642,6 @@ async fn parse_address_on_sequencer<S: StateRead>(state: &S, input: &str) -> Res
 
 /// Emits a deposit event signaling to the rollup that funds
 /// were added to `bridge_address`.
-#[instrument(skip_all, fields(%bridge_address, %asset, amount, memo), err(level = Level::DEBUG))]
 async fn emit_bridge_lock_deposit<S: StateWrite>(
     mut state: S,
     bridge_address: Address,
@@ -719,7 +672,6 @@ async fn emit_bridge_lock_deposit<S: StateWrite>(
     .await
 }
 
-#[instrument(skip_all, fields(%bridge_address, destination_chain_address, %asset, amount), err(level = Level::DEBUG))]
 async fn emit_deposit<S: StateWrite>(
     mut state: S,
     bridge_address: &Address,

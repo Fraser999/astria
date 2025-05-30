@@ -14,10 +14,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -36,7 +32,6 @@ pub(crate) struct CheckedTransfer {
 }
 
 impl CheckedTransfer {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: Transfer,
         tx_signer: [u8; ADDRESS_LEN],
@@ -57,7 +52,6 @@ impl CheckedTransfer {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         // Ensure the tx signer account is not a bridge account.
         ensure!(
@@ -71,7 +65,6 @@ impl CheckedTransfer {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
 

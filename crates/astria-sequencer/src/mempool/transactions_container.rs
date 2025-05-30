@@ -24,13 +24,10 @@ use astria_eyre::eyre::{
     Result,
     WrapErr as _,
 };
+use log::error;
 use tokio::time::{
     Duration,
     Instant,
-};
-use tracing::{
-    error,
-    instrument,
 };
 
 use super::RemovalReason;
@@ -514,11 +511,12 @@ pub(super) trait TransactionsForAccount: Default {
     /// Returns the IDs of the removed transactions.
     fn remove(&mut self, nonce: u32) -> Vec<TransactionId> {
         if !self.txs().contains_key(&nonce) {
-            error!(nonce, "transaction with given nonce not found");
+            error!("transaction with given nonce not found");
             return Vec::new();
         }
 
-        let tx_ids = self.txs_mut()
+        let tx_ids = self
+            .txs_mut()
             .split_off(&nonce)
             .values()
             .map(|ttx| *ttx.id())
@@ -618,7 +616,6 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
     /// Recosts transactions for an account.
     ///
     /// Logs an error if fails to recost a transaction.
-    #[instrument(skip_all, fields(address = %telemetry::display::base64(address_bytes)))]
     async fn recost_transactions<S: accounts::StateReadExt>(
         &mut self,
         address_bytes: &[u8; ADDRESS_LENGTH],
@@ -631,7 +628,6 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
         for ttx in account.txs_mut().values_mut() {
             if let Err(error) = ttx.recalculate_costs(state).await {
                 error!(
-                    address = %telemetry::display::base64(address_bytes),
                     "failed to calculate new transaction cost when cleaning accounts: {error:#}"
                 );
                 continue;
@@ -837,10 +833,7 @@ impl PendingTransactions {
         // Add all transactions to the queue.
         for (address_bytes, account_txs) in &self.txs {
             let Some(current_account_nonce) = account_txs.current_account_nonce() else {
-                error!(
-                    address = %telemetry::display::base64(address_bytes),
-                    "pending queue is empty during builder queue step"
-                );
+                error!("pending queue is empty during builder queue step");
                 continue;
             };
 
@@ -849,10 +842,7 @@ impl PendingTransactions {
                     Ok(priority) => priority,
                     Err(error) => {
                         // mempool could be off due to node connectivity issues
-                        error!(
-                            tx_id = %ttx.id(),
-                            "failed to add pending tx to builder queue: {error:#}"
-                        );
+                        error!("failed to add pending tx to builder queue: {error:#}");
                         continue;
                     }
                 };

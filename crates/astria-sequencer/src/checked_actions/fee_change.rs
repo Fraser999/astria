@@ -16,10 +16,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -37,7 +33,6 @@ pub(crate) struct CheckedFeeChange {
 }
 
 impl CheckedFeeChange {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: FeeChange,
         tx_signer: [u8; ADDRESS_LEN],
@@ -52,7 +47,6 @@ impl CheckedFeeChange {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         // Ensure the tx signer is the current sudo address.
         let sudo_address = state
@@ -66,7 +60,6 @@ impl CheckedFeeChange {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
 

@@ -9,10 +9,6 @@ use astria_core::{
 };
 use astria_eyre::eyre::Report;
 use cnidarium::StateRead;
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::CheckedActionFeeError;
 use crate::{
@@ -25,7 +21,6 @@ use crate::{
 };
 
 /// Returns the total of all fees associated with executing the given actions.
-#[instrument(skip_all, err(level = Level::DEBUG))]
 pub(crate) async fn total_fees<'a, I: Iterator<Item = ActionRef<'a>>, S: StateRead>(
     actions: I,
     state: &S,
@@ -64,7 +59,6 @@ pub(crate) async fn total_fees<'a, I: Iterator<Item = ActionRef<'a>>, S: StateRe
     Ok(fees_by_asset)
 }
 
-#[instrument(skip_all, err(level = Level::DEBUG))]
 pub(super) async fn fee<'a, F, S>(
     action: &'a F,
     state: &S,

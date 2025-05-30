@@ -24,10 +24,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::storage::{
     self,
@@ -37,7 +33,6 @@ use crate::storage::StoredValue;
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all, fields(%height), err(level = Level::WARN))]
     async fn get_block_hash_by_height(&self, height: u64) -> Result<block::Hash> {
         let Some(bytes) = self
             .nonverifiable_get_raw(keys::block_hash_by_height(height).as_bytes())
@@ -52,7 +47,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid block hash bytes")
     }
 
-    #[instrument(skip_all, fields(%hash), err(level = Level::WARN))]
     async fn get_sequencer_block_header_by_hash(
         &self,
         hash: &block::Hash,
@@ -72,7 +66,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid sequencer block header bytes")
     }
 
-    #[instrument(skip_all, fields(%hash), err(level = Level::WARN))]
     async fn get_rollup_ids_by_block_hash(&self, hash: &block::Hash) -> Result<Vec<RollupId>> {
         let Some(bytes) = self
             .nonverifiable_get_raw(keys::rollup_ids_by_hash(hash.as_bytes()).as_bytes())
@@ -87,7 +80,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid rollup ids bytes")
     }
 
-    #[instrument(skip_all, fields(%height), err(level = Level::DEBUG))]
     async fn get_sequencer_block_by_height(&self, height: u64) -> Result<SequencerBlock> {
         let hash = self
             .get_block_hash_by_height(height)
@@ -98,7 +90,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("failed to get sequencer block by hash")
     }
 
-    #[instrument(skip_all, fields(%hash, %rollup_id), err(level = Level::WARN))]
     async fn get_rollup_data(
         &self,
         hash: &block::Hash,
@@ -123,7 +114,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid rollup transactions bytes")
     }
 
-    #[instrument(skip_all, fields(%hash), err(level = Level::WARN))]
     async fn get_rollup_transactions_proof_by_block_hash(
         &self,
         hash: &block::Hash,
@@ -143,7 +133,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid rollup transactions proof bytes")
     }
 
-    #[instrument(skip_all, fields(%hash), err(level = Level::WARN))]
     async fn get_rollup_ids_proof_by_block_hash(
         &self,
         hash: &block::Hash,
@@ -161,7 +150,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid rollup IDs proof bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_upgrade_change_hashes(&self, block_hash: &block::Hash) -> Result<Vec<ChangeHash>> {
         let Some(bytes) = self
             .nonverifiable_get_raw(
@@ -180,7 +168,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid upgrade change hashes bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_extended_commit_info_with_proof(
         &self,
         block_hash: &block::Hash,
@@ -205,7 +192,6 @@ pub(crate) trait StateReadExt: StateRead {
 impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_sequencer_block(&mut self, block: SequencerBlock) -> Result<()> {
         // write the sequencer block to state in the following order:
         // 1. height to block hash
@@ -252,7 +238,6 @@ pub(crate) trait StateWriteExt: StateWrite {
     }
 }
 
-#[instrument(skip_all, fields(%hash), err(level = Level::DEBUG))]
 async fn get_sequencer_block_by_hash<S: StateRead + ?Sized>(
     state: &S,
     hash: &block::Hash,
@@ -307,7 +292,6 @@ async fn get_sequencer_block_by_hash<S: StateRead + ?Sized>(
     Ok(SequencerBlock::unchecked_from_parts(parts))
 }
 
-#[instrument(skip_all)]
 async fn get_extended_commit_info<S: StateRead + ?Sized>(
     state: &S,
     block_hash: &block::Hash,
@@ -327,7 +311,6 @@ async fn get_extended_commit_info<S: StateRead + ?Sized>(
         .wrap_err("invalid extended commit info bytes")
 }
 
-#[instrument(skip_all)]
 async fn get_extended_commit_info_proof<S: StateRead + ?Sized>(
     state: &S,
     block_hash: &block::Hash,

@@ -17,6 +17,10 @@ use astria_core::{
     upgrades::v1::Upgrades,
 };
 use astria_eyre::eyre;
+use log::{
+    error,
+    info,
+};
 pub(crate) use state_ext::{
     StateReadExt,
     StateWriteExt,
@@ -28,13 +32,6 @@ use tokio::{
 use tokio_util::{
     sync::CancellationToken,
     task::JoinMap,
-};
-use tracing::{
-    error,
-    error_span,
-    info,
-    info_span,
-    Instrument as _,
 };
 
 use crate::{
@@ -118,7 +115,6 @@ pub(crate) async fn serve(args: SequencerServerArgs) -> eyre::Result<(), tonic::
         client::v1::query_server::QueryServer as ClientQueryServer,
         connection::v1::query_server::QueryServer as ConnectionQueryServer,
     };
-    use penumbra_tower_trace::remote_addr;
     use tower_http::cors::CorsLayer;
 
     let SequencerServerArgs {
@@ -153,14 +149,6 @@ pub(crate) async fn serve(args: SequencerServerArgs) -> eyre::Result<(), tonic::
 
     // TODO: setup HTTPS?
     let grpc_server = tonic::transport::Server::builder()
-        .trace_fn(|req| {
-            if let Some(remote_addr) = remote_addr(req) {
-                let addr = remote_addr.to_string();
-                tracing::error_span!("grpc", addr)
-            } else {
-                tracing::error_span!("grpc")
-            }
-        })
         // (from Penumbra) Allow HTTP/1, which will be used by grpc-web connections.
         // This is particularly important when running locally, as gRPC
         // typically uses HTTP/2, which requires HTTPS. Accepting HTTP/2
@@ -178,7 +166,7 @@ pub(crate) async fn serve(args: SequencerServerArgs) -> eyre::Result<(), tonic::
         .add_service(OracleQueryServer::new(oracle_api))
         .add_service(TransactionServiceServer::new(mempool_api));
 
-    info!(grpc_addr = grpc_addr.to_string(), "starting grpc server");
+    info!("starting grpc server");
 
     grpc_server
         .serve_with_shutdown(grpc_addr, trigger_shutdown(background_tasks, shutdown_rx))
@@ -189,35 +177,24 @@ async fn trigger_shutdown(
     mut background_tasks: BackgroundTasks,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
-    let shutdown_span;
     loop {
         tokio::select! {
             biased;
             _ = &mut shutdown_rx => {
-                shutdown_span = info_span!(SHUTDOWN_SPAN);
-                shutdown_span.in_scope(|| {
                     info!("grpc server received shutdown signal and will shutdown all of its background tasks");
-                });
                 break;
             }
 
             Some((task, res)) = background_tasks.join_next() => {
-                let panic_msg = res.err().map(eyre::Report::new).map(tracing::field::display);
-                error_span!("grpc_background_task_failed").in_scope(|| {
                     error!(
-                        panic_msg,
-                        task,
                         "background task supporting a grpc service ended unexpectedly; Sequencer will \
                         keep responding to gRPC requests, but there is currently no way to recover \
                         functionality of this service until Sequencer is restarted"
                     );
-                });
             }
         }
     }
-    perform_shutdown(background_tasks)
-        .instrument(shutdown_span)
-        .await;
+    perform_shutdown(background_tasks).await;
 }
 
 async fn perform_shutdown(mut background_tasks: BackgroundTasks) {
@@ -225,24 +202,14 @@ async fn perform_shutdown(mut background_tasks: BackgroundTasks) {
 
     if let Ok(()) = tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
         while let Some((task, res)) = background_tasks.join_next().await {
-            let error = res
-                .err()
-                .map(eyre::Report::new)
-                .map(tracing::field::display);
-            info!(
-                error,
-                task, "background task exited while awaiting shutdown"
-            );
+            info!("background task exited while awaiting shutdown");
         }
     })
     .await
     {
         info!("all background tasks exited during shutdown window");
     } else {
-        error!(
-            tasks = background_tasks.display_running_tasks(),
-            "background tasks did not finish during shutdown window and will be aborted",
-        );
+        error!("background tasks did not finish during shutdown window and will be aborted",);
         background_tasks.abort_all();
     };
 

@@ -45,6 +45,7 @@ use futures::{
     FutureExt as _,
     StreamExt as _,
 };
+use log::warn;
 use penumbra_ibc::IbcRelay;
 use prost::{
     Message as _,
@@ -59,10 +60,6 @@ use tokio::{
     join,
     try_join,
 };
-use tracing::{
-    instrument,
-    warn,
-};
 
 use crate::{
     app::StateReadExt as _,
@@ -75,7 +72,6 @@ use crate::{
     storage::Storage,
 };
 
-#[instrument(skip_all, fields(%asset))]
 async fn find_trace_prefixed_or_return_ibc<S: StateRead>(
     state: S,
     asset: asset::IbcPrefixed,
@@ -90,14 +86,13 @@ async fn find_trace_prefixed_or_return_ibc<S: StateRead>(
         .map_or_else(|_| asset.into(), Into::into)
 }
 
-#[instrument(skip_all)]
 async fn get_allowed_fee_assets<S: StateRead>(state: &S) -> Vec<Denom> {
     let stream = state
         .allowed_fee_assets()
         .filter_map(|asset| {
             ready(
                 asset
-                    .inspect_err(|error| warn!(%error, "encountered issue reading allowed assets"))
+                    .inspect_err(|error| warn!("encountered issue reading allowed assets"))
                     .ok(),
             )
         })
@@ -106,7 +101,6 @@ async fn get_allowed_fee_assets<S: StateRead>(state: &S) -> Vec<Denom> {
     stream.collect::<Vec<_>>().await
 }
 
-#[instrument(skip_all)]
 pub(crate) async fn allowed_fee_assets_request(
     storage: Storage,
     request: request::Query,

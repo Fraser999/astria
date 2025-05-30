@@ -1,18 +1,30 @@
 use std::num::NonZeroU32;
 
+use astria_core::{
+    crypto::ADDRESS_LENGTH,
+    protocol::transaction::v1::action::Transfer,
+};
 use tendermint::{
     abci::{
         request::CheckTxKind,
         Code,
+        MempoolRequest,
+        MempoolResponse,
     },
     v0_38::abci::request::CheckTx,
 };
-use tendermint::abci::{MempoolRequest, MempoolResponse};
-use astria_core::crypto::ADDRESS_LENGTH;
-use astria_core::protocol::transaction::v1::action::Transfer;
-use crate::{mempool::RemovalReason, test_utils::Fixture, Metrics};
-use crate::test_utils::{astria_address, nria, ALICE};
 use tower::Service;
+
+use crate::{
+    mempool::RemovalReason,
+    test_utils::{
+        astria_address,
+        nria,
+        Fixture,
+        ALICE,
+    },
+    Metrics,
+};
 
 #[tokio::test]
 async fn stress() {
@@ -57,7 +69,8 @@ async fn stress() {
     let mut service = super::Mempool::new(storage, mempool, metrics);
     for req in check_txs {
         // let rsp =
-        //     super::handle_check_tx_request(req, storage.latest_snapshot(), mempool.clone(), metrics).await;
+        //     super::handle_check_tx_request(req, storage.latest_snapshot(), mempool.clone(),
+        // metrics).await;
         let MempoolResponse::CheckTx(rsp) =
             service.call(MempoolRequest::CheckTx(req)).await.unwrap();
         assert_eq!(rsp.code, Code::Ok, "{rsp:#?}");

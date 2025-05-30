@@ -21,16 +21,14 @@ use astria_core::{
     },
 };
 use astria_eyre::eyre::Result;
+use log::{
+    error,
+    warn,
+};
 pub(crate) use mempool_state::get_account_balances;
 use tokio::{
     sync::RwLock,
     time::Duration,
-};
-use tracing::{
-    error,
-    instrument,
-    warn,
-    Level,
 };
 pub(crate) use transactions_container::InsertionError;
 use transactions_container::{
@@ -128,10 +126,8 @@ impl RemovalCache {
                 .pop_front()
                 .expect("cache should contain elements");
             warn!(
-                %removed_tx_id,
-                removal_cache_size = REMOVAL_CACHE_SIZE,
                 "popped transaction from appside mempool removal cache, CometBFT will not remove \
-                this transaction from its mempool - removal cache size possibly too low"
+                 this transaction from its mempool - removal cache size possibly too low"
             );
             // Remove transaction from cache if it is present.
             self.cache.remove(&removed_tx_id);
@@ -181,18 +177,12 @@ impl Mempool {
 
     /// Returns the number of transactions in the mempool.
     #[must_use]
-    #[instrument(skip_all)]
     pub(crate) async fn len(&self) -> usize {
         self.inner.read().await.len()
     }
 
     /// Inserts a transaction into the mempool and does not allow for transaction replacement.
     /// Will return the reason for insertion failure if failure occurs.
-    #[instrument(
-        skip_all,
-        fields(tx_id = %checked_tx.id(), current_account_nonce),
-        err(level = Level::DEBUG)
-    )]
     pub(crate) async fn insert(
         &self,
         checked_tx: Arc<CheckedTransaction>,
@@ -211,7 +201,6 @@ impl Mempool {
     /// Returns a copy of all transactions ready for execution, sorted first by the difference
     /// between a transaction and the account's current nonce and then by the time that the
     /// transaction was first seen by the appside mempool.
-    #[instrument(skip_all)]
     pub(crate) async fn builder_queue(&self) -> Vec<Arc<CheckedTransaction>> {
         self.inner.read().await.builder_queue()
     }
@@ -221,7 +210,6 @@ impl Mempool {
     ///
     /// This function should only be used to remove invalid/failing transactions and not executed
     /// transactions. Executed transactions will be removed in the `run_maintenance()` function.
-    #[instrument(skip_all, fields(tx_id = %checked_tx.id()))]
     pub(crate) async fn remove_tx_invalid(
         &self,
         checked_tx: Arc<CheckedTransaction>,
@@ -234,7 +222,6 @@ impl Mempool {
     }
 
     /// Removes the transaction from the CometBFT removal cache if it is present.
-    #[instrument(skip_all, fields(tx_id))]
     pub(crate) async fn remove_from_removal_cache(&self, tx_id: &TransactionId) {
         self.inner.write().await.remove_from_removal_cache(tx_id);
     }
@@ -245,7 +232,6 @@ impl Mempool {
     ///
     /// All removed transactions are added to the CometBFT removal cache to aid with CometBFT
     /// mempool maintenance.
-    #[instrument(skip_all)]
     pub(crate) async fn run_maintenance<S: accounts::StateReadExt>(
         &self,
         state: &S,
@@ -264,12 +250,10 @@ impl Mempool {
     /// does not take into account gapped nonces in the parked queue. For example, if the
     /// pending queue for an account has nonces [0,1] and the parked queue has [3], [1] will be
     /// returned.
-    #[instrument(skip_all, fields(address = %telemetry::display::base64(address_bytes)))]
     pub(crate) async fn pending_nonce(&self, address_bytes: &[u8; ADDRESS_LENGTH]) -> Option<u32> {
         self.inner.read().await.pending_nonce(address_bytes)
     }
 
-    #[instrument(skip_all)]
     pub(crate) async fn transaction_status(
         &self,
         tx_id: &TransactionId,
@@ -391,12 +375,7 @@ impl MempoolInner {
                         self.contained_txs.remove(&tx_id_to_promote);
                         self.comet_bft_removal_cache
                             .add(tx_id_to_promote, RemovalReason::InternalError);
-                        error!(
-                            current_account_nonce,
-                            %tx_id_to_promote,
-                            %error,
-                            "failed to promote transaction during insertion"
-                        );
+                        error!("failed to promote transaction during insertion");
                     }
                 }
 
@@ -476,20 +455,14 @@ impl MempoolInner {
             let current_nonce = match state.get_account_nonce(address_bytes).await {
                 Ok(res) => res,
                 Err(error) => {
-                    error!(
-                        address = %telemetry::display::base64(&address_bytes),
-                        "failed to fetch account nonce when cleaning accounts: {error:#}"
-                    );
+                    error!("failed to fetch account nonce when cleaning accounts: {error:#}");
                     continue;
                 }
             };
             let current_balances = match get_account_balances(state, address_bytes).await {
                 Ok(res) => res,
                 Err(error) => {
-                    error!(
-                        address = %telemetry::display::base64(address_bytes),
-                        "failed to fetch account balances when cleaning accounts: {error:#}"
-                    );
+                    error!("failed to fetch account balances when cleaning accounts: {error:#}");
                     continue;
                 }
             };
@@ -542,11 +515,7 @@ impl MempoolInner {
                     {
                         self.contained_txs.remove(&tx_id);
                         self.metrics.increment_internal_logic_error();
-                        error!(
-                            address = %telemetry::display::base64(&address_bytes),
-                            current_nonce, %tx_id, %error,
-                            "failed to promote transaction during maintenance"
-                        );
+                        error!("failed to promote transaction during maintenance");
                     }
                 }
             } else {
@@ -559,11 +528,7 @@ impl MempoolInner {
                     {
                         self.contained_txs.remove(&tx_id);
                         self.metrics.increment_internal_logic_error();
-                        error!(
-                            address = %telemetry::display::base64(&address_bytes),
-                            current_nonce, %tx_id, %error,
-                            "failed to demote transaction during maintenance"
-                        );
+                        error!("failed to demote transaction during maintenance");
                     }
                 }
             }
@@ -1430,82 +1395,82 @@ mod tests {
         );
     }
     /*
-        #[tokio::test]
-        async fn insert_promoted_tx_removed_if_its_insertion_fails() {
-            let fixture = Fixture::default_initialized().await;
-            let mempool = fixture.mempool();
+       #[tokio::test]
+       async fn insert_promoted_tx_removed_if_its_insertion_fails() {
+           let fixture = Fixture::default_initialized().await;
+           let mempool = fixture.mempool();
 
-            let account_balances = dummy_balances(100, 100);
-            let tx_costs = dummy_tx_costs(10, 10, 0);
+           let account_balances = dummy_balances(100, 100);
+           let tx_costs = dummy_tx_costs(10, 10, 0);
 
-            let pending_tx_1 =
-                TimemarkedTransaction::new(new_alice_tx(&fixture, 1).await, tx_costs.clone());
-            let pending_tx_2 = new_alice_tx(&fixture, 2).await;
-            // different rollup data so that this transaction's hash is different than the failing tx
-            let pending_tx_3 = TimemarkedTransaction::new(
-                fixture
-                    .checked_tx_builder()
-                    .with_nonce(3)
-                    .with_rollup_data_submission(vec![2, 3, 4])
-                    .with_signer(ALICE.clone())
-                    .build()
-                    .await,
-                tx_costs.clone(),
-            );
-            let failure_tx =
-                TimemarkedTransaction::new(new_alice_tx(&fixture, 3).await, tx_costs.clone());
+           let pending_tx_1 =
+               TimemarkedTransaction::new(new_alice_tx(&fixture, 1).await, tx_costs.clone());
+           let pending_tx_2 = new_alice_tx(&fixture, 2).await;
+           // different rollup data so that this transaction's hash is different than the failing tx
+           let pending_tx_3 = TimemarkedTransaction::new(
+               fixture
+                   .checked_tx_builder()
+                   .with_nonce(3)
+                   .with_rollup_data_submission(vec![2, 3, 4])
+                   .with_signer(ALICE.clone())
+                   .build()
+                   .await,
+               tx_costs.clone(),
+           );
+           let failure_tx =
+               TimemarkedTransaction::new(new_alice_tx(&fixture, 3).await, tx_costs.clone());
 
-            let mut inner = mempool.inner.write().await;
+           let mut inner = mempool.inner.write().await;
 
-            // Add tx nonce 1 into pending
-            inner
-                .pending
-                .add(pending_tx_1.clone(), 1, &account_balances)
-                .unwrap();
+           // Add tx nonce 1 into pending
+           inner
+               .pending
+               .add(pending_tx_1.clone(), 1, &account_balances)
+               .unwrap();
 
-            // Force transactions with nonce 3 into both pending and parked, such that the parked one
-            // will fail on promotion
-            inner
-                .parked
-                .add(failure_tx.clone(), 1, &account_balances)
-                .unwrap();
-            inner
-                .pending
-                .add(pending_tx_3.clone(), 3, &account_balances)
-                .unwrap();
+           // Force transactions with nonce 3 into both pending and parked, such that the parked one
+           // will fail on promotion
+           inner
+               .parked
+               .add(failure_tx.clone(), 1, &account_balances)
+               .unwrap();
+           inner
+               .pending
+               .add(pending_tx_3.clone(), 3, &account_balances)
+               .unwrap();
 
-            inner.contained_txs.insert(*pending_tx_1.id());
-            inner.contained_txs.insert(*failure_tx.id());
-            inner.contained_txs.insert(*pending_tx_3.id());
+           inner.contained_txs.insert(*pending_tx_1.id());
+           inner.contained_txs.insert(*failure_tx.id());
+           inner.contained_txs.insert(*pending_tx_3.id());
 
-            assert_eq!(inner.comet_bft_removal_cache.cache.len(), 0);
-            assert_eq!(inner.contained_txs.len(), 3);
+           assert_eq!(inner.comet_bft_removal_cache.cache.len(), 0);
+           assert_eq!(inner.contained_txs.len(), 3);
 
-            drop(inner);
+           drop(inner);
 
-            // Insert tx nonce 2 to mempool, prompting promotion of tx nonce 3 from parked to pending,
-            // which should fail
-            mempool
-                .insert(pending_tx_2, 2, &account_balances, tx_costs)
-                .await
-                .unwrap();
+           // Insert tx nonce 2 to mempool, prompting promotion of tx nonce 3 from parked to pending,
+           // which should fail
+           mempool
+               .insert(pending_tx_2, 2, &account_balances, tx_costs)
+               .await
+               .unwrap();
 
-            let inner = mempool.inner.read().await;
+           let inner = mempool.inner.read().await;
 
-            assert_eq!(inner.comet_bft_removal_cache.cache.len(), 1);
-            assert!(
-                inner
-                    .comet_bft_removal_cache
-                    .cache
-                    .contains_key(failure_tx.id()),
-                "CometBFT removal cache should contain the failed tx"
-            );
-            assert_eq!(inner.contained_txs.len(), 3);
-            assert!(
-                !inner.contained_txs.contains(failure_tx.id()),
-                "contained txs should not contain the failed tx id"
-            );
-        }
+           assert_eq!(inner.comet_bft_removal_cache.cache.len(), 1);
+           assert!(
+               inner
+                   .comet_bft_removal_cache
+                   .cache
+                   .contains_key(failure_tx.id()),
+               "CometBFT removal cache should contain the failed tx"
+           );
+           assert_eq!(inner.contained_txs.len(), 3);
+           assert!(
+               !inner.contained_txs.contains(failure_tx.id()),
+               "contained txs should not contain the failed tx id"
+           );
+       }
 
-     */
+    */
 }

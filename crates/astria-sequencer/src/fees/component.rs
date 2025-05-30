@@ -12,7 +12,6 @@ use tendermint::abci::request::{
     BeginBlock,
     EndBlock,
 };
-use tracing::instrument;
 
 use crate::{
     component::Component,
@@ -26,7 +25,6 @@ pub(crate) struct FeesComponent;
 impl Component for FeesComponent {
     type AppState = GenesisAppState;
 
-    #[instrument(name = "FeesComponent::init_chain", skip_all, err)]
     async fn init_chain<S>(mut state: S, app_state: &Self::AppState) -> Result<()>
     where
         S: fees::StateWriteExt + fees::StateReadExt,
@@ -167,7 +165,6 @@ impl Component for FeesComponent {
         Ok(())
     }
 
-    #[instrument(name = "FeesComponent::begin_block", skip_all)]
     async fn begin_block<S: fees::StateWriteExt + 'static>(
         _state: &mut Arc<S>,
         _begin_block: &BeginBlock,
@@ -175,7 +172,6 @@ impl Component for FeesComponent {
         Ok(())
     }
 
-    #[instrument(name = "FeesComponent::end_block", skip_all)]
     async fn end_block<S: fees::StateWriteExt + 'static>(
         _state: &mut Arc<S>,
         _end_block: &EndBlock,

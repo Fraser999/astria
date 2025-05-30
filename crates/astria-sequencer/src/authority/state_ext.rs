@@ -27,10 +27,6 @@ use cnidarium::{
 };
 use futures::Stream;
 use pin_project_lite::pin_project;
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     storage::{
@@ -78,7 +74,6 @@ where
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_sudo_address(&self) -> Result<[u8; ADDRESS_LEN]> {
         let Some(bytes) = self
             .get_raw(keys::SUDO)
@@ -94,7 +89,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid sudo key bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_block_validator_updates(&self) -> Result<ValidatorSet> {
         let Some(bytes) = self
             .nonverifiable_get_raw(keys::VALIDATOR_UPDATES.as_bytes())
@@ -110,7 +104,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid validator update bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_validator<TAddress: AddressBytes>(
         &self,
         validator: &TAddress,
@@ -133,7 +126,6 @@ pub(crate) trait StateReadExt: StateRead {
         .transpose()
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_validator_count(&self) -> Result<u64> {
         let Some(bytes) = self
             .nonverifiable_get_raw(keys::VALIDATOR_COUNT.as_bytes())
@@ -148,7 +140,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid validator count bytes")
     }
 
-    #[instrument(skip_all)]
     fn get_validators(&self) -> ValidatorStream<Self::PrefixRawStream> {
         ValidatorStream {
             underlying: self.prefix_raw(keys::VALIDATOR_PREFIX),
@@ -156,7 +147,6 @@ pub(crate) trait StateReadExt: StateRead {
     }
 
     /// Deprecated as of Aspen upgrade
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn pre_aspen_get_validator_set(&self) -> Result<ValidatorSet> {
         let Some(bytes) = self
             .get_raw(keys::PRE_ASPEN_VALIDATOR_SET)
@@ -177,7 +167,6 @@ impl<T: StateRead> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_sudo_address<T: AddressBytes>(&mut self, address: T) -> Result<()> {
         let bytes = StoredValue::from(storage::AddressBytes::from(&address))
             .serialize()
@@ -186,7 +175,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_block_validator_updates(&mut self, validator_updates: ValidatorSet) -> Result<()> {
         let bytes = StoredValue::from(storage::ValidatorSet::from(&validator_updates))
             .serialize()
@@ -195,17 +183,14 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn clear_block_validator_updates(&mut self) {
         self.nonverifiable_delete(keys::VALIDATOR_UPDATES.into());
     }
 
-    #[instrument(skip_all)]
     async fn remove_validator<TAddress: AddressBytes>(&mut self, validator_address: &TAddress) {
         self.delete(keys::validator(validator_address));
     }
 
-    #[instrument(skip_all)]
     fn put_validator(&mut self, validator: &ValidatorUpdate) -> Result<()> {
         let bytes = StoredValue::from(storage::ValidatorInfoV1::from(validator))
             .serialize()
@@ -214,7 +199,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_validator_count(&mut self, count: u64) -> Result<()> {
         let bytes = StoredValue::from(storage::ValidatorCount::from(count))
             .serialize()
@@ -224,7 +208,6 @@ pub(crate) trait StateWriteExt: StateWrite {
     }
 
     /// Deprecated as of Aspen upgrade
-    #[instrument(skip_all)]
     fn pre_aspen_put_validator_set(&mut self, validator_set: ValidatorSet) -> Result<()> {
         let bytes = StoredValue::from(storage::ValidatorSet::from(&validator_set))
             .serialize()
@@ -234,7 +217,6 @@ pub(crate) trait StateWriteExt: StateWrite {
     }
 
     /// Should only be called ONCE, at Aspen upgrade
-    #[instrument(skip_all)]
     fn aspen_upgrade_remove_validator_set(&mut self) -> Result<()> {
         self.delete(keys::PRE_ASPEN_VALIDATOR_SET.to_string());
         Ok(())

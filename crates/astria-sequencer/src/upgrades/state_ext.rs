@@ -16,7 +16,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::instrument;
 
 use super::storage::{
     self,
@@ -26,7 +25,6 @@ use crate::storage::StoredValue;
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all)]
     async fn get_upgrade_change_info(
         &self,
         upgrade_name: &UpgradeName,
@@ -52,7 +50,6 @@ impl<T: StateRead> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_upgrade_change_info(
         &mut self,
         upgrade_name: &UpgradeName,

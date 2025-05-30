@@ -6,10 +6,6 @@ use astria_eyre::eyre::{
     ensure,
     Result,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::AssetTransfer;
 
@@ -19,7 +15,6 @@ pub(crate) struct CheckedRollupDataSubmission {
 }
 
 impl CheckedRollupDataSubmission {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) fn new(action: RollupDataSubmission) -> Result<Self> {
         ensure!(
             !action.data.is_empty(),

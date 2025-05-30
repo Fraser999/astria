@@ -7,7 +7,11 @@ use std::{
     },
     time::Instant,
 };
-use astria_core::{primitive::v1::TransactionId, protocol::abci::AbciErrorCode};
+
+use astria_core::{
+    primitive::v1::TransactionId,
+    protocol::abci::AbciErrorCode,
+};
 use astria_eyre::eyre::Report;
 use base64::{
     prelude::BASE64_STANDARD,
@@ -18,6 +22,10 @@ use cnidarium::StateRead;
 use futures::{
     Future,
     FutureExt,
+};
+use log::{
+    info,
+    warn,
 };
 use sha2::Digest as _;
 use tendermint::{
@@ -34,12 +42,9 @@ use tendermint::{
 };
 use tower::Service;
 use tower_abci::BoxError;
-use tracing::{
-    instrument,
-    Instrument as _,
-};
 
 use crate::{
+    storage::Storage,
     accounts::{
         AddressBytes as _,
         StateReadExt as _,
@@ -57,8 +62,7 @@ use crate::{
         TransactionStatus,
     },
     metrics::Metrics,
-    storage::Storage,
-    ALLOCATOR
+    ALLOCATOR,
 };
 
 #[cfg(test)]
@@ -95,25 +99,31 @@ impl Service<MempoolRequest> for Mempool {
     }
 
     fn call(&mut self, req: MempoolRequest) -> Self::Future {
-        use penumbra_tower_trace::v038::RequestExt as _;
+        warn!(
+            "Currently allocated: {}",
+            humansize::format_size(ALLOCATOR.allocated(), humansize::DECIMAL)
+        );
 
-        tracing::warn!("Currently allocated: {}", humansize::format_size(ALLOCATOR.allocated(), humansize::DECIMAL));
-
-        let span = req.create_span();
+        // let span = req.create_span();
         let storage = self.storage.clone();
         let mempool = self.inner.clone();
         let metrics = self.metrics;
         async move {
             let rsp = match req {
                 MempoolRequest::CheckTx(req) => MempoolResponse::CheckTx(
-                    tokio::spawn(
-                        handle_check_tx_request(req, storage.latest_snapshot(), mempool, metrics)
-                    ).await.unwrap(),
+                    tokio::spawn(handle_check_tx_request(
+                        req,
+                        storage.latest_snapshot(),
+                        mempool,
+                        metrics,
+                    ))
+                        .await
+                        .unwrap(),
                 ),
             };
             Ok(rsp)
         }
-        .instrument(span)
+            // .instrument(span)
         .boxed()
     }
 }
@@ -128,7 +138,6 @@ impl Service<MempoolRequest> for Mempool {
 /// The function will return a [`response::CheckTx`] with a status code of 0 if the transaction:
 /// - is already in the appside mempool, or
 /// - passes checks and insertion into the mempool is successful
-#[instrument(skip_all)]
 async fn handle_check_tx_request<S: StateRead>(
     req: request::CheckTx,
     state: S,
@@ -142,7 +151,14 @@ async fn handle_check_tx_request<S: StateRead>(
 
     let start = Instant::now();
 
-    let outcome = check_tx(tx_bytes, state, mempool.clone(), metrics, check_tx_kind == CheckTxKind::Recheck).await;
+    let outcome = check_tx(
+        tx_bytes,
+        state,
+        mempool.clone(),
+        metrics,
+        check_tx_kind == CheckTxKind::Recheck,
+    )
+        .await;
     let response = if let CheckTxOutcome::RemovedFromMempool {
         tx_id,
         reason,
@@ -181,11 +197,11 @@ pub(crate) async fn check_tx<S: StateRead>(
     state: S,
     mempool: AppMempool,
     metrics: &'static Metrics,
-    is_recheck: bool
+    is_recheck: bool,
 ) -> CheckTxOutcome {
     let tx_status_start = Instant::now();
     let tx_id = TransactionId::new(sha2::Sha256::digest(&tx_bytes).into());
-    tracing::info!(%tx_id, is_recheck, "got check tx");
+    info!("got check tx");
     // tokio::time::sleep(std::time::Duration::from_micros(1500)).await;
     // if is_recheck {
     //     return CheckTxOutcome::RemovedFromMempool {
@@ -207,10 +223,22 @@ pub(crate) async fn check_tx<S: StateRead>(
         tx_status_end.saturating_duration_since(tx_status_start),
     );
     if let Some(outcome) = outcome {
-        tracing::info!("took {}ms to recheck status of {tx_id}", tx_status_end.saturating_duration_since(tx_status_start).as_secs_f32() * 1000.0);
+        info!(
+            "took {}ms to recheck status of {tx_id}",
+            tx_status_end
+                .saturating_duration_since(tx_status_start)
+                .as_secs_f32()
+                * 1000.0
+        );
         return outcome;
     } else {
-        tracing::info!("took {}ms to check status of new {tx_id} - not in mempool", tx_status_end.saturating_duration_since(tx_status_start).as_secs_f32() * 1000.0);
+        info!(
+            "took {}ms to check status of new {tx_id} - not in mempool",
+            tx_status_end
+                .saturating_duration_since(tx_status_start)
+                .as_secs_f32()
+                * 1000.0
+        );
     }
 
     let checked_tx = match CheckedTransaction::new(tx_bytes, &state).await {
@@ -242,7 +270,10 @@ pub(crate) async fn check_tx<S: StateRead>(
             return CheckTxOutcome::FailedChecks(error);
         }
     };
-    tracing::info!("took {}ms to make checked tx in check status of new {tx_id}", tx_status_end.elapsed().as_secs_f32() * 1000.0);
+    info!(
+        "took {}ms to make checked tx in check status of new {tx_id}",
+        tx_status_end.elapsed().as_secs_f32() * 1000.0
+    );
     metrics.record_check_tx_duration_seconds_check_actions(tx_status_end.elapsed());
 
     // attempt to insert the transaction into the mempool
@@ -253,10 +284,16 @@ pub(crate) async fn check_tx<S: StateRead>(
             return outcome;
         }
     };
-    tracing::info!("took {}ms to insert in mempool in check status of new {tx_id}", start.elapsed().as_secs_f32() * 1000.0);
+    info!(
+        "took {}ms to insert in mempool in check status of new {tx_id}",
+        start.elapsed().as_secs_f32() * 1000.0
+    );
 
     metrics.set_transactions_in_mempool_total(mempool.len().await);
-    tracing::info!("took {}ms to fully check status of new {tx_id}", tx_status_start.elapsed().as_secs_f32() * 1000.0);
+    info!(
+        "took {}ms to fully check status of new {tx_id}",
+        tx_status_start.elapsed().as_secs_f32() * 1000.0
+    );
 
     match insertion_status {
         InsertionStatus::AddedToParked => CheckTxOutcome::AddedToParked(tx_id),
@@ -265,7 +302,6 @@ pub(crate) async fn check_tx<S: StateRead>(
 }
 
 /// Attempts to insert the transaction into the mempool.
-#[instrument(skip_all)]
 async fn insert_into_mempool<S: StateRead>(
     mempool: &AppMempool,
     state: &S,

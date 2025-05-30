@@ -22,11 +22,7 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    trace,
-    Level,
-};
+use log::trace;
 
 use super::storage::{
     self,
@@ -40,13 +36,11 @@ use crate::{
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
-    #[instrument(skip_all, fields(address = %address.display_address()))]
     async fn is_a_bridge_account<T: AddressBytes>(&self, address: &T) -> Result<bool> {
         let maybe_id = self.get_bridge_account_rollup_id(address).await?;
         Ok(maybe_id.is_some())
     }
 
-    #[instrument(skip_all, fields(address = %address.display_address()), err(level = Level::WARN))]
     async fn get_bridge_account_rollup_id<T: AddressBytes>(
         &self,
         address: &T,
@@ -68,7 +62,6 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
             .wrap_err("invalid rollup ID bytes")
     }
 
-    #[instrument(skip_all, fields(address = %address.display_address()), err(level = Level::WARN))]
     async fn get_bridge_account_ibc_asset<T: AddressBytes>(
         &self,
         address: &T,
@@ -86,7 +79,6 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
             .wrap_err("invalid bridge account asset ID bytes")
     }
 
-    #[instrument(skip_all, fields(bridge_address = %bridge_address.display_address()), err(level = Level::WARN))]
     async fn get_bridge_account_sudo_address<T: AddressBytes>(
         &self,
         bridge_address: &T,
@@ -109,7 +101,6 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
             .wrap_err("invalid bridge account sudo address bytes")
     }
 
-    #[instrument(skip_all, fields(bridge_address = %bridge_address.display_address()), err(level = Level::WARN))]
     async fn get_bridge_account_withdrawer_address<T: AddressBytes>(
         &self,
         bridge_address: &T,
@@ -133,11 +124,6 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
     }
 
     /// Returns the ROLLUP block number (not sequencer block height) for the given withdrawal event.
-    #[instrument(
-        skip_all,
-        fields(address = %address.display_address(), withdrawal_event_id),
-        err(level = Level::DEBUG)
-    )]
     async fn get_withdrawal_event_rollup_block_number<T: AddressBytes>(
         &self,
         address: &T,
@@ -161,13 +147,11 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
             .wrap_err("invalid withdrawal event block height bytes")
     }
 
-    #[instrument(skip_all)]
     fn get_cached_block_deposits(&self) -> HashMap<RollupId, Vec<Deposit>> {
         self.object_get(keys::DEPOSITS_EPHEMERAL)
             .unwrap_or_default()
     }
 
-    #[instrument(skip_all, fields(block_hash = %hex::encode(block_hash), %rollup_id), err(level = Level::WARN))]
     async fn get_deposits(
         &self,
         block_hash: &[u8; 32],
@@ -186,7 +170,6 @@ pub(crate) trait StateReadExt: StateRead + address::StateReadExt {
             .context("invalid deposits bytes")
     }
 
-    #[instrument(skip_all, fields(address = %address.display_address()), err(level = Level::WARN))]
     async fn get_last_transaction_id_for_bridge_account<T: AddressBytes>(
         &self,
         address: &T,
@@ -210,7 +193,6 @@ impl<T: StateRead + ?Sized> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_bridge_account_rollup_id<T: AddressBytes>(
         &mut self,
         address: &T,
@@ -223,7 +205,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_bridge_account_ibc_asset<TAddress, TAsset>(
         &mut self,
         address: &TAddress,
@@ -241,7 +222,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_bridge_account_sudo_address<TBridgeAddress, TSudoAddress>(
         &mut self,
         bridge_address: &TBridgeAddress,
@@ -258,7 +238,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_bridge_account_withdrawer_address<TBridgeAddress, TWithdrawerAddress>(
         &mut self,
         bridge_address: &TBridgeAddress,
@@ -279,7 +258,6 @@ pub(crate) trait StateWriteExt: StateWrite {
     }
 
     /// Stores the ROLLUP block number (not sequencer block height) for the given withdrawal event.
-    #[instrument(skip_all)]
     fn put_withdrawal_event_rollup_block_number<T: AddressBytes>(
         &mut self,
         address: &T,
@@ -296,7 +274,6 @@ pub(crate) trait StateWriteExt: StateWrite {
 
     /// Push the deposit onto the end of a Vec of deposits for this rollup ID.  These are held in
     /// state's ephemeral store, pending being written to permanent storage during `finalize_block`.
-    #[instrument(skip_all)]
     fn cache_deposit_event(&mut self, deposit: Deposit) {
         let mut cached_deposits = self.get_cached_block_deposits();
         cached_deposits
@@ -306,7 +283,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         self.object_put(keys::DEPOSITS_EPHEMERAL, cached_deposits);
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     fn put_deposits(
         &mut self,
         block_hash: &[u8; 32],
@@ -322,7 +298,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_last_transaction_id_for_bridge_account<T: AddressBytes>(
         &mut self,
         address: &T,

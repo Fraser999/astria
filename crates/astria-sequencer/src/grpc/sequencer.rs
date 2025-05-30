@@ -30,17 +30,16 @@ use astria_core::{
     Protobuf,
 };
 use bytes::Bytes;
+use log::{
+    debug,
+    error,
+    info,
+    warn,
+};
 use tonic::{
     Request,
     Response,
     Status,
-};
-use tracing::{
-    debug,
-    error,
-    info,
-    instrument,
-    warn,
 };
 
 use crate::{
@@ -70,7 +69,6 @@ impl SequencerServer {
 #[async_trait::async_trait]
 impl SequencerService for SequencerServer {
     /// Given a block height, returns the sequencer block at that height.
-    #[instrument(skip_all)]
     async fn get_sequencer_block(
         self: Arc<Self>,
         request: Request<GetSequencerBlockRequest>,
@@ -100,7 +98,6 @@ impl SequencerService for SequencerServer {
 
     /// Given a block height and set of rollup ids, returns a SequencerBlock which
     /// is filtered to contain only the transactions that are relevant to the given rollup.
-    #[instrument(skip_all)]
     async fn get_filtered_sequencer_block(
         self: Arc<Self>,
         request: Request<GetFilteredSequencerBlockRequest>,
@@ -216,7 +213,6 @@ impl SequencerService for SequencerServer {
         Ok(Response::new(block))
     }
 
-    #[instrument(skip_all)]
     async fn get_pending_nonce(
         self: Arc<Self>,
         request: Request<GetPendingNonceRequest>,
@@ -234,10 +230,7 @@ impl SequencerService for SequencerServer {
         };
 
         let address = Address::try_from_raw(address).map_err(|e| {
-            info!(
-                error = %e,
-                "failed to parse address from request",
-            );
+            info!("failed to parse address from request",);
             Status::invalid_argument(format!("invalid address: {e}"))
         })?;
         let nonce = self.mempool.pending_nonce(address.as_bytes()).await;
@@ -251,10 +244,7 @@ impl SequencerService for SequencerServer {
         // nonce wasn't in mempool, so just look it up from storage
         let snapshot = self.storage.latest_snapshot();
         let nonce = snapshot.get_account_nonce(&address).await.map_err(|e| {
-            error!(
-                error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                "failed to parse get account nonce from storage",
-            );
+            error!("failed to parse get account nonce from storage",);
             Status::internal(format!("failed to get account nonce from storage: {e}"))
         })?;
 
@@ -263,7 +253,6 @@ impl SequencerService for SequencerServer {
         }))
     }
 
-    #[instrument(skip_all)]
     async fn get_upgrades_info(
         self: Arc<Self>,
         _request: Request<GetUpgradesInfoRequest>,
@@ -293,7 +282,6 @@ impl SequencerService for SequencerServer {
         Ok(Response::new(response))
     }
 
-    #[instrument(skip_all)]
     async fn get_validator_name(
         self: Arc<Self>,
         request: Request<GetValidatorNameRequest>,
@@ -303,18 +291,12 @@ impl SequencerService for SequencerServer {
             .address
             .ok_or_else(|| Status::invalid_argument("required field address was not set"))?;
         let address = Address::try_from_raw(address).map_err(|e| {
-            debug!(
-                error = %e,
-                "failed to parse address from get validator name request",
-            );
+            debug!("failed to parse address from get validator name request",);
             Status::invalid_argument(format!("invalid address: {e}"))
         })?;
         let snapshot = self.storage.latest_snapshot();
         let Some(validator) = snapshot.get_validator(&address).await.map_err(|e| {
-            warn!(
-                error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                "failed to get validator from state",
-            );
+            warn!("failed to get validator from state",);
             Status::internal(format!("failed to get validator from state: {e}"))
         })?
         else {

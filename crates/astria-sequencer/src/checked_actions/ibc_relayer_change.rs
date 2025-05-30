@@ -14,10 +14,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -38,7 +34,6 @@ pub(crate) struct CheckedIbcRelayerChange {
 }
 
 impl CheckedIbcRelayerChange {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: IbcRelayerChange,
         tx_signer: [u8; ADDRESS_LEN],
@@ -63,7 +58,6 @@ impl CheckedIbcRelayerChange {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         // Check that the signer of this tx is the authorized IBC sudo address.
         let ibc_sudo_address = state
@@ -110,7 +104,6 @@ impl CheckedIbcRelayerChange {
         Ok(())
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         self.run_mutable_checks(&state).await?;
 

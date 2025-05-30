@@ -5,6 +5,7 @@ use std::{
 };
 
 use astria_core::{
+    crypto::SigningKey,
     generated::astria::protocol::genesis::v1::{
         AddressPrefixes,
         GenesisFees,
@@ -44,12 +45,15 @@ use astria_eyre::eyre::{
     WrapErr as _,
 };
 use penumbra_ibc::IbcRelay;
-use astria_core::crypto::SigningKey;
 
 const ASTRIA_ADDRESS_PREFIX: &str = "astria";
 
 fn alice() -> Address {
-    let bytes: [u8; 32] = hex::decode("5aab1ae5b47dda3c50a5df2d4cd00cba82cac6e41a303d79cfe2adb2c2002f7b").unwrap().try_into().unwrap();
+    let bytes: [u8; 32] =
+        hex::decode("5aab1ae5b47dda3c50a5df2d4cd00cba82cac6e41a303d79cfe2adb2c2002f7b")
+            .unwrap()
+            .try_into()
+            .unwrap();
     let secret_key = SigningKey::from(bytes);
     Address::builder()
         .prefix(ASTRIA_ADDRESS_PREFIX)

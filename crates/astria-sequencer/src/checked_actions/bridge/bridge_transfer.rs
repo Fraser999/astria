@@ -18,10 +18,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     super::AssetTransfer,
@@ -38,7 +34,6 @@ pub(crate) struct CheckedBridgeTransfer {
 }
 
 impl CheckedBridgeTransfer {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(in crate::checked_actions) async fn new<S: StateRead>(
         action: BridgeTransfer,
         tx_signer: [u8; ADDRESS_LEN],
@@ -97,7 +92,6 @@ impl CheckedBridgeTransfer {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(in crate::checked_actions) async fn run_mutable_checks<S: StateRead>(
         &self,
         state: S,
@@ -112,7 +106,6 @@ impl CheckedBridgeTransfer {
             .wrap_err("mutable checks for bridge lock failed for bridge transfer")
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(in crate::checked_actions) async fn execute<S: StateWrite>(
         &self,
         mut state: S,

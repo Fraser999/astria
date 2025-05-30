@@ -19,18 +19,13 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    debug,
-    instrument,
-    Level,
-};
+use log::debug;
 
 use super::{
     AssetTransfer,
     TransactionSignerAddressBytes,
 };
 use crate::{
-    accounts::AddressBytes as _,
     authority::{
         StateReadExt as _,
         StateWriteExt as _,
@@ -45,7 +40,6 @@ pub(crate) struct CheckedValidatorUpdate {
 }
 
 impl CheckedValidatorUpdate {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: ValidatorUpdate,
         tx_signer: [u8; ADDRESS_LEN],
@@ -60,7 +54,6 @@ impl CheckedValidatorUpdate {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         self.do_run_mutable_checks(state).await.map(|_| ())
     }
@@ -123,7 +116,6 @@ impl CheckedValidatorUpdate {
         }))
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         if let Some(metadata) = self.do_run_mutable_checks(&state).await? {
             if self.action.power == 0 {
@@ -131,10 +123,7 @@ impl CheckedValidatorUpdate {
                 state
                     .put_validator_count(metadata.current_validator_count.saturating_sub(1))
                     .wrap_err("failed to write validator count to storage")?;
-                debug!(
-                    address = %self.action.verification_key.display_address(),
-                    "removed validator"
-                );
+                debug!("removed validator");
             } else {
                 let log_msg = if metadata.validator_already_exists {
                     "updated validator"
@@ -147,11 +136,7 @@ impl CheckedValidatorUpdate {
                 state
                     .put_validator(&self.action)
                     .wrap_err("failed to write validator info to storage")?;
-                debug!(
-                    address = %self.action.verification_key.display_address(),
-                    power = self.action.power,
-                    log_msg,
-                );
+                debug!("{log_msg}",);
             }
         }
 

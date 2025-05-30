@@ -2,7 +2,7 @@ use std::{
     path::Path,
     time::Duration,
 };
-
+use cnidarium::StateWrite;
 use astria_core::upgrades::v1::{
     ChangeHash,
     Upgrade,
@@ -16,14 +16,13 @@ use astria_eyre::eyre::{
     Result,
     WrapErr as _,
 };
-use cnidarium::StateWrite;
-use serde_json::Value;
-use tendermint::consensus::params::VersionParams;
-use tracing::{
+use log::{
     error,
     info,
     warn,
 };
+use serde_json::Value;
+use tendermint::consensus::params::VersionParams;
 
 use super::{
     StateReadExt as _,
@@ -177,7 +176,7 @@ impl UpgradesHandler {
             state
                 .put_upgrade_change_info(&upgrade_name, change)
                 .wrap_err("failed to put upgrade change info")?;
-            info!(upgrade = %upgrade_name, change = %change.name(), "executed upgrade change");
+            info!("executed upgrade change");
         }
 
         // NOTE: any further state changes specific to individual upgrades should be
@@ -231,10 +230,7 @@ impl UpgradesHandler {
         let new_app_version = upgrade.app_version();
         if let Some(existing_app_version) = &params.version {
             if new_app_version <= existing_app_version.app {
-                error!(
-                    new_app_version, existing_app_version = %existing_app_version.app,
-                    "new app version should be greater than existing version",
-                );
+                error!("new app version should be greater than existing version",);
             }
         }
         params.version = Some(VersionParams {
@@ -338,15 +334,7 @@ impl UpgradesHandler {
             .max_delay(Duration::from_secs(1))
             .on_retry(
                 |attempt, next_delay: Option<Duration>, error: &eyre::Report| {
-                    let wait_duration = next_delay
-                        .map(telemetry::display::format_duration)
-                        .map(tracing::field::display);
-                    warn!(
-                        error = error.as_ref() as &dyn std::error::Error,
-                        attempt,
-                        wait_duration,
-                        "failed to get consensus params from cometbft; retrying after backoff",
-                    );
+                    warn!("failed to get consensus params from cometbft; retrying after backoff",);
                     async {}
                 },
             );
@@ -393,10 +381,7 @@ fn set_vote_extensions_enable_height_to_next_block_height(
         // If vote extensions are already enabled, they cannot be disabled, and the
         // `vote_extensions_enable_height` cannot be changed.
         if existing_enable_height.value() != 0 {
-            error!(
-                %existing_enable_height, %new_enable_height,
-                "vote extensions enable height already set; ignoring update",
-            );
+            error!("vote extensions enable height already set; ignoring update",);
             return;
         }
     }

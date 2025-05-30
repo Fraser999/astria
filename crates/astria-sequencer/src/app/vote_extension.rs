@@ -42,6 +42,11 @@ use futures::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools as _;
+use log::{
+    debug,
+    info,
+    warn,
+};
 use prost::Message as _;
 use telemetry::display::base64;
 use tendermint::{
@@ -54,12 +59,6 @@ use tendermint::{
 };
 use tendermint_proto::google::protobuf::Timestamp;
 use tonic::transport::Channel;
-use tracing::{
-    debug,
-    info,
-    instrument,
-    warn,
-};
 
 use crate::{
     address::StateReadExt as _,
@@ -134,7 +133,7 @@ impl Handler {
         let response = match verify_vote_extension(vote.vote_extension, max_num_currency_pairs) {
             Ok(_) => abci::response::VerifyVoteExtension::Accept,
             Err(e) => {
-                warn!(error = %e, "failed to verify vote extension");
+                warn!("failed to verify vote extension");
                 abci::response::VerifyVoteExtension::Reject
             }
         };
@@ -175,29 +174,34 @@ fn verify_vote_extension(
 }
 
 // see https://github.com/skip-mev/connect/blob/158cde8a4b774ac4eec5c6d1a2c16de6a8c6abb5/abci/ve/vote_extension.go#L290
-#[instrument(skip_all)]
 async fn transform_oracle_service_prices<S: StateReadExt>(
     state: &S,
     rsp: QueryPricesResponse,
 ) -> Result<OracleVoteExtension> {
     use astria_core::oracles::price_feed::types::v2::CurrencyPairId;
 
-    let strategy_prices = rsp.prices.into_iter().map(|(currency_pair, price)| async move {
-        DefaultCurrencyPairStrategy::id(state, &currency_pair).await
-            .wrap_err_with(|| {
-                warn!(%currency_pair, "failed to fetch ID for currency pair; cancelling transformation");
-                format!("error fetching currency pair {currency_pair}")
-            })
-            .map(|maybe_id| (maybe_id, currency_pair, price))
-    }).collect::<FuturesUnordered<_>>()
+    let strategy_prices = rsp
+        .prices
+        .into_iter()
+        .map(|(currency_pair, price)| async move {
+            DefaultCurrencyPairStrategy::id(state, &currency_pair)
+                .await
+                .wrap_err_with(|| {
+                    warn!("failed to fetch ID for currency pair; cancelling transformation");
+                    format!("error fetching currency pair {currency_pair}")
+                })
+                .map(|maybe_id| (maybe_id, currency_pair, price))
+        })
+        .collect::<FuturesUnordered<_>>()
         .try_filter_map(|(maybe_id, currency_pair, price)| async move {
             let Some(id) = maybe_id else {
-                debug!(%currency_pair, "currency pair ID not found in state; skipping");
+                debug!("currency pair ID not found in state; skipping");
                 return Ok(None);
             };
             Ok(Some((id, price)))
         })
-        .try_collect::<IndexMap<CurrencyPairId, Price>>().await?;
+        .try_collect::<IndexMap<CurrencyPairId, Price>>()
+        .await?;
 
     Ok(OracleVoteExtension {
         prices: strategy_prices,
@@ -242,11 +246,7 @@ impl ProposalHandler {
                             .try_base_prefixed(vote.validator.address.as_slice())
                             .await
                             .wrap_err("failed to construct validator address with base prefix")?;
-                        debug!(
-                            error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                            validator = address.to_string(),
-                            "failed to verify vote extension; pruning from proposal"
-                        );
+                        debug!("failed to verify vote extension; pruning from proposal");
                         vote.sig_info = Flag(tendermint::block::BlockIdFlag::Absent);
                         vote.extension_signature = None;
                         vote.vote_extension.clear();
@@ -368,15 +368,12 @@ async fn get_id_to_currency_pair<S: StateReadExt>(
                 let _ = id_to_currency_pair.insert(id, info);
             }
             Ok(None) => {
-                debug!(%id, "currency pair not found in state; skipping");
+                debug!("currency pair not found in state; skipping");
             }
             Err(e) => {
                 // FIXME: this event can be removed once all instrumented functions
                 // can generate an error event.
-                warn!(
-                    %id, error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                    "failed to fetch currency pair for ID; skipping"
-                );
+                warn!("failed to fetch currency pair for ID; skipping");
             }
         }
     }
@@ -516,10 +513,7 @@ async fn validate_vote_extensions<S: StateReadExt>(
         "submitted voting power is less than required voting power",
     );
 
-    debug!(
-        submitted_voting_power,
-        total_voting_power, "validated extended commit info"
-    );
+    debug!("validated extended commit info");
     Ok(())
 }
 

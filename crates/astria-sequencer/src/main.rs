@@ -1,9 +1,17 @@
 use std::process::ExitCode;
 
-
 use astria_eyre::eyre::WrapErr as _;
-use astria_sequencer::{Config, Metrics, Sequencer, ALLOCATOR, BUILD_INFO};
-use tracing::info;
+use astria_sequencer::{
+    Config,
+    Metrics,
+    Sequencer,
+    ALLOCATOR,
+    BUILD_INFO,
+};
+use log::{
+    info,
+    LevelFilter,
+};
 use telemetry::Metrics as _;
 
 // Following the BSD convention for failing to read config
@@ -12,8 +20,11 @@ const EX_CONFIG: u8 = 78;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Set the limit to 30MiB.
-    ALLOCATOR.set_limit(4 * 1024 * 1024 * 1024).unwrap();
+    ALLOCATOR.set_limit(20 * 1024 * 1024 * 1024).unwrap();
+    env_logger::Builder::new()
+        .filter(None, LevelFilter::Info)
+        .filter(Some("astria"), LevelFilter::Info)
+        .init();
 
     astria_eyre::install().expect("astria eyre hook must be the first hook installed");
 
@@ -51,8 +62,8 @@ async fn main() -> ExitCode {
     // };
 
     info!(
-        config = serde_json::to_string(&cfg).expect("serializing to a string cannot fail"),
-        "initializing sequencer"
+        "initializing sequencer: {}",
+        serde_json::to_string(&cfg).expect("serializing to a string cannot fail")
     );
 
     let metrics = Box::leak(Box::new(Metrics::noop_metrics(&()).unwrap()));

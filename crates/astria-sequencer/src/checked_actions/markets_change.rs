@@ -17,10 +17,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::{
     AssetTransfer,
@@ -42,7 +38,6 @@ pub(crate) struct CheckedMarketsChange {
 }
 
 impl CheckedMarketsChange {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn new<S: StateRead>(
         action: MarketsChange,
         tx_signer: [u8; ADDRESS_LEN],
@@ -57,7 +52,6 @@ impl CheckedMarketsChange {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn run_mutable_checks<S: StateRead>(&self, state: S) -> Result<()> {
         self.do_run_mutable_checks(state).await.map(|_| ())
     }
@@ -115,7 +109,6 @@ impl CheckedMarketsChange {
         Ok(current_market_map)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(super) async fn execute<S: StateWrite>(&self, mut state: S) -> Result<()> {
         let mut market_map = self.do_run_mutable_checks(&state).await?;
 

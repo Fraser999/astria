@@ -16,10 +16,6 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
-use tracing::{
-    instrument,
-    Level,
-};
 
 use crate::{
     accounts::StateWriteExt as _,
@@ -54,7 +50,6 @@ pub(crate) struct CheckedBridgeUnlockImpl<const PURE_UNLOCK: bool> {
 }
 
 impl<const PURE_UNLOCK: bool> CheckedBridgeUnlockImpl<PURE_UNLOCK> {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(in crate::checked_actions) async fn new<S: StateRead>(
         action: BridgeUnlock,
         tx_signer: [u8; ADDRESS_LEN],
@@ -104,7 +99,6 @@ impl<const PURE_UNLOCK: bool> CheckedBridgeUnlockImpl<PURE_UNLOCK> {
         Ok(checked_action)
     }
 
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(in crate::checked_actions) async fn run_mutable_checks<S: StateRead>(
         &self,
         state: S,
@@ -162,7 +156,6 @@ impl<const PURE_UNLOCK: bool> CheckedBridgeUnlockImpl<PURE_UNLOCK> {
 }
 
 impl CheckedBridgeUnlockImpl<true> {
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(in crate::checked_actions) async fn execute<S: StateWrite>(
         &self,
         mut state: S,

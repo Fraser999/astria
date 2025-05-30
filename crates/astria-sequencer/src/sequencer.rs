@@ -8,9 +8,11 @@ use astria_eyre::eyre::{
     Result,
     WrapErr as _,
 };
-use penumbra_tower_trace::{
-    trace::request_span,
-    v038::RequestExt as _,
+use log::{
+    debug,
+    error,
+    info,
+    warn,
 };
 use telemetry::metrics::register_histogram_global;
 use tendermint::v0_38::abci::ConsensusRequest;
@@ -32,15 +34,6 @@ use tonic::transport::{
     Uri,
 };
 use tower_abci::v038::Server;
-use tracing::{
-    debug,
-    error,
-    error_span,
-    info,
-    info_span,
-    instrument,
-    warn,
-};
 
 use crate::{
     address::StateReadExt as _,
@@ -102,7 +95,6 @@ impl Sequencer {
         let initialize_fut = Self::initialize(config, metrics);
         select! {
             _ = signals.stop_rx.changed() => {
-                info_span!("initialize").in_scope(|| info!("shutting down sequencer"));
                 Ok(())
             }
 
@@ -124,17 +116,15 @@ impl Sequencer {
     ) -> Result<()> {
         select! {
             _ = signals.stop_rx.changed() => {
-                info_span!("run_until_stopped").in_scope(|| info!("shutting down sequencer"));
+
             }
 
             () = abci_server.consensus_cancellation_token.cancelled() => {
-                info_span!("run_until_stopped")
-                    .in_scope(|| info!("consensus server shutting down sequencer"));
+
             },
 
             _ = abci_server.shutdown_rx => {
-                info_span!("run_until_stopped")
-                    .in_scope(|| error!("ABCI server task exited, this shouldn't happen"));
+
             }
         }
 
@@ -151,7 +141,6 @@ impl Sequencer {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     async fn initialize(
         config: Config,
         metrics: &'static Metrics,
@@ -190,12 +179,7 @@ impl Sequencer {
             .await
             .wrap_err("failed to establish if sequencer should shut down for upgrade")?
         {
-            info!(
-                upgrade_activation_height,
-                latest_app_hash = %hex_encoded_app_hash,
-                latest_block_time = %block_time,
-                "shutting down for upgrade"
-            );
+            info!("shutting down for upgrade");
             return Ok(InitializationOutcome::ShutDownForUpgrade);
         }
 
@@ -256,7 +240,7 @@ impl Sequencer {
         };
         let grpc_server_handle = tokio::spawn(crate::grpc::serve(grpc_server_args));
 
-        debug!(%config.abci_listen_url, "starting sequencer");
+        debug!("starting sequencer");
         let consensus_cancellation_token = tokio_util::sync::CancellationToken::new();
         let abci_server_handle = start_abci_server(
             &storage,
@@ -294,9 +278,9 @@ fn start_abci_server(
     consensus_cancellation_token: tokio_util::sync::CancellationToken,
 ) -> eyre::Result<JoinHandle<()>> {
     let consensus_service = tower::ServiceBuilder::new()
-        .layer(request_span::layer(|req: &ConsensusRequest| {
-            req.create_span()
-        }))
+        // .layer(request_span::layer(|req: &ConsensusRequest| {
+        //     req.create_span()
+        // }))
         .service(tower_actor::Actor::new(10, |queue: _| {
             let storage = storage.clone();
             async move {
@@ -325,12 +309,8 @@ fn start_abci_server(
         match server_listen_result {
             Ok(()) => {
                 // this shouldn't happen, as there isn't a way for the ABCI server to exit
-                info_span!("abci_server").in_scope(|| info!("ABCI server exited successfully"));
             }
-            Err(e) => {
-                error_span!("abci_server")
-                    .in_scope(|| error!(err = e.as_ref(), "ABCI server exited with error"));
-            }
+            Err(e) => {}
         }
         let _ = abci_shutdown_tx.send(());
     });
@@ -375,7 +355,6 @@ fn spawn_signal_handler() -> SignalReceiver {
 /// If `config.no_price_feed` is false, returns `Ok(Some(...))` as soon as a successful response is
 /// received from the price feed sidecar, or returns `Err` after a fixed number of failed
 /// re-attempts (roughly equivalent to 5 minutes total).
-#[instrument(skip_all, err)]
 async fn new_price_feed_client(config: &Config) -> Result<Option<OracleClient<Channel>>> {
     if config.no_price_feed {
         return Ok(None);
@@ -394,15 +373,7 @@ async fn new_price_feed_client(config: &Config) -> Result<Option<OracleClient<Ch
             .max_delay(Duration::from_secs(10))
             .on_retry(
                 |attempt, next_delay: Option<Duration>, error: &eyre::Report| {
-                    let wait_duration = next_delay
-                        .map(telemetry::display::format_duration)
-                        .map(tracing::field::display);
-                    warn!(
-                        error = error.as_ref() as &dyn std::error::Error,
-                        attempt,
-                        wait_duration,
-                        "failed to query price feed oracle sidecar; retrying after backoff",
-                    );
+                    warn!("failed to query price feed oracle sidecar; retrying after backoff",);
                     async {}
                 },
             );
@@ -419,7 +390,6 @@ async fn new_price_feed_client(config: &Config) -> Result<Option<OracleClient<Ch
     Ok(Some(client))
 }
 
-#[instrument(skip_all, err(level = tracing::Level::WARN))]
 async fn connect_to_price_feed_sidecar(
     endpoint: &Endpoint,
     uri: &Uri,
@@ -430,7 +400,7 @@ async fn connect_to_price_feed_sidecar(
             .await
             .wrap_err("failed to connect to price feed sidecar")?,
     );
-    debug!(uri = %uri, "price feed sidecar is reachable");
+    debug!("price feed sidecar is reachable");
     Ok(client)
 }
 

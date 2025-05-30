@@ -16,9 +16,12 @@ pub(crate) mod vote_extension;
 use std::{
     collections::HashSet,
     sync::Arc,
-    time::Instant,
+    time::{
+        Duration,
+        Instant,
+    },
 };
-use std::time::Duration;
+
 use astria_core::{
     primitive::v1::TransactionId,
     protocol::{
@@ -55,11 +58,14 @@ use cnidarium::{
     StateWrite,
 };
 use futures::future::try_join_all;
-use prost::Message as _;
-use telemetry::display::{
-    base64,
-    json,
+use log::{
+    debug,
+    error,
+    info,
+    trace,
+    warn,
 };
+use prost::Message as _;
 use tendermint::{
     abci::{
         self,
@@ -71,14 +77,6 @@ use tendermint::{
     AppHash,
     Hash,
     Time,
-};
-use tracing::{
-    debug,
-    info,
-    instrument,
-    trace,
-    warn,
-    Level,
 };
 
 pub(crate) use self::state_ext::{
@@ -221,7 +219,6 @@ struct WriteBatch {
 }
 
 impl App {
-    #[instrument(name = "App::new", skip_all, err)]
     pub(crate) async fn new(
         snapshot: Snapshot,
         mempool: Mempool,
@@ -264,7 +261,6 @@ impl App {
         self.event_bus.subscribe()
     }
 
-    #[instrument(name = "App:init_chain", skip_all, err)]
     pub(crate) async fn init_chain(
         &mut self,
         storage: Storage,
@@ -326,7 +322,7 @@ impl App {
             .prepare_commit(storage, HashSet::new())
             .await
             .wrap_err("failed to prepare commit")?;
-        debug!(app_hash = %telemetry::display::base64(&app_hash), "init_chain completed");
+        debug!("init_chain completed");
         Ok(app_hash)
     }
 
@@ -350,7 +346,6 @@ impl App {
     /// It puts this special "commitment" as the first transaction in a block.
     /// When other validators receive the block, they know the first transaction is
     /// supposed to be the commitment, and verifies that is it correct.
-    #[instrument(name = "App::prepare_proposal", skip_all, err(level = Level::WARN))]
     pub(crate) async fn prepare_proposal(
         &mut self,
         prepare_proposal: abci::request::PrepareProposal,
@@ -411,10 +406,7 @@ impl App {
             )
             .await
             .unwrap_or_else(|error| {
-                warn!(
-                    error = AsRef::<dyn std::error::Error>::as_ref(&error),
-                    "failed to generate extended commit info"
-                );
+                warn!("failed to generate extended commit info");
                 ExtendedCommitInfoWithCurrencyPairMapping::empty(round)
             });
 
@@ -429,10 +421,7 @@ impl App {
             {
                 // We would exceed the CometBFT size limit - try just adding an empty extended
                 // commit info rather than erroring out to ensure liveness.
-                warn!(
-                    encoded_extended_commit_info_len = encoded_extended_commit_info.len(),
-                    "extended commit info is too large to fit in block; not including in block"
-                );
+                warn!("extended commit info is too large to fit in block; not including in block");
                 encoded_extended_commit_info = DataItem::ExtendedCommitInfo(Bytes::new()).encode();
                 block_size_constraints
                     .cometbft_checked_add(encoded_extended_commit_info.len())
@@ -487,12 +476,6 @@ impl App {
     /// Generates a commitment to the `sequence::Actions` in the block's transactions
     /// and ensures it matches the commitment created by the proposer, which
     /// should be the first transaction in the block.
-    #[instrument(
-        name = "App::process_proposal",
-        skip_all,
-        fields(proposer=%base64(&process_proposal.proposer_address.as_bytes())),
-        err(level = Level::WARN)
-    )]
     pub(crate) async fn process_proposal(
         &mut self,
         process_proposal: abci::request::ProcessProposal,
@@ -696,13 +679,12 @@ impl App {
     ///
     /// As a result, all transactions in a sequencer block are guaranteed to execute
     /// successfully.
-    #[instrument(name = "App::prepare_proposal_tx_execution", skip_all, err(level = Level::DEBUG))]
     async fn prepare_proposal_tx_execution(
         &mut self,
         block_size_constraints: BlockSizeConstraints,
     ) -> Result<Vec<Arc<CheckedTransaction>>> {
         let mempool_len = self.mempool.len().await;
-        debug!(mempool_len, "executing transactions from mempool");
+        debug!("executing transactions from mempool");
 
         let mut proposal_info = Proposal::Prepare {
             block_size_constraints,
@@ -745,20 +727,18 @@ impl App {
         };
 
         if failed_tx_count > 0 {
-            info!(
-                failed_tx_count = failed_tx_count,
-                included_tx_count = executed_txs.len(),
-                "excluded transactions from block due to execution failure"
-            );
+            info!("excluded transactions from block due to execution failure");
         }
         self.metrics.set_prepare_proposal_excluded_transactions(
             excluded_tx_count.saturating_add(failed_tx_count),
         );
 
         let mempool_len = self.mempool.len().await;
-        debug!("executed {} txs, {unused_count} leftover, {mempool_len} in mempool", executed_txs.len());
-        self.metrics
-            .set_transactions_in_mempool_total(mempool_len);
+        debug!(
+            "executed {} txs, {unused_count} leftover, {mempool_len} in mempool",
+            executed_txs.len()
+        );
+        self.metrics.set_transactions_in_mempool_total(mempool_len);
 
         let included_txs = executed_txs
             .iter()
@@ -788,7 +768,6 @@ impl App {
     ///
     /// As a result, all transactions in a sequencer block are guaranteed to execute
     /// successfully.
-    #[instrument(name = "App::process_proposal_tx_execution", skip_all, err(level = Level::DEBUG))]
     async fn process_proposal_tx_execution(
         &mut self,
         txs: &[Arc<CheckedTransaction>],
@@ -812,7 +791,6 @@ impl App {
         Ok(proposal_info.executed_txs())
     }
 
-    #[instrument(skip_all)]
     async fn proposal_checks_and_tx_execution(
         &mut self,
         tx: Arc<CheckedTransaction>,
@@ -820,7 +798,7 @@ impl App {
     ) -> Result<BreakOrContinue> {
         let tx_len = tx.encoded_bytes().len();
         let tx_id = *tx.id();
-        info!(tx_id = %tx.id(), tx_len, actions_count = tx.checked_actions().len(), "executing transaction");
+        info!("executing transaction");
 
         // check CometBFT size constraints for `prepare_proposal`
         if let Proposal::Prepare {
@@ -832,12 +810,7 @@ impl App {
         {
             if !block_size_constraints.cometbft_has_space(tx_len) {
                 metrics.increment_prepare_proposal_excluded_transactions_cometbft_space();
-                debug!(
-                    tx_id = %tx.id(),
-                    block_size_constraints = %json(block_size_constraints),
-                    tx_data_bytes = tx_len,
-                    "excluding remaining transactions: max cometBFT data limit reached"
-                );
+                debug!("excluding remaining transactions: max cometBFT data limit reached");
                 *excluded_tx_count = excluded_tx_count.saturating_add(1);
 
                 // break from calling loop, as the block is full
@@ -863,12 +836,7 @@ impl App {
             .block_size_constraints()
             .sequencer_has_space(tx_sequence_data_length)
         {
-            debug!(
-                tx_id = %tx.id(),
-                block_size_constraints = %json(&proposal_info.block_size_constraints()),
-                tx_data_length = tx_sequence_data_length,
-                "{debug_msg}: max block sequenced data limit reached"
-            );
+            debug!("{debug_msg}: max block sequenced data limit reached");
             match proposal_info {
                 Proposal::Prepare {
                     metrics,
@@ -890,10 +858,7 @@ impl App {
         // ensure transaction's group is less than or equal to current action group
         let tx_group = tx.group();
         if tx_group > proposal_info.current_tx_group() {
-            debug!(
-                tx_id = %tx.id(),
-                "{debug_msg}: group is higher priority than previously included transactions"
-            );
+            debug!("{debug_msg}: group is higher priority than previously included transactions");
             match proposal_info {
                 Proposal::Prepare {
                     excluded_tx_count, ..
@@ -931,11 +896,7 @@ impl App {
                     .wrap_err("error growing cometBFT block size")?;
             }
             Err(error) => {
-                debug!(
-                    tx_id = %tx.id(),
-                    %error,
-                    "{debug_msg}: failed to execute transaction"
-                );
+                debug!("{debug_msg}: failed to execute transaction");
                 match proposal_info {
                     Proposal::Prepare {
                         metrics,
@@ -978,7 +939,7 @@ impl App {
             }
         };
         proposal_info.set_current_tx_group(tx_group);
-        info!(%tx_id, "executed transaction");
+        info!("executed transaction");
         Ok(BreakOrContinue::Continue)
     }
 
@@ -991,7 +952,6 @@ impl App {
     ///
     /// This *must* be called any time before a block's txs are executed, whether it's
     /// during the proposal phase, or finalize_block phase.
-    #[instrument(name = "App::pre_execute_transactions", skip_all, err(level = Level::WARN))]
     async fn pre_execute_transactions(&mut self, block_data: BlockData) -> Result<Vec<ChangeHash>> {
         let mut delta_delta = StateDelta::new(self.state.clone());
         let upgrade_change_hashes = self
@@ -1056,7 +1016,6 @@ impl App {
         Ok(upgrade_change_hashes)
     }
 
-    #[instrument(name = "App::extend_vote", skip_all)]
     pub(crate) async fn extend_vote(
         &mut self,
         _extend_vote: abci::request::ExtendVote,
@@ -1072,7 +1031,6 @@ impl App {
         result
     }
 
-    #[instrument(name = "App::extend_vote", skip_all)]
     pub(crate) async fn verify_vote_extension(
         &mut self,
         vote_extension: abci::request::VerifyVoteExtension,
@@ -1092,7 +1050,6 @@ impl App {
     ///
     /// this must be called after a block's transactions are executed.
     /// FIXME: don't return sequencer block but grab the block from state delta https://github.com/astriaorg/astria/issues/1436
-    #[instrument(name = "App::post_execute_transactions", skip_all, err(level = Level::WARN))]
     async fn post_execute_transactions(
         &mut self,
         block_hash: Hash,
@@ -1127,7 +1084,7 @@ impl App {
         // get deposits for this block from state's ephemeral cache and put them to storage.
         let mut state_tx = StateDelta::new(self.state.clone());
         let deposits_in_this_block = self.state.get_cached_block_deposits();
-        debug!(deposits = %json(&deposits_in_this_block), "got block deposits from state");
+        debug!("got block deposits from state");
 
         state_tx
             .put_deposits(&block_hash, deposits_in_this_block.clone())
@@ -1183,10 +1140,7 @@ impl App {
             .wrap_err("upgrades handler failed to end block")?;
 
         if let Some(consensus_params) = &consensus_param_updates {
-            info!(
-                consensus_params = %display_consensus_params(consensus_params),
-                "updated consensus params"
-            );
+            info!("updated consensus params");
         }
 
         let result = PostTransactionExecutionResult {
@@ -1215,7 +1169,6 @@ impl App {
     ///
     /// This is called by cometbft after the block has already been
     /// committed by the network's consensus.
-    #[instrument(name = "App::finalize_block", skip_all, err)]
     pub(crate) async fn finalize_block(
         &mut self,
         finalize_block: abci::request::FinalizeBlock,
@@ -1309,10 +1262,7 @@ impl App {
                     }
                     Err(error) => {
                         // this is actually a protocol error, as only valid txs should be finalized
-                        tracing::error!(
-                            %error,
-                            "failed to finalize transaction; ignoring it",
-                        );
+                        error!("failed to finalize transaction; ignoring it",);
                     }
                 }
             }
@@ -1362,7 +1312,6 @@ impl App {
         Ok(finalize_block_response)
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn prepare_commit(
         &mut self,
         storage: Storage,
@@ -1382,11 +1331,7 @@ impl App {
         state
             .put_storage_version_by_height(height, new_version)
             .wrap_err("failed to put storage version by height")?;
-        debug!(
-            height,
-            version = new_version,
-            "stored storage version for height"
-        );
+        debug!("stored storage version for height");
 
         let write_batch = storage
             .prepare_commit(state)
@@ -1405,7 +1350,6 @@ impl App {
         Ok(app_hash)
     }
 
-    #[instrument(name = "App::begin_block", skip_all, err(level = Level::WARN))]
     async fn begin_block(
         &mut self,
         begin_block: &abci::request::BeginBlock,
@@ -1441,7 +1385,6 @@ impl App {
     }
 
     /// Executes a checked transaction.
-    #[instrument(name = "App::execute_transaction", skip_all, err(level = Level::DEBUG))]
     async fn execute_transaction(
         &mut self,
         tx: Arc<CheckedTransaction>,
@@ -1473,7 +1416,6 @@ impl App {
         Ok(events)
     }
 
-    #[instrument(name = "App::end_block", skip_all, err(level = Level::WARN))]
     async fn end_block(
         &mut self,
         height: u64,
@@ -1535,7 +1477,6 @@ impl App {
         })
     }
 
-    #[instrument(name = "App::commit", skip_all)]
     pub(crate) async fn commit(&mut self, storage: Storage) -> Result<ShouldShutDown> {
         let WriteBatch {
             write_batch,
@@ -1548,10 +1489,7 @@ impl App {
         let app_hash = storage
             .commit_batch(write_batch)
             .expect("must be able to successfully commit to storage");
-        tracing::debug!(
-            app_hash = %telemetry::display::hex(&app_hash),
-            "finished committing state",
-        );
+        debug!("finished committing state",);
         self.app_hash = app_hash
             .0
             .to_vec()

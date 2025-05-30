@@ -11,11 +11,8 @@ use cnidarium::{
     StateRead,
     StateWrite,
 };
+use log::debug;
 use tendermint::Time;
-use tracing::{
-    instrument,
-    Level,
-};
 
 use super::storage::{
     self,
@@ -25,7 +22,6 @@ use crate::storage::StoredValue;
 
 #[async_trait]
 pub(crate) trait StateReadExt: StateRead {
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_chain_id(&self) -> Result<tendermint::chain::Id> {
         let Some(bytes) = self
             .get_raw(keys::CHAIN_ID)
@@ -40,7 +36,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid chain id bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_revision_number(&self) -> Result<u64> {
         let Some(bytes) = self
             .get_raw(keys::REVISION_NUMBER)
@@ -55,7 +50,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid revision number bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_block_height(&self) -> Result<u64> {
         let Some(bytes) = self
             .get_raw(keys::BLOCK_HEIGHT)
@@ -70,7 +64,6 @@ pub(crate) trait StateReadExt: StateRead {
             .context("invalid block height bytes")
     }
 
-    #[instrument(skip_all, err(level = Level::WARN))]
     async fn get_block_timestamp(&self) -> Result<Time> {
         let Some(bytes) = self
             .get_raw(keys::BLOCK_TIMESTAMP)
@@ -85,7 +78,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid block timestamp bytes")
     }
 
-    #[instrument(skip_all, fields(%height), err(level = Level::WARN))]
     async fn get_storage_version_by_height(&self, height: u64) -> Result<u64> {
         use astria_eyre::eyre::WrapErr as _;
 
@@ -103,7 +95,6 @@ pub(crate) trait StateReadExt: StateRead {
             .wrap_err("invalid storage version bytes")
     }
 
-    #[instrument(skip_all)]
     async fn get_consensus_params(&self) -> Result<Option<tendermint::consensus::Params>> {
         let Some(bytes) = self
             .nonverifiable_get_raw(keys::CONSENSUS_PARAMS.as_bytes())
@@ -126,7 +117,6 @@ impl<T: StateRead> StateReadExt for T {}
 
 #[async_trait]
 pub(crate) trait StateWriteExt: StateWrite {
-    #[instrument(skip_all)]
     fn put_chain_id_and_revision_number(&mut self, chain_id: tendermint::chain::Id) -> Result<()> {
         let revision_number = revision_number_from_chain_id(chain_id.as_str());
         let bytes = StoredValue::from(storage::ChainId::from(&chain_id))
@@ -136,7 +126,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         self.put_revision_number(revision_number)
     }
 
-    #[instrument(skip_all)]
     fn put_revision_number(&mut self, revision_number: u64) -> Result<()> {
         let bytes = StoredValue::from(storage::RevisionNumber::from(revision_number))
             .serialize()
@@ -145,7 +134,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_block_height(&mut self, height: u64) -> Result<()> {
         let bytes = StoredValue::from(storage::BlockHeight::from(height))
             .serialize()
@@ -154,7 +142,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_block_timestamp(&mut self, timestamp: Time) -> Result<()> {
         let bytes = StoredValue::from(storage::BlockTimestamp::from(timestamp))
             .serialize()
@@ -163,7 +150,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_storage_version_by_height(&mut self, height: u64, version: u64) -> Result<()> {
         let bytes = StoredValue::from(storage::StorageVersion::from(version))
             .serialize()
@@ -172,7 +158,6 @@ pub(crate) trait StateWriteExt: StateWrite {
         Ok(())
     }
 
-    #[instrument(skip_all)]
     fn put_consensus_params(&mut self, params: tendermint::consensus::Params) -> Result<()> {
         let bytes = StoredValue::from(storage::ConsensusParams::from(params))
             .serialize()
@@ -188,7 +173,7 @@ fn revision_number_from_chain_id(chain_id: &str) -> u64 {
     let re = regex::Regex::new(r".*-([0-9]+)$").unwrap();
 
     if !re.is_match(chain_id) {
-        tracing::debug!("no revision number found in chain id; setting to 0");
+        debug!("no revision number found in chain id; setting to 0");
         return 0;
     }
 

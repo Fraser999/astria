@@ -28,10 +28,6 @@ use cnidarium::{
 use futures::future::try_join_all;
 use prost::Message as _;
 use sha2::Digest as _;
-use tracing::{
-    instrument,
-    Level,
-};
 
 pub(crate) use self::error::{
     CheckedTransactionExecutionError,
@@ -89,7 +85,6 @@ impl CheckedTransaction {
     ///
     /// NOTE: To construct a `CheckedTransaction` for tests, it is generally simplest to use
     /// [`Fixture::checked_tx_builder`].
-    #[instrument(skip_all, err(level = Level::DEBUG))]
     pub(crate) async fn new<S: StateRead>(
         tx_bytes: Bytes,
         state: &S,
