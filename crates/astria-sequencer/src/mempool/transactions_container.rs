@@ -303,6 +303,10 @@ impl TransactionsForAccount for PendingTransactionsForAccount {
         &self.tx_ids
     }
 
+    fn take_tx_ids(self) -> HashSet<TransactionId> {
+        self.tx_ids
+    }
+
     fn tx_ids_mut(&mut self) -> &mut HashSet<TransactionId> {
         &mut self.tx_ids
     }
@@ -400,6 +404,10 @@ impl<const MAX_TX_COUNT: usize> TransactionsForAccount
         &self.tx_ids
     }
 
+    fn take_tx_ids(self) -> HashSet<TransactionId> {
+        self.tx_ids
+    }
+
     fn tx_ids_mut(&mut self) -> &mut HashSet<TransactionId> {
         &mut self.tx_ids
     }
@@ -436,6 +444,8 @@ pub(super) trait TransactionsForAccount: Default {
     fn txs_mut(&mut self) -> &mut BTreeMap<u32, TimemarkedTransaction>;
 
     fn tx_ids(&self) -> &HashSet<TransactionId>;
+
+    fn take_tx_ids(self) -> HashSet<TransactionId>;
 
     fn tx_ids_mut(&mut self) -> &mut HashSet<TransactionId>;
 
@@ -695,10 +705,10 @@ pub(super) trait TransactionsContainer<T: TransactionsForAccount> {
 
     /// Removes all of the transactions for the given account and returns the IDs of the removed
     /// transactions.
-    fn clear_account(&mut self, address_bytes: &[u8; ADDRESS_LENGTH]) -> Vec<TransactionId> {
+    fn clear_account(&mut self, address_bytes: &[u8; ADDRESS_LENGTH]) -> HashSet<TransactionId> {
         self.txs_mut()
             .remove(address_bytes)
-            .map(|account_txs| account_txs.txs().values().map(|ttx| *ttx.id()).collect())
+            .map(T::take_tx_ids)
             .unwrap_or_default()
     }
 

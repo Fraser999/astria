@@ -62,7 +62,16 @@ pub trait Metrics {
     where
         Self: Sized,
     {
-        let mut builder = RegisteringBuilder::new(PrometheusBuilder::new().build_recorder());
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let recorder_handle = recorder.handle();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                recorder_handle.run_upkeep();
+            }
+        });
+
+        let mut builder = RegisteringBuilder::new(recorder);
         Self::register(&mut builder, config)
     }
 }

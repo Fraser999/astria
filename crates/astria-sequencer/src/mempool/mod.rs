@@ -399,7 +399,7 @@ impl MempoolInner {
         let removed_tx_ids = match self.pending.remove(checked_tx) {
             Ok(mut removed_tx_ids) => {
                 // Remove all of parked.
-                removed_tx_ids.append(&mut self.parked.clear_account(&address_bytes));
+                removed_tx_ids.extend(self.parked.clear_account(&address_bytes));
                 removed_tx_ids
             }
             Err(checked_tx) => {

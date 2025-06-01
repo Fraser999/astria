@@ -2,7 +2,7 @@ use std::{
     path::Path,
     time::Duration,
 };
-use cnidarium::StateWrite;
+
 use astria_core::upgrades::v1::{
     ChangeHash,
     Upgrade,
@@ -16,6 +16,7 @@ use astria_eyre::eyre::{
     Result,
     WrapErr as _,
 };
+use cnidarium::StateWrite;
 use log::{
     error,
     info,

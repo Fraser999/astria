@@ -10,7 +10,10 @@ use std::{
     },
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        Mutex,
+    },
     task::{
         Context,
         Poll,
@@ -27,6 +30,10 @@ use cnidarium::{
     StateRead,
 };
 use futures::TryStreamExt;
+use hashlink::{
+    LinkedHashMap,
+    LruCache,
+};
 use pin_project_lite::pin_project;
 use quick_cache::sync::Cache as QuickCache;
 use tokio::sync::mpsc;
@@ -37,11 +44,11 @@ use crate::Metrics;
 /// An in-memory cache of objects that belong in the verifiable store.
 ///
 /// A `None` value represents an item not present in the on-disk storage.
-type VerifiableCache = Arc<QuickCache<String, Option<Bytes>>>;
+type VerifiableCache = Arc<Mutex<LruCache<String, Option<Bytes>>>>;
 /// An in-memory cache of objects that belong in the non-verifiable store.
 ///
 /// A `None` value represents an item not present in the on-disk storage.
-type NonVerifiableCache = Arc<QuickCache<Vec<u8>, Option<Bytes>>>;
+type NonVerifiableCache = Arc<Mutex<LruCache<Vec<u8>, Option<Bytes>>>>;
 
 #[derive(Clone)]
 pub(crate) struct Snapshot {
@@ -55,14 +62,14 @@ impl Snapshot {
     pub(super) fn new(inner: cnidarium::Snapshot, metrics: &'static Metrics) -> Self {
         Self {
             inner,
-            verifiable_cache: Arc::new(QuickCache::new(10_000)),
-            non_verifiable_cache: Arc::new(QuickCache::new(1_000)),
+            verifiable_cache: Arc::new(Mutex::new(LruCache::new(10_000))),
+            non_verifiable_cache: Arc::new(Mutex::new(LruCache::new(1_000))),
             metrics,
         }
     }
 
     pub(super) fn into_inner(self) -> cnidarium::Snapshot {
-        self.inner
+        self.inner.clone()
     }
 
     pub(crate) fn new_delta(&self) -> StateDelta<Snapshot> {
@@ -224,19 +231,26 @@ fn get_raw(
     metrics: &'static Metrics,
 ) -> SnapshotFuture {
     SnapshotFuture::new(async move {
-        let maybe_value = match cache.get_value_or_guard_async(&key).await {
-            Ok(value) => {
+        let maybe_value_and_cache_len = {
+            let mut guard = cache.lock().unwrap();
+            guard.get(&key).cloned().map(|value| (value, guard.len()))
+        };
+
+        let (maybe_value, cache_len) = match maybe_value_and_cache_len {
+            Some(got_from_cache) => {
                 metrics.increment_verifiable_cache_hit();
-                value
+                got_from_cache
             }
-            Err(guard) => {
+            None => {
                 metrics.increment_verifiable_cache_miss();
                 let value = get(&inner_snapshot, &key).await?.map(Bytes::from);
-                let _ = guard.insert(value.clone());
-                value
+                let mut guard = cache.lock().unwrap();
+                let _ = guard.insert(key, value.clone());
+                (value, guard.len())
             }
         };
-        metrics.record_verifiable_cache_item_total(cache.len());
+
+        metrics.record_verifiable_cache_item_total(cache_len);
         Ok(maybe_value.map(Vec::from))
     })
 }
@@ -248,21 +262,28 @@ fn non_verifiable_get_raw(
     metrics: &'static Metrics,
 ) -> SnapshotFuture {
     SnapshotFuture::new(async move {
-        let maybe_value = match cache.get_value_or_guard_async(&key).await {
-            Ok(value) => {
+        let maybe_value_and_cache_len = {
+            let mut guard = cache.lock().unwrap();
+            guard.get(&key).cloned().map(|value| (value, guard.len()))
+        };
+
+        let (maybe_value, cache_len) = match maybe_value_and_cache_len {
+            Some(got_from_cache) => {
                 metrics.increment_non_verifiable_cache_hit();
-                value
+                got_from_cache
             }
-            Err(guard) => {
+            None => {
                 metrics.increment_non_verifiable_cache_miss();
                 let value = non_verifiable_get(&inner_snapshot, &key)
                     .await?
                     .map(Bytes::from);
-                let _ = guard.insert(value.clone());
-                value
+                let mut guard = cache.lock().unwrap();
+                let _ = guard.insert(key, value.clone());
+                (value, guard.len())
             }
         };
-        metrics.record_non_verifiable_cache_item_total(cache.len());
+
+        metrics.record_non_verifiable_cache_item_total(cache_len);
         Ok(maybe_value.map(Vec::from))
     })
 }
@@ -317,7 +338,14 @@ mod tests {
     async fn get_raw_should_succeed() {
         #[track_caller]
         fn assert_in_cache(snapshot: &Snapshot, value: &[u8]) {
-            let Some(serialized_value) = snapshot.verifiable_cache.get(V_KEY).unwrap() else {
+            let Some(serialized_value) = snapshot
+                .verifiable_cache
+                .lock()
+                .unwrap()
+                .get(V_KEY)
+                .cloned()
+                .unwrap()
+            else {
                 panic!("should have value in cache");
             };
             assert_eq!(value.to_vec(), serialized_value);
@@ -339,12 +367,12 @@ mod tests {
 
         // `get_raw` on the latest snapshot should return the correct value and cache it.
         let snapshot = storage.latest_snapshot();
-        assert!(snapshot.verifiable_cache.is_empty());
+        assert!(snapshot.verifiable_cache.lock().unwrap().is_empty());
         assert_eq!(
             Some(VALUES[0].to_vec()),
             snapshot.get_raw(V_KEY).await.unwrap()
         );
-        assert_eq!(1, snapshot.verifiable_cache.len());
+        assert_eq!(1, snapshot.verifiable_cache.lock().unwrap().len());
         assert_in_cache(&snapshot, &VALUES[0]);
 
         // Write and commit different data under the same key.
@@ -355,25 +383,33 @@ mod tests {
         // `get_raw` on a v0 snapshot should return the original value, and on the latest snapshot
         // should return the updated value. Both caches should be updated.
         let snapshot = storage.snapshot(0).unwrap();
-        assert!(snapshot.verifiable_cache.is_empty());
+        assert!(snapshot.verifiable_cache.lock().unwrap().is_empty());
         assert_eq!(
             Some(VALUES[0].to_vec()),
             snapshot.get_raw(V_KEY).await.unwrap()
         );
-        assert_eq!(1, snapshot.verifiable_cache.len());
+        assert_eq!(1, snapshot.verifiable_cache.lock().unwrap().len());
         assert_in_cache(&snapshot, &VALUES[0]);
 
         let snapshot = storage.latest_snapshot();
-        assert!(snapshot.verifiable_cache.is_empty());
+        assert!(snapshot.verifiable_cache.lock().unwrap().is_empty());
         assert_eq!(
             Some(VALUES[1].to_vec()),
             snapshot.get_raw(V_KEY).await.unwrap()
         );
-        assert_eq!(1, snapshot.verifiable_cache.len());
+        assert_eq!(1, snapshot.verifiable_cache.lock().unwrap().len());
         assert_in_cache(&snapshot, &VALUES[1]);
 
         // Check a clone of the latest snapshot has clone of the populated cache.
-        assert_eq!(1, storage.latest_snapshot().verifiable_cache.len());
+        assert_eq!(
+            1,
+            storage
+                .latest_snapshot()
+                .verifiable_cache
+                .lock()
+                .unwrap()
+                .len()
+        );
         assert_in_cache(&storage.latest_snapshot(), &VALUES[1]);
     }
 
@@ -381,7 +417,14 @@ mod tests {
     async fn nonverifiable_get_raw_should_succeed() {
         #[track_caller]
         fn assert_in_cache(snapshot: &Snapshot, value: &[u8]) {
-            let Some(serialized_value) = snapshot.non_verifiable_cache.get(NV_KEY).unwrap() else {
+            let Some(serialized_value) = snapshot
+                .non_verifiable_cache
+                .lock()
+                .unwrap()
+                .get(NV_KEY)
+                .cloned()
+                .unwrap()
+            else {
                 panic!("should have value in cache");
             };
             assert_eq!(value.to_vec(), serialized_value);
@@ -408,12 +451,12 @@ mod tests {
         // `nonverifiable_get_raw` on the latest snapshot should return the correct value and cache
         // it.
         let snapshot = storage.latest_snapshot();
-        assert!(snapshot.non_verifiable_cache.is_empty());
+        assert!(snapshot.non_verifiable_cache.lock().unwrap().is_empty());
         assert_eq!(
             Some(VALUES[0].to_vec()),
             snapshot.nonverifiable_get_raw(NV_KEY).await.unwrap()
         );
-        assert_eq!(1, snapshot.non_verifiable_cache.len());
+        assert_eq!(1, snapshot.non_verifiable_cache.lock().unwrap().len());
         assert_in_cache(&snapshot, &VALUES[0]);
 
         // Write and commit different data under the same key.
@@ -424,25 +467,33 @@ mod tests {
         // `nonverifiable_get_raw` on a v0 snapshot should return the original value, and on the
         // latest snapshot should return the updated value. Both caches should be updated.
         let snapshot = storage.snapshot(0).unwrap();
-        assert!(snapshot.non_verifiable_cache.is_empty());
+        assert!(snapshot.non_verifiable_cache.lock().unwrap().is_empty());
         assert_eq!(
             Some(VALUES[0].to_vec()),
             snapshot.nonverifiable_get_raw(NV_KEY).await.unwrap()
         );
-        assert_eq!(1, snapshot.non_verifiable_cache.len());
+        assert_eq!(1, snapshot.non_verifiable_cache.lock().unwrap().len());
         assert_in_cache(&snapshot, &VALUES[0]);
 
         let snapshot = storage.latest_snapshot();
-        assert!(snapshot.non_verifiable_cache.is_empty());
+        assert!(snapshot.non_verifiable_cache.lock().unwrap().is_empty());
         assert_eq!(
             Some(VALUES[1].to_vec()),
             snapshot.nonverifiable_get_raw(NV_KEY).await.unwrap()
         );
-        assert_eq!(1, snapshot.non_verifiable_cache.len());
+        assert_eq!(1, snapshot.non_verifiable_cache.lock().unwrap().len());
         assert_in_cache(&snapshot, &VALUES[1]);
 
         // Check a clone of the latest snapshot has clone of the populated cache.
-        assert_eq!(1, storage.latest_snapshot().non_verifiable_cache.len());
+        assert_eq!(
+            1,
+            storage
+                .latest_snapshot()
+                .non_verifiable_cache
+                .lock()
+                .unwrap()
+                .len()
+        );
         assert_in_cache(&storage.latest_snapshot(), &VALUES[1]);
     }
 
@@ -472,15 +523,15 @@ mod tests {
         // Get a new snapshot, and populate its inner cache with two of the stored values by getting
         // them.
         let snapshot = storage.latest_snapshot();
-        assert!(snapshot.verifiable_cache.is_empty());
+        assert!(snapshot.verifiable_cache.lock().unwrap().is_empty());
         assert!(snapshot.get_raw("common 0").await.unwrap().is_some());
         assert!(snapshot.get_raw("common 2").await.unwrap().is_some());
-        assert_eq!(2, snapshot.verifiable_cache.len());
+        assert_eq!(2, snapshot.verifiable_cache.lock().unwrap().len());
 
         // `prefix_raw` should return all the key value pairs and populate the cache.
         let actual: BTreeMap<_, _> = snapshot.prefix_raw("com").try_collect().await.unwrap();
         let expected: BTreeMap<_, _> = kv_iter.collect();
         assert_eq!(expected, actual);
-        assert_eq!(4, snapshot.verifiable_cache.len());
+        assert_eq!(4, snapshot.verifiable_cache.lock().unwrap().len());
     }
 }

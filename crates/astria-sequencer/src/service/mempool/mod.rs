@@ -44,7 +44,6 @@ use tower::Service;
 use tower_abci::BoxError;
 
 use crate::{
-    storage::Storage,
     accounts::{
         AddressBytes as _,
         StateReadExt as _,
@@ -62,6 +61,7 @@ use crate::{
         TransactionStatus,
     },
     metrics::Metrics,
+    storage::Storage,
     ALLOCATOR,
 };
 
@@ -117,13 +117,13 @@ impl Service<MempoolRequest> for Mempool {
                         mempool,
                         metrics,
                     ))
-                        .await
-                        .unwrap(),
+                    .await
+                    .unwrap(),
                 ),
             };
             Ok(rsp)
         }
-            // .instrument(span)
+        // .instrument(span)
         .boxed()
     }
 }
@@ -158,7 +158,7 @@ async fn handle_check_tx_request<S: StateRead>(
         metrics,
         check_tx_kind == CheckTxKind::Recheck,
     )
-        .await;
+    .await;
     let response = if let CheckTxOutcome::RemovedFromMempool {
         tx_id,
         reason,

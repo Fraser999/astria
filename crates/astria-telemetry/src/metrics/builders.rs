@@ -115,6 +115,16 @@ impl ConfigBuilder {
                 .map_err(|error| Error::StartListening(error.into()))?
         } else {
             let recorder = bucket_builder.builder.build_recorder();
+
+            let handle = recorder.handle();
+            let recorder_handle = handle.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    recorder_handle.run_upkeep();
+                }
+            });
+
             let fut: ExporterFuture = Box::pin(async move { Ok(()) });
             (recorder, fut)
         };
